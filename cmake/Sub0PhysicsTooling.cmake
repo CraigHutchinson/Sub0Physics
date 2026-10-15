@@ -16,8 +16,8 @@
 
 include_guard(GLOBAL)
 
-get_filename_component(SUB0PHYSICS_TOOLING_DIR "${CMAKE_CURRENT_LIST_DIR}/../tools/perf" ABSOLUTE)
-get_filename_component(SUB0PHYSICS_BENCH_VENDOR_DIR "${CMAKE_CURRENT_LIST_DIR}/../tests/vendor" ABSOLUTE)
+# Paths are resolved inside each function from CMAKE_CURRENT_FUNCTION_LIST_DIR: include_guard skips
+# re-inclusion, so variables set here would not reach a consumer's directory scope.
 
 option(SUB0PHYSICS_PROFILE_FLAGS "Debug info and frame pointers in optimised builds, for profilers" OFF)
 option(SUB0PHYSICS_VECTORIZATION_REPORT "Emit compiler vectorization remarks" OFF)
@@ -51,8 +51,10 @@ function(sub0physics_target_perf_options target)
 endfunction()
 
 function(sub0physics_add_benchmark target)
+    get_filename_component(tooling "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/perf" ABSOLUTE)
+    get_filename_component(vendor "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tests/vendor" ABSOLUTE)
     add_executable(${target} ${ARGN})
-    target_include_directories(${target} SYSTEM PRIVATE "${SUB0PHYSICS_TOOLING_DIR}" "${SUB0PHYSICS_BENCH_VENDOR_DIR}")
+    target_include_directories(${target} SYSTEM PRIVATE "${tooling}" "${vendor}")
     target_compile_features(${target} PRIVATE cxx_std_23)
     sub0physics_target_perf_options(${target})
 
@@ -62,8 +64,8 @@ function(sub0physics_add_benchmark target)
     endif()
     set(results "${CMAKE_BINARY_DIR}/perf/${target}.json")
     set(baseline "${PROJECT_SOURCE_DIR}/perf/baselines/${SUB0PHYSICS_PERF_HOST}.json")
-    set(check "${SUB0PHYSICS_TOOLING_DIR}/bench_check.py")
-    set(profile "${SUB0PHYSICS_TOOLING_DIR}/profile.py")
+    set(check "${tooling}/bench_check.py")
+    set(profile "${tooling}/profile.py")
 
     add_custom_target(${target}_json
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/perf"

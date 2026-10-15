@@ -83,3 +83,4 @@ Rules that keep hot code fast and analysable:
 | 2026-10-15 | Clearance queries scanned every segment twice: 14 Âµs at 2048 points | nanobench | Horizontal pruning from the sorted x; 0.8 Âµs, brute-force agreement test |
 | 2026-10-15 | Accumulated step times missed the endpoint-derivative cache on 31% of 0.5 ms steps | counting test | `stepTick`; exactly 4 evaluations per RK4 step |
 | 2026-10-15 | GCC keeps `evaluate` out of line in the RK4 stages ("statement clobbers memory") | VTune hotspots, vectorization report | Forcing inlining measured no change (39.5 vs 39.8 ns/step); not applied |
+| 2026-10-15 | `std::hypot` dominated dense clearance queries (11.7 µs on a 1024-segment arc in BikeDynamics) | BikeDynamics bench | Squared distances, `sqrt` only on improvement, coordinates bounded at 1e100 m; 3.9 µs |

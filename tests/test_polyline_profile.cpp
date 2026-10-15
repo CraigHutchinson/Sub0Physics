@@ -24,6 +24,7 @@ TEST_CASE("Profile validation rejects malformed polylines")
 {
     CHECK(rejection({{0.0, 0.0}}).find("two points") != std::string_view::npos);
     CHECK(rejection({{0.0, 0.0}, {std::numeric_limits<double>::quiet_NaN(), 0.0}}).find("finite") != std::string_view::npos);
+    CHECK(rejection({{0.0, 0.0}, {1e101, 0.0}}).find("limit") != std::string_view::npos);
     CHECK(rejection({{0.0, 0.0}, {1.0, 0.0}, {0.5, 0.0}}).find("overhang") != std::string_view::npos);
     CHECK(rejection({{0.0, 0.0}, {1e-7, 0.0}}).find("micrometre") != std::string_view::npos);
     CHECK(rejection({{0.0, 0.0}, {0.0, 1.0}, {0.0, 0.5}, {1.0, 0.5}}).find("reverse") != std::string_view::npos);

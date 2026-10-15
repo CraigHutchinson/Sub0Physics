@@ -4,10 +4,10 @@
   "system": "Windows 11",
   "note": "Median ns per op from nanobench. Regenerate deliberately; say why in the commit.",
   "benchmarks": {
-    "Circle clearance, 2048-point profile": 843.395,
-    "Damped oscillator closed form": 18.082,
-    "Midpoint step, contact oscillator": 18.464,
-    "Rk4 step, contact oscillator": 37.563,
-    "Surface height, 2048-point profile": 7.045
+    "Circle clearance, 2048-point profile": 462.047,
+    "Damped oscillator closed form": 19.087,
+    "Midpoint step, contact oscillator": 19.459,
+    "Rk4 step, contact oscillator": 38.995,
+    "Surface height, 2048-point profile": 7.514
   }
 }

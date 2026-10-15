@@ -27,9 +27,9 @@ std::expected<PolylineProfile, Fault> PolylineProfile::create(std::vector<Point2
     for (std::size_t i = 0; i < points.size(); ++i)
     {
         const Point2 p = points[i];
-        if (!std::isfinite(p.x) || !std::isfinite(p.y))
+        if (!(std::abs(p.x) <= CoordinateLimit) || !(std::abs(p.y) <= CoordinateLimit))
         {
-            return invalid("profile coordinates must be finite");
+            return invalid("profile coordinates must be finite and within the coordinate limit");
         }
         if (i == 0U)
         {

@@ -21,11 +21,13 @@ class PolylineProfile
 public:
     /** Shortest segment accepted, m; shorter ones make normals meaningless. */
     static constexpr double MinimumSegmentLength = 1e-6;
+    /** Largest coordinate magnitude accepted, m; keeps squared distances finite. */
+    static constexpr double CoordinateLimit = 1e100;
 
     /**
      * Validates points and builds a profile.
      *
-     * Rejects fewer than two points, non-finite coordinates, decreasing x, segments shorter than
+     * Rejects fewer than two points, non-finite coordinates or ones beyond CoordinateLimit, decreasing x, segments shorter than
      * MinimumSegmentLength, consecutive vertical segments that reverse direction, and a profile with
      * no horizontal extent.
      *

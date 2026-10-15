@@ -62,6 +62,11 @@ TEST_CASE("Clearance refuses undefined queries")
 {
     const PolylineProfile profile = squareStep();
     CHECK(measureCircleClearance(profile, {{0.9, 1.0}, 0.2, Tie}).status == ClearanceStatus::OutsideDomain);
+    CHECK(measureCircleClearance(profile, {{0.1, 1e200}, 0.05, Tie}).status == ClearanceStatus::OutsideDomain);
+    CHECK(measureCircleClearance(profile, {{0.1, std::numeric_limits<double>::quiet_NaN()}, 0.05, Tie}).status
+          == ClearanceStatus::OutsideDomain);
+    CHECK(measureCircleClearance(profile, {{0.1, 1.0}, std::numeric_limits<double>::quiet_NaN(), Tie}).status
+          == ClearanceStatus::OutsideDomain);
     CHECK(measureCircleClearance(profile, {{0.1, 0.1}, 0.05, Tie}).status == ClearanceStatus::OnBoundary);
     CHECK(measureCircleClearance(profile, {{0.1, 0.05}, 0.01, Tie}).status == ClearanceStatus::CentreInside);
 }
@@ -99,7 +104,7 @@ TEST_CASE("Pruned search agrees with brute force on random terrain")
         }
         const CircleClearance c = measureCircleClearance(profile, {centre, 0.5, Tie});
         REQUIRE(c.status == ClearanceStatus::Available);
-        CHECK(c.distance == brute);
+        CHECK(c.distance == doctest::Approx(brute).epsilon(1e-14));
         CHECK_FALSE(c.witnesses.empty());
     }
 }
