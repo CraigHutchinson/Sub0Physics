@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <sub0math/geometry/sphere.hpp>
 #include <sub0math/linear/vec.hpp>
 #include <sub0math/units/quantities.hpp>
 #include <vector>
@@ -48,9 +49,8 @@ struct CircleClearance
 /** Query of a circle against a profile. */
 struct CircleQuery
 {
-    ProfilePoint centre;                ///< Circle centre.
-    sub0math::f64::Length radius;       ///< Circle radius; positive.
-    sub0math::f64::Length tieTolerance; ///< Distances this close to the nearest count as ties; not a collision margin.
+    sub0math::Circle<sub0math::f64::Length> circle; ///< The circle; positive radius.
+    sub0math::f64::Length tieTolerance;             ///< Distances this close to the nearest count as ties; not a collision margin.
 };
 
 /**

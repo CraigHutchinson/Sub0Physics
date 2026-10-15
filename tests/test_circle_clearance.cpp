@@ -28,7 +28,7 @@ PolylineProfile squareStep()
 
 CircleClearance query(const PolylineProfile& profile, double cx, double cy, double radius)
 {
-    return measureCircleClearance(profile, {at(cx, cy), metres(radius), Tie});
+    return measureCircleClearance(profile, {{at(cx, cy), metres(radius)}, Tie});
 }
 
 } // namespace

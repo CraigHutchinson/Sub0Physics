@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <limits>
 #include <span>
+#include <sub0math/geometry/segment.hpp>
 #include <sub0math/linear/vec.hpp>
 #include <sub0math/units/functions.hpp>
 
@@ -24,13 +25,10 @@ struct Nearest
 
 Nearest nearestOnSegment(const ProfilePoint& a, const ProfilePoint& b, const ProfilePoint& c) noexcept
 {
-    const sub0math::Vec2<Length> ab = b - a;
-    const sub0math::Vec2<Length> ac = c - a;
-    const double t = std::clamp(static_cast<double>(dot(ac, ab) / dot(ab, ab)), 0.0, 1.0);
-    const ProfilePoint p{a.x + ab.x * t, a.y + ab.y * t};
+    const auto nearest = sub0math::closestPoint(sub0math::Segment<Length, 2>{a, b}, c);
     // Squared distance: profiles and queries are bounded by PolylineProfile::CoordinateLimit, so no
     // overflow guard is needed, and square roots are taken only when the nearest improves.
-    return Nearest{p, lengthSquared(c - p), t};
+    return Nearest{nearest.point, lengthSquared(c - nearest.point), nearest.t};
 }
 
 // Index of the first segment whose right end is at or beyond x.
@@ -45,8 +43,8 @@ std::size_t segmentAt(std::span<const ProfilePoint> points, Length x) noexcept
 
 CircleClearance measureCircleClearance(const PolylineProfile& profile, const CircleQuery& query)
 {
-    const ProfilePoint c = query.centre;
-    const Length r = query.radius;
+    const ProfilePoint c = query.circle.centre;
+    const Length r = query.circle.radius;
     CircleClearance result{ClearanceStatus::Available, Length{}, Length{}, {}};
     if (!(sub0math::abs(c.y) <= PolylineProfile::CoordinateLimit) || !(r > Length{}) || c.x - r < profile.minX()
         || c.x + r > profile.maxX())

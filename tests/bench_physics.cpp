@@ -63,7 +63,7 @@ int main(int argc, char** argv)
     const auto profile = *PolylineProfile::create(points);
     runner.bench().minEpochIterations(5000);
     runner.run("Circle clearance, 2048-point profile", [&] {
-        auto c = measureCircleClearance(profile, {{sub0math::metres(0.3), sub0math::metres(0.5)}, sub0math::metres(0.36), sub0math::metres(1e-10)});
+        auto c = measureCircleClearance(profile, {{{sub0math::metres(0.3), sub0math::metres(0.5)}, sub0math::metres(0.36)}, sub0math::metres(1e-10)});
         ankerl::nanobench::doNotOptimizeAway(c);
     });
     runner.bench().minEpochIterations(20000);

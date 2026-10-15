@@ -17,7 +17,7 @@ primitives. Sub0Physics knows nothing of them.
 | Elements | `sub0physics/elements.hpp` | `AxialSpringDamper` (preload, compression/rebound damping) and `UnilateralSpringDamper` (push-only penalty contact), with stored energy and dissipated power |
 | References | `sub0physics/references.hpp` | Closed-form damped linear oscillator for all damping regimes, numerically guarded |
 | Verification | `sub0physics/verification.hpp` | `EnergyLedger` (work/energy balance residual), `ErrorStatistics` (peak/RMS against a limit), `observedOrder` (convergence), `ChannelTable` (preallocated column recording) |
-| Geometry | `sub0physics/geometry.hpp` | `PolylineProfile` of `ProfilePoint` (`sub0math::Point2<f64::Length>`; a validated height field with vertical faces) and circle clearance with vertex/segment witnesses and approach normals |
+| Geometry | `sub0physics/geometry.hpp` | `PolylineProfile` of `ProfilePoint` (`sub0math::Point2<f64::Length>`; a validated height field, searched with `sub0math::closestPoint` with vertical faces) and `sub0math::Circle` clearance with vertex/segment witnesses and approach normals |
 | Profiling | `sub0physics/profiling.hpp` | `ProfileTask`: ITT task markers for VTune, compiled out unless `SUB0PHYSICS_ENABLE_ITT` |
 | Level of detail | `sub0physics/lod.hpp` | `ModelDescriptor` and `FidelitySelector`: choose between models of one mechanism from a physical demand, with hysteresis, dwell and commit-after-transfer. See [docs/LOD.md](docs/LOD.md) |
 

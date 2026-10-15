@@ -107,10 +107,10 @@ TEST_CASE("A clearance query allocates only its witness list")
     auto profile = PolylineProfile::create(test_profiles::metresPoints({{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.1}, {0.2, 0.1}, {0.2, 0.0}, {1.0, 0.0}}));
     REQUIRE(profile);
     const AllocationCount count;
-    const CircleClearance c = measureCircleClearance(*profile, {test_profiles::at(-0.1, 0.25), sub0math::metres(0.1), sub0math::metres(1e-10)});
+    const CircleClearance c = measureCircleClearance(*profile, {{test_profiles::at(-0.1, 0.25), sub0math::metres(0.1)}, sub0math::metres(1e-10)});
     CHECK(c.witnesses.size() == 1U);
     CHECK(count.since() <= 1U);
     const AllocationCount refused;
-    CHECK(measureCircleClearance(*profile, {test_profiles::at(0.9, 1.0), sub0math::metres(0.2), sub0math::metres(1e-10)}).status == ClearanceStatus::OutsideDomain);
+    CHECK(measureCircleClearance(*profile, {{test_profiles::at(0.9, 1.0), sub0math::metres(0.2)}, sub0math::metres(1e-10)}).status == ClearanceStatus::OutsideDomain);
     CHECK(refused.since() == 0U);
 }
