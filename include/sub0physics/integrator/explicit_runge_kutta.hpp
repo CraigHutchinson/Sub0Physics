@@ -50,25 +50,27 @@ public:
     template<OdeSystem<N> S>
     [[nodiscard]] std::expected<void, Fault> step(S& system, double t, double h, StateVector<N>& state)
     {
-        if (!std::isfinite(t) || !std::isfinite(h) || !(h > 0.0))
-        {
-            return std::unexpected(Fault{FaultKind::InvalidInput, "step needs a finite time and positive step"});
-        }
-        auto result = advance(system, t, h, state);
-        if (!result)
-        {
-            // Leave the system observing the last valid state. The trial's fault is the one to report.
-            cacheValid_ = system.evaluate(t, state, k1_).has_value();
-            cachedTime_ = t;
-            cachedState_ = state;
-            return result;
-        }
-        state = next_;
-        cachedTime_ = t + h;
-        cachedState_ = state;
-        k1_ = endDerivative_;
-        cacheValid_ = true;
-        return {};
+        return stepBetween(system, t, h, t + h, state);
+    }
+
+    /**
+     * Advances `state` over fixed-step tick `tick`, from `tick * h` to `(tick + 1) * h`.
+     *
+     * Times come from the integer tick, never from accumulating `h`, so they do not drift and the
+     * endpoint of one tick is exactly the start of the next. That keeps runs reproducible and lets
+     * every step reuse the previous endpoint derivative.
+     *
+     * @tparam S The system type.
+     * @param system The system to integrate; it may refuse any trial or endpoint state.
+     * @param tick Index of the step; the state is at `tick * h`.
+     * @param h Step size; finite and positive.
+     * @param state State at `tick * h`; replaced by the state at `(tick + 1) * h` only on success.
+     * @return Nothing on success; otherwise the first fault, with `state` unchanged.
+     */
+    template<OdeSystem<N> S>
+    [[nodiscard]] std::expected<void, Fault> stepTick(S& system, std::uint64_t tick, double h, StateVector<N>& state)
+    {
+        return stepBetween(system, static_cast<double>(tick) * h, h, static_cast<double>(tick + 1U) * h, state);
     }
 
     /** Forgets the cached first stage; call after changing the system's parameters in place. */
@@ -79,7 +81,31 @@ public:
 
 private:
     template<typename S>
-    std::expected<void, Fault> advance(S& system, double t, double h, const StateVector<N>& x)
+    std::expected<void, Fault> stepBetween(S& system, double t, double h, double end, StateVector<N>& state)
+    {
+        if (!std::isfinite(t) || !std::isfinite(h) || !(h > 0.0) || !std::isfinite(end))
+        {
+            return std::unexpected(Fault{FaultKind::InvalidInput, "step needs a finite time and positive step"});
+        }
+        auto result = advance(system, t, h, end, state);
+        if (!result)
+        {
+            // Leave the system observing the last valid state. The trial's fault is the one to report.
+            cacheValid_ = system.evaluate(t, state, k1_).has_value();
+            cachedTime_ = t;
+            cachedState_ = state;
+            return result;
+        }
+        state = next_;
+        cachedTime_ = end;
+        cachedState_ = state;
+        k1_ = endDerivative_;
+        cacheValid_ = true;
+        return {};
+    }
+
+    template<typename S>
+    std::expected<void, Fault> advance(S& system, double t, double h, double end, const StateVector<N>& x)
     {
         if (!cacheValid_ || cachedTime_ != t || cachedState_ != x)
         {
@@ -109,7 +135,7 @@ private:
                 return r;
             }
             stage(x, k3_, h);
-            if (auto r = system.evaluate(t + h, trial_, k4_); !r)
+            if (auto r = system.evaluate(end, trial_, k4_); !r)
             {
                 return r;
             }
@@ -125,7 +151,7 @@ private:
                 return std::unexpected(Fault{FaultKind::NonFiniteState, "nonfinite physical state"});
             }
         }
-        return system.evaluate(t + h, next_, endDerivative_);
+        return system.evaluate(end, next_, endDerivative_);
     }
 
     void stage(const StateVector<N>& x, const StateVector<N>& k, double scale) noexcept

@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <doctest.h>
 #include <expected>
 #include <limits>
@@ -172,4 +173,28 @@ TEST_CASE("Observed order rejects meaningless input")
 {
     CHECK(std::isnan(observedOrder(0.0, 1.0, 2.0)));
     CHECK(std::isnan(observedOrder(1.0, 1.0, 1.0)));
+}
+
+TEST_CASE("Tick stepping keeps exact times and always reuses the endpoint derivative")
+{
+    HarmonicOscillator timed;
+    Rk4<2> byTick;
+    StateVector<2> x{1.0, 0.0};
+    const double h = 0.0005; // not representable: (n - 1) h + h often differs from n h
+    const std::uint64_t ticks = 16000U;
+    for (std::uint64_t tick = 0; tick < ticks; ++tick)
+    {
+        REQUIRE(byTick.stepTick(timed, tick, h, x));
+    }
+    CHECK(timed.evaluations == 5U + 4U * (ticks - 1U));
+
+    HarmonicOscillator accumulated;
+    Rk4<2> byTime;
+    StateVector<2> y{1.0, 0.0};
+    for (std::uint64_t tick = 0; tick < ticks; ++tick)
+    {
+        REQUIRE(byTime.step(accumulated, static_cast<double>(tick) * h, h, y));
+    }
+    CHECK(accumulated.evaluations > timed.evaluations);
+    CHECK(x[0] == doctest::Approx(y[0]).epsilon(1e-12));
 }
