@@ -22,6 +22,7 @@
 #include <nanobench.h>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sub0bench
 {
@@ -96,6 +97,8 @@ public:
             return;
         }
         bench_.run(name, op);
+        // Changing units or titles clears nanobench's own list, so keep every result here.
+        results_.push_back(bench_.results().back());
     }
 
     // Writes JSON when requested; returns the process exit code.
@@ -113,7 +116,7 @@ public:
         if (!json_.empty() && soakSeconds_ <= 0.0)
         {
             std::ofstream out(json_);
-            ankerl::nanobench::render(ankerl::nanobench::templates::json(), bench_, out);
+            ankerl::nanobench::render(ankerl::nanobench::templates::json(), results_, out);
         }
         return 0;
     }
@@ -129,6 +132,7 @@ private:
     }
 
     ankerl::nanobench::Bench bench_;
+    std::vector<ankerl::nanobench::Result> results_;
     std::string filter_;
     std::string json_;
     double soakSeconds_ = 0.0;
