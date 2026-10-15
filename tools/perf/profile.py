@@ -69,9 +69,9 @@ def main():
     label = re.sub(r"[^A-Za-z0-9]+", "_", args.filter).strip("_") or "all"
     result = Path(args.out).resolve() / f"{args.analysis}-{label}-{stamp}"
     result.parent.mkdir(parents=True, exist_ok=True)
+    workload = [str(Path(args.exe).resolve()), "--soak", str(args.seconds)]
     # Profilers drop state files (e.g. Advisor's config/state.cfg) in their working directory.
     os.chdir(result.parent)
-    workload = [str(Path(args.exe).resolve()), "--soak", str(args.seconds)]
     if args.filter:
         workload += ["--filter", args.filter]
 

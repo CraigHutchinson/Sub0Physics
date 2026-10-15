@@ -4,7 +4,7 @@
 //
 //   <bench> [--filter <text>] [--json <file>] [--soak <seconds>] [--list]
 //
-//   --filter  run only benchmarks whose name contains <text>
+//   --filter  run only benchmarks whose name contains <text> (case-insensitive)
 //   --json    also write nanobench JSON results (input to tools/perf/bench_check.py)
 //   --soak    instead of measuring, loop each selected benchmark for <seconds>; use under a profiler
 //             (VTune, Advisor, perf) so the hot path dominates the samples
@@ -12,6 +12,8 @@
 //
 // Include after defining ANKERL_NANOBENCH_IMPLEMENT in exactly one translation unit.
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -67,7 +69,7 @@ public:
     template<typename Op>
     void run(const char* name, Op&& op)
     {
-        if (!filter_.empty() && std::string_view(name).find(filter_) == std::string_view::npos)
+        if (!matches(name))
         {
             return;
         }
@@ -117,6 +119,15 @@ public:
     }
 
 private:
+    // Case-insensitive substring match; an empty filter selects everything.
+    [[nodiscard]] bool matches(std::string_view name) const
+    {
+        const auto lower = [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); };
+        return filter_.empty()
+            || std::search(name.begin(), name.end(), filter_.begin(), filter_.end(),
+                           [&](char a, char b) { return lower(a) == lower(b); }) != name.end();
+    }
+
     ankerl::nanobench::Bench bench_;
     std::string filter_;
     std::string json_;
