@@ -1,0 +1,11 @@
+build/
+build-*/
+.cache/
+.vs/
+.vscode/
+*.user
+CMakeUserPresets.json
+compile_commands.json
+.upstream/
+upstream-drift.md
+__pycache__/

@@ -1,0 +1,6 @@
+@PACKAGE_INIT@
+
+# Make sure targets are included by find_package(Sub0Physics)
+include("${CMAKE_CURRENT_LIST_DIR}/Sub0PhysicsTargets.cmake")
+
+check_required_components("@PROJECT_NAME@")

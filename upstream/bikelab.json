@@ -1,0 +1,58 @@
+{
+  "name": "BikeLab",
+  "repository": "https://github.com/CraigHutchinson/BikeLab",
+  "commit": "0abfde70c96a134de069f5b23160a0c91dcd9d5a",
+  "watch": [
+    "dist/"
+  ],
+  "ignore": [
+    "*.html",
+    "*.css",
+    "*-app.js",
+    "*worker.js",
+    "dist/vendor/*",
+    "dist/ui-model.js",
+    "dist/suspension-ui-model.js",
+    "dist/calculation.js"
+  ],
+  "ported": [
+    {
+      "source": "dist/physics.js",
+      "blob": "65f3b5ddb9d47df291f82f618debaf31fdf1cadb",
+      "what": "Clipped tyre spring/damper law, RK4 scheme, energy-balance residual and scale, standard gravity",
+      "targets": [
+        "include/sub0physics/element/unilateral_spring_damper.hpp",
+        "include/sub0physics/integrator/explicit_runge_kutta.hpp",
+        "include/sub0physics/verification/energy_ledger.hpp",
+        "include/sub0physics/constants.hpp"
+      ]
+    },
+    {
+      "source": "dist/suspension.js",
+      "blob": "69317506ba704ef8bf0636b16f11a7ff5fc136b6",
+      "what": "Axial preloaded spring with direction-dependent damping; transactional RK4 step",
+      "targets": [
+        "include/sub0physics/element/axial_spring_damper.hpp",
+        "include/sub0physics/integrator/explicit_runge_kutta.hpp"
+      ]
+    },
+    {
+      "source": "dist/suspension-reference.js",
+      "blob": "a09d10a9cfa5d7797ff5a46a015e115a96467040",
+      "what": "Closed-form damped oscillator; per-channel peak/RMS error against a limit",
+      "targets": [
+        "src/damped_oscillator.cpp",
+        "include/sub0physics/verification/error_statistics.hpp"
+      ]
+    },
+    {
+      "source": "dist/terrain.js",
+      "blob": "1cf671e66cb66833d8d8273ef9160ee594227aed",
+      "what": "Ordered profile validation; circle clearance with vertex/segment witnesses and ties",
+      "targets": [
+        "src/polyline_profile.cpp",
+        "src/circle_clearance.cpp"
+      ]
+    }
+  ]
+}

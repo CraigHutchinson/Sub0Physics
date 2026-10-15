@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: build-linux (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: gcc, cc: gcc-14, cxx: g++-14 }
+          - { compiler: clang, cc: clang-19, cxx: clang++-19 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-14 clang-19 ninja-build
+      - name: Configure
+        run: cmake --preset ci-unix -G Ninja
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+      - name: Build
+        run: cmake --build --preset ci-unix
+      - name: Test
+        run: ctest --preset ci-unix
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset ci-msvc
+      - name: Build
+        run: cmake --build --preset ci-msvc
+      - name: Test
+        run: ctest --preset ci-msvc
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset ci-unix
+      - name: Build
+        run: cmake --build --preset ci-unix
+      - name: Test
+        run: ctest --preset ci-unix
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-14
+      - name: Configure (ASan + UBSan)
+        run: cmake --preset ci-asan
+        env:
+          CC: gcc-14
+          CXX: g++-14
+      - name: Build
+        run: cmake --build --preset ci-asan
+      - name: Test
+        run: ctest --preset ci-asan
+
+  provenance:
+    name: upstream provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read upstream repository
+        id: upstream
+        run: echo "repository=$(jq -r '.repository | sub("https://github.com/"; "")' upstream/bikelab.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.upstream.outputs.repository }}
+          path: .upstream/bikelab
+          fetch-depth: 0
+      - name: Check ported commit and blobs
+        run: python3 tools/upstream_provenance.py check --upstream-dir .upstream/bikelab
