@@ -50,9 +50,9 @@ def find_intel_tool(name, env_var, product):
     return None
 
 
-def run(cmd):
+def run(cmd, cwd=None):
     print("+ " + " ".join(f'"{c}"' if " " in c else c for c in cmd), flush=True)
-    return subprocess.run(cmd).returncode
+    return subprocess.run(cmd, cwd=cwd).returncode
 
 
 def main():
@@ -69,6 +69,8 @@ def main():
     label = re.sub(r"[^A-Za-z0-9]+", "_", args.filter).strip("_") or "all"
     result = Path(args.out).resolve() / f"{args.analysis}-{label}-{stamp}"
     result.parent.mkdir(parents=True, exist_ok=True)
+    # Profilers drop state files (e.g. Advisor's config/state.cfg) in their working directory.
+    os.chdir(result.parent)
     workload = [str(Path(args.exe).resolve()), "--soak", str(args.seconds)]
     if args.filter:
         workload += ["--filter", args.filter]

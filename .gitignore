@@ -9,3 +9,4 @@ compile_commands.json
 .upstream/
 upstream-drift.md
 __pycache__/
+config/state.cfg
