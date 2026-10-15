@@ -103,7 +103,7 @@ jobs:
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
       - name: Configure (profile preset, ITT markers on)
-        run: cmake --preset profile -G Ninja -DSUB0PHYSICS_PERF_HOST=github-ubuntu
+        run: cmake --preset profile -G Ninja -DSUB0MATH_PERF_HOST=github-ubuntu
         env:
           CC: gcc-14
           CXX: g++-14
@@ -114,12 +114,12 @@ jobs:
       - name: Benchmark against the CI baseline
         run: |
           cmake --build --preset profile --target Sub0Physics_Bench_json
-          python3 tools/perf/bench_check.py check --tolerance 0.25 \
+          python3 "$(cat build-profile/sub0math_tooling_dir.txt)/bench_check.py" check --tolerance 0.25 \
             --results build-profile/perf/Sub0Physics_Bench.json --baseline perf/baselines/github-ubuntu.json
       - name: Vectorization remarks
         run: |
           cmake --preset vectorization -G Ninja
-          python3 tools/perf/vectorization_report.py --build-dir build-vec --target Sub0Physics \
+          python3 "$(cat build-vec/sub0math_tooling_dir.txt)/vectorization_report.py" --build-dir build-vec --target Sub0Physics \
             --target Sub0Physics_Bench --output build-vec/vectorization.md
           head -n 3 build-vec/vectorization.md >> "$GITHUB_STEP_SUMMARY"
         env:

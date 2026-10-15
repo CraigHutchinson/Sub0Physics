@@ -2,9 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <sub0math/linear/vec.hpp>
+#include <sub0math/units/quantities.hpp>
 #include <vector>
 
-#include "sub0physics/geometry/point2.hpp"
 #include "sub0physics/geometry/polyline_profile.hpp"
 
 namespace sub0physics
@@ -29,8 +30,8 @@ enum class FeatureKind : std::uint8_t
 /** A nearest surface point and its approach direction. */
 struct ClearanceWitness
 {
-    Point2 point;      ///< Nearest point on the surface, m.
-    Point2 normal;    ///< Unit vector from that point towards the centre.
+    ProfilePoint point;    ///< Nearest point on the surface.
+    sub0math::Vec2d normal; ///< Unit direction from that point towards the centre.
     FeatureKind kind; ///< Feature the point lies on.
     std::size_t index; ///< Vertex or segment index.
 };
@@ -39,17 +40,17 @@ struct ClearanceWitness
 struct CircleClearance
 {
     ClearanceStatus status;                ///< Whether the remaining fields are valid.
-    double distance;                       ///< Centre to nearest surface point, m.
-    double gap;                            ///< distance - radius, m; negative means overlap.
+    sub0math::f64::Length distance;          ///< Centre to nearest surface point.
+    sub0math::f64::Length gap;               ///< distance - radius; negative means overlap.
     std::vector<ClearanceWitness> witnesses; ///< Every feature within the tie tolerance of the nearest.
 };
 
 /** Query of a circle against a profile. */
 struct CircleQuery
 {
-    Point2 centre;       ///< Circle centre, m.
-    double radius;       ///< Circle radius, m; positive.
-    double tieTolerance; ///< Distances closer than this to the nearest count as ties, m; not a collision margin.
+    ProfilePoint centre;                ///< Circle centre.
+    sub0math::f64::Length radius;       ///< Circle radius; positive.
+    sub0math::f64::Length tieTolerance; ///< Distances this close to the nearest count as ties; not a collision margin.
 };
 
 /**

@@ -2,7 +2,9 @@
 
 Product-agnostic physics primitives and the tools to verify them, part of the
 [Sub0 family](https://github.com/CraigHutchinson/.github/blob/main/docs/sub0-family.md). C++23, no
-dependencies, no allocation on stepping paths.
+allocation on stepping paths. Built on [Sub0Math](https://github.com/CraigHutchinson/Sub0Math): element,
+reference and geometry interfaces take dimensioned quantities (`f64::Stiffness`, `f64::Length`), so unit
+mistakes do not compile.
 
 Domain models (vehicles, tyres, suspensions, riders) live in their products and build on these
 primitives. Sub0Physics knows nothing of them.
@@ -15,7 +17,7 @@ primitives. Sub0Physics knows nothing of them.
 | Elements | `sub0physics/elements.hpp` | `AxialSpringDamper` (preload, compression/rebound damping) and `UnilateralSpringDamper` (push-only penalty contact), with stored energy and dissipated power |
 | References | `sub0physics/references.hpp` | Closed-form damped linear oscillator for all damping regimes, numerically guarded |
 | Verification | `sub0physics/verification.hpp` | `EnergyLedger` (work/energy balance residual), `ErrorStatistics` (peak/RMS against a limit), `observedOrder` (convergence), `ChannelTable` (preallocated column recording) |
-| Geometry | `sub0physics/geometry.hpp` | `PolylineProfile` (validated height field with vertical faces) and circle clearance with vertex/segment witnesses and approach normals |
+| Geometry | `sub0physics/geometry.hpp` | `PolylineProfile` of `ProfilePoint` (`sub0math::Point2<f64::Length>`; a validated height field with vertical faces) and circle clearance with vertex/segment witnesses and approach normals |
 | Profiling | `sub0physics/profiling.hpp` | `ProfileTask`: ITT task markers for VTune, compiled out unless `SUB0PHYSICS_ENABLE_ITT` |
 | Level of detail | `sub0physics/lod.hpp` | `ModelDescriptor` and `FidelitySelector`: choose between models of one mechanism from a physical demand, with hysteresis, dwell and commit-after-transfer. See [docs/LOD.md](docs/LOD.md) |
 
@@ -24,7 +26,7 @@ Everything is reachable from `sub0physics/sub0physics.hpp`.
 ```cpp
 struct Wheel                                  // a model owned by the product
 {
-    sub0physics::UnilateralSpringDamper tyre{90000.0, 400.0};
+    sub0physics::UnilateralSpringDamper tyre{newtonsPerMetre(90000.0), newtonSecondsPerMetre(400.0)};
     std::expected<void, sub0physics::Fault> evaluate(double t, const sub0physics::StateVector<2>& x,
                                                      sub0physics::StateVector<2>& dxdt);
 };
@@ -46,8 +48,11 @@ ctest --preset default
 
 `build/tests/Sub0Physics_Bench` runs the benchmarks (not part of ctest). Allocation and
 evaluation-count gates run in ctest; timing budgets, VTune, Advisor, `perf` and vectorization reports are
-one command each: see [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Consumers get the same targets from
-`cmake/Sub0PhysicsTooling.cmake`. CI builds with GCC, Clang,
+one command each, using Sub0Math's tooling: see [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+Develop against local checkouts by setting `CPM_Sub0Math_SOURCE` (and similar) in your environment:
+CPM 0.43+ uses them, with a warning, and CI builds the pinned commits. CPM remembers a package's source in
+the build cache, so configure a fresh build directory after setting or clearing one. CI builds with GCC, Clang,
 MSVC and Apple Clang, runs ASan/UBSan, and compiles every public header on its own.
 
 Consume it with CPM at an exact commit:

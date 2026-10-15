@@ -1,8 +1,11 @@
 # Performance
 
 Performance here is a tested property, not a claim. Correctness gates come first; timing is measured
-on named hosts; profiling is one command away. Consumers (for example BikeDynamics) reuse all of it
-through `cmake/Sub0PhysicsTooling.cmake`.
+on named hosts; profiling is one command away. The benchmark, budget, profiler and vectorization tooling
+comes from Sub0Math (`cmake/Sub0MathTooling.cmake`, `tools/perf/`, documented in its
+[PERFORMANCE.md](https://github.com/CraigHutchinson/Sub0Math/blob/main/docs/PERFORMANCE.md)); this page
+lists what is specific to Sub0Physics. Configure writes the scripts' location to
+`<build>/sub0math_tooling_dir.txt`.
 
 ## Codified gates (every test run, every platform)
 
@@ -37,7 +40,7 @@ Build with the `profile` preset: optimised code with debug info and frame pointe
 markers (`sub0physics::ProfileTask`) that VTune shows on its timeline. Then:
 
 ```bash
-cmake --preset profile -DSUB0PHYSICS_PROFILE_FILTER="Rk4" -DSUB0PHYSICS_PROFILE_SECONDS=5
+cmake --preset profile -DSUB0MATH_PROFILE_FILTER="Rk4" -DSUB0MATH_PROFILE_SECONDS=5
 cmake --build --preset profile --target Sub0Physics_Bench_vtune_hotspots    # where time goes
 cmake --build --preset profile --target Sub0Physics_Bench_vtune_uarch       # why: front/back-end, ports, memory
 cmake --build --preset profile --target Sub0Physics_Bench_advisor_roofline  # vectorization and roofline
@@ -46,8 +49,8 @@ cmake --build --preset profile --target Sub0Physics_Bench_perf_record       # Li
 
 Each target runs the benchmark with `--soak` so the selected hot path dominates the samples, writes
 results to `build-profile/profiles/<analysis>-<filter>-<time>/`, prints the summary and tells you how to
-open the GUI. `tools/perf/profile.py` is the same thing without CMake. Any benchmark executable built
-with `tools/perf/bench_runner.hpp` accepts `--filter`, `--json`, `--soak` and `--list`.
+open the GUI. Sub0Math's `tools/perf/profile.py` is the same thing without CMake. Benchmark executables
+accept `--filter`, `--json`, `--soak` and `--list`.
 
 Platform notes:
 
@@ -61,7 +64,7 @@ Platform notes:
 
 ```bash
 cmake --preset vectorization
-python tools/perf/vectorization_report.py --build-dir build-vec --target Sub0Physics --target Sub0Physics_Bench
+python "$(cat build-vec/sub0math_tooling_dir.txt)/vectorization_report.py" --build-dir build-vec --target Sub0Physics --target Sub0Physics_Bench
 ```
 
 The report rebuilds with GCC `-fopt-info-vec-*`, Clang `-Rpass*`, or MSVC `/Qvec-report:2` and lists
@@ -74,6 +77,9 @@ Rules that keep hot code fast and analysable:
 - Stage loops run over contiguous arrays the integrator owns; a system writes only its output array.
   Do not alias a system's output with its input.
 - Faults are values with static strings, so the error path costs no allocation.
+- Interfaces carry Sub0Math quantities; models convert to plain SI doubles once, at their edge, and
+  integrator state stays plain. Quantities cost nothing (Sub0Math's paired benchmarks), while the
+  integrators stay generic over any state.
 - Time comes from integer ticks, so the endpoint derivative is reused without approximate comparisons.
 
 ## Findings so far
@@ -83,4 +89,5 @@ Rules that keep hot code fast and analysable:
 | 2026-10-15 | Clearance queries scanned every segment twice: 14 µs at 2048 points | nanobench | Horizontal pruning from the sorted x; 0.8 µs, brute-force agreement test |
 | 2026-10-15 | Accumulated step times missed the endpoint-derivative cache on 31% of 0.5 ms steps | counting test | `stepTick`; exactly 4 evaluations per RK4 step |
 | 2026-10-15 | GCC keeps `evaluate` out of line in the RK4 stages ("statement clobbers memory") | VTune hotspots, vectorization report | Forcing inlining measured no change (39.5 vs 39.8 ns/step); not applied |
-| 2026-10-15 | `std::hypot` dominated dense clearance queries (11.7 �s on a 1024-segment arc in BikeDynamics) | BikeDynamics bench | Squared distances, `sqrt` only on improvement, coordinates bounded at 1e100 m; 3.9 �s |
+| 2026-10-15 | `std::hypot` dominated dense clearance queries (11.7 µs on a 1024-segment arc in BikeDynamics) | BikeDynamics bench | Squared distances, `sqrt` only on improvement, coordinates bounded at 1e100 m; 3.9 µs |
+| 2026-10-15 | Moving the geometry interface to Sub0Math quantities regressed clearance by 52% (395 to 601 ns, best of 7) | Budget gate, then a scalar rewrite of the kernel to locate it | Fixed in Sub0Math (compile-time component expansion, no zero-initialised sums); 394 vs 402 ns, within noise |

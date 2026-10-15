@@ -1,16 +1,18 @@
 #pragma once
 
+#include <sub0math/units/quantities.hpp>
+
 namespace sub0physics
 {
 
 /** Forces and power of an axial element at one instant. Signs: positive force spreads the element. */
 struct AxialResponse
 {
-    double springForce;     ///< Preload plus linear spring force, N.
-    double damperForce;     ///< Viscous force, N; same sign as the compression rate.
-    double force;           ///< Total spreading force, N.
-    double storedEnergy;    ///< Elastic energy relative to zero compression, J.
-    double dissipationRate; ///< Power removed by the damper, W; never negative.
+    sub0math::f64::Force springForce;     ///< Preload plus linear spring force.
+    sub0math::f64::Force damperForce;     ///< Viscous force; same sign as the compression rate.
+    sub0math::f64::Force force;           ///< Total spreading force.
+    sub0math::f64::Energy storedEnergy;   ///< Elastic energy relative to zero compression.
+    sub0math::f64::Power dissipationRate; ///< Power removed by the damper; never negative.
 };
 
 /**
@@ -18,27 +20,31 @@ struct AxialResponse
  *
  * Compression `q` grows as the element shortens; `u = dq/dt`. Compression damping applies while
  * `u >= 0` and rebound damping while `u < 0`. The element is defined for any `q`; travel limits belong
- * to the caller, which knows its stroke.
+ * to the caller, which knows its stroke. Initialise with designated initialisers so the two damping
+ * coefficients cannot be swapped: `{.preload = ..., .stiffness = ..., .compressionDamping = ...,
+ * .reboundDamping = ...}`.
  */
 struct AxialSpringDamper
 {
-    double preload;            ///< Spring force at zero compression, N.
-    double stiffness;          ///< Spring rate, N/m.
-    double compressionDamping; ///< Damping coefficient while compressing, N s/m.
-    double reboundDamping;     ///< Damping coefficient while extending, N s/m.
+    sub0math::f64::Force preload;              ///< Spring force at zero compression.
+    sub0math::f64::Stiffness stiffness;        ///< Spring rate.
+    sub0math::f64::Damping compressionDamping; ///< Damping coefficient while compressing.
+    sub0math::f64::Damping reboundDamping;     ///< Damping coefficient while extending.
 
     /**
      * Evaluates the element.
      *
-     * @param compression Compression `q`, m.
-     * @param compressionRate Compression rate `u`, m/s.
+     * @param compression Compression `q`.
+     * @param compressionRate Compression rate `u`.
      * @return Forces, stored energy and dissipated power at this state.
      */
-    [[nodiscard]] constexpr AxialResponse respond(double compression, double compressionRate) const noexcept
+    [[nodiscard]] constexpr AxialResponse respond(sub0math::f64::Length compression,
+                                                  sub0math::f64::Velocity compressionRate) const noexcept
     {
-        const double damping = compressionRate >= 0.0 ? compressionDamping : reboundDamping;
-        const double spring = preload + stiffness * compression;
-        const double damper = damping * compressionRate;
+        const sub0math::f64::Damping damping =
+            compressionRate >= sub0math::f64::Velocity{} ? compressionDamping : reboundDamping;
+        const sub0math::f64::Force spring = preload + stiffness * compression;
+        const sub0math::f64::Force damper = damping * compressionRate;
         return AxialResponse{
             spring,
             damper,

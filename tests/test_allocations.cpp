@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "sub0physics/sub0physics.hpp"
+#include "test_profiles.hpp"
 
 namespace
 {
@@ -53,12 +54,12 @@ namespace
 
 struct Contact
 {
-    UnilateralSpringDamper tyre{90000.0, 400.0};
+    UnilateralSpringDamper tyre{sub0math::newtonsPerMetre(90000.0), sub0math::newtonSecondsPerMetre(400.0)};
 
     std::expected<void, Fault> evaluate(double, const StateVector<2>& x, StateVector<2>& dxdt) const
     {
         dxdt[0] = x[1];
-        dxdt[1] = tyre.respond(0.36 - x[0], -x[1]).force / 45.0 - StandardGravity;
+        dxdt[1] = tyre.respond(sub0math::metres(0.36 - x[0]), sub0math::metresPerSecond(-x[1])).force.si() / 45.0 - StandardGravity;
         return {};
     }
 };
@@ -96,20 +97,20 @@ TEST_CASE("Recording, ledgers, statistics and selection never allocate after con
         stats.add(v * 1e-6);
         const auto d = selector->decide(static_cast<double>(i % 3U), i);
         REQUIRE(selector->commit(d, i));
-        (void)evaluateDampedOscillator({1.0, 100.0, 1.0, 0.1, 0.0}, v * 1e-3);
+        (void)evaluateDampedOscillator({sub0math::kilograms(1.0), sub0math::newtonsPerMetre(100.0), sub0math::newtonSecondsPerMetre(1.0), sub0math::metres(0.1), {}}, sub0math::seconds(v * 1e-3));
     }
     CHECK(count.since() == 0U);
 }
 
 TEST_CASE("A clearance query allocates only its witness list")
 {
-    auto profile = PolylineProfile::create({{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.1}, {0.2, 0.1}, {0.2, 0.0}, {1.0, 0.0}});
+    auto profile = PolylineProfile::create(test_profiles::metresPoints({{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.1}, {0.2, 0.1}, {0.2, 0.0}, {1.0, 0.0}}));
     REQUIRE(profile);
     const AllocationCount count;
-    const CircleClearance c = measureCircleClearance(*profile, {{-0.1, 0.25}, 0.1, 1e-10});
+    const CircleClearance c = measureCircleClearance(*profile, {test_profiles::at(-0.1, 0.25), sub0math::metres(0.1), sub0math::metres(1e-10)});
     CHECK(c.witnesses.size() == 1U);
     CHECK(count.since() <= 1U);
     const AllocationCount refused;
-    CHECK(measureCircleClearance(*profile, {{0.9, 1.0}, 0.2, 1e-10}).status == ClearanceStatus::OutsideDomain);
+    CHECK(measureCircleClearance(*profile, {test_profiles::at(0.9, 1.0), sub0math::metres(0.2), sub0math::metres(1e-10)}).status == ClearanceStatus::OutsideDomain);
     CHECK(refused.since() == 0U);
 }

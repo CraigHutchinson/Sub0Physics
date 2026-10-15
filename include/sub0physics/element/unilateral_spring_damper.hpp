@@ -1,15 +1,17 @@
 #pragma once
 
+#include <sub0math/units/quantities.hpp>
+
 namespace sub0physics
 {
 
 /** Response of a compression-only contact at one instant. */
 struct ContactResponse
 {
-    double compression;     ///< Penetration clipped at zero, m.
-    double force;           ///< Normal force, N; never negative (no adhesion).
-    double storedEnergy;    ///< Elastic energy, J.
-    double dissipationRate; ///< Power not returned by the spring, W.
+    sub0math::f64::Length compression;    ///< Penetration clipped at zero.
+    sub0math::f64::Force force;           ///< Normal force; never negative (no adhesion).
+    sub0math::f64::Energy storedEnergy;   ///< Elastic energy.
+    sub0math::f64::Power dissipationRate; ///< Power not returned by the spring.
 };
 
 /**
@@ -21,25 +23,26 @@ struct ContactResponse
  */
 struct UnilateralSpringDamper
 {
-    double stiffness; ///< Contact stiffness, N/m.
-    double damping;   ///< Contact damping, N s/m.
+    sub0math::f64::Stiffness stiffness; ///< Contact stiffness.
+    sub0math::f64::Damping damping;     ///< Contact damping.
 
     /**
      * Evaluates the contact.
      *
-     * @param penetration Overlap, m; zero or negative means separated.
-     * @param penetrationRate Rate of change of overlap, m/s.
+     * @param penetration Overlap; zero or negative means separated.
+     * @param penetrationRate Rate of change of overlap.
      * @return The clipped response; all zero when separated.
      */
-    [[nodiscard]] constexpr ContactResponse respond(double penetration, double penetrationRate) const noexcept
+    [[nodiscard]] constexpr ContactResponse respond(sub0math::f64::Length penetration,
+                                                    sub0math::f64::Velocity penetrationRate) const noexcept
     {
-        if (!(penetration > 0.0))
+        if (!(penetration > sub0math::f64::Length{}))
         {
-            return ContactResponse{0.0, 0.0, 0.0, 0.0};
+            return ContactResponse{};
         }
-        const double elastic = stiffness * penetration;
-        const double total = elastic + damping * penetrationRate;
-        const double force = total > 0.0 ? total : 0.0;
+        const sub0math::f64::Force elastic = stiffness * penetration;
+        const sub0math::f64::Force total = elastic + damping * penetrationRate;
+        const sub0math::f64::Force force = total > sub0math::f64::Force{} ? total : sub0math::f64::Force{};
         return ContactResponse{
             penetration,
             force,

@@ -56,6 +56,6 @@ target_link_libraries(Sub0Physics_HeaderCheck PRIVATE Sub0Physics::Sub0Physics)
 # ── Benchmarks (not run by ctest — run manually) ──────────────────────────────
 
 if(SUB0PHYSICS_BUILD_BENCHMARKS)
-    sub0physics_add_benchmark(Sub0Physics_Bench bench_physics.cpp)
+    sub0math_add_benchmark(Sub0Physics_Bench bench_physics.cpp)
     target_link_libraries(Sub0Physics_Bench PRIVATE Sub0Physics::Sub0Physics)
 endif()

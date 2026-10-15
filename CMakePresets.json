@@ -80,7 +80,7 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "SUB0PHYSICS_BUILD_TESTING": "ON",
                 "SUB0PHYSICS_BUILD_BENCHMARKS": "ON",
-                "SUB0PHYSICS_PROFILE_FLAGS": "ON",
+                "SUB0MATH_PROFILE_FLAGS": "ON",
                 "SUB0PHYSICS_ENABLE_ITT": "ON"
             }
         },
@@ -92,7 +92,7 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "SUB0PHYSICS_BUILD_TESTING": "ON",
                 "SUB0PHYSICS_BUILD_BENCHMARKS": "ON",
-                "SUB0PHYSICS_VECTORIZATION_REPORT": "ON"
+                "SUB0MATH_VECTORIZATION_REPORT": "ON"
             }
         }
     ],

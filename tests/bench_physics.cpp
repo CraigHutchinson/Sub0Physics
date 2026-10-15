@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <expected>
+#include <sub0math/units.hpp>
 #include <vector>
 
 #include "sub0physics/sub0physics.hpp"
@@ -15,15 +16,15 @@ namespace
 // A loaded wheel on a clipped contact: the shape of BikeLab's first station.
 struct ContactOscillator
 {
-    UnilateralSpringDamper contact{90000.0, 400.0};
+    UnilateralSpringDamper contact{sub0math::newtonsPerMetre(90000.0), sub0math::newtonSecondsPerMetre(400.0)};
     double mass = 45.0;
     double radius = 0.36;
 
     std::expected<void, Fault> evaluate(double, const StateVector<2>& x, StateVector<2>& dxdt) const
     {
-        const ContactResponse r = contact.respond(radius - x[0], -x[1]);
+        const ContactResponse r = contact.respond(sub0math::metres(radius - x[0]), sub0math::metresPerSecond(-x[1]));
         dxdt[0] = x[1];
-        dxdt[1] = r.force / mass - StandardGravity;
+        dxdt[1] = r.force.si() / mass - StandardGravity;
         return {};
     }
 };
@@ -53,24 +54,24 @@ int main(int argc, char** argv)
     benchStep<Rk4<2>>(runner, "Rk4 step, contact oscillator");
     benchStep<Midpoint<2>>(runner, "Midpoint step, contact oscillator");
 
-    std::vector<Point2> points;
+    std::vector<ProfilePoint> points;
     for (int i = 0; i <= 2047; ++i)
     {
         const double x = -10.0 + 20.0 * i / 2047.0;
-        points.push_back({x, 0.05 * std::sin(3.0 * x)});
+        points.push_back({sub0math::metres(x), sub0math::metres(0.05 * std::sin(3.0 * x))});
     }
     const auto profile = *PolylineProfile::create(points);
     runner.bench().minEpochIterations(5000);
     runner.run("Circle clearance, 2048-point profile", [&] {
-        auto c = measureCircleClearance(profile, {{0.3, 0.5}, 0.36, 1e-10});
+        auto c = measureCircleClearance(profile, {{sub0math::metres(0.3), sub0math::metres(0.5)}, sub0math::metres(0.36), sub0math::metres(1e-10)});
         ankerl::nanobench::doNotOptimizeAway(c);
     });
     runner.bench().minEpochIterations(20000);
     runner.run("Surface height, 2048-point profile", [&] {
-        ankerl::nanobench::doNotOptimizeAway(profile.surfaceHeight(0.3));
+        ankerl::nanobench::doNotOptimizeAway(profile.surfaceHeight(sub0math::metres(0.3)));
     });
     runner.run("Damped oscillator closed form", [&] {
-        ankerl::nanobench::doNotOptimizeAway(evaluateDampedOscillator({45.0, 9000.0, 500.0, 0.03, 0.4}, 0.731));
+        ankerl::nanobench::doNotOptimizeAway(evaluateDampedOscillator({sub0math::kilograms(45.0), sub0math::newtonsPerMetre(9000.0), sub0math::newtonSecondsPerMetre(500.0), sub0math::metres(0.03), sub0math::metresPerSecond(0.4)}, sub0math::seconds(0.731)));
     });
     return runner.finish();
 }

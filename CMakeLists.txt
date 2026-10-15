@@ -14,7 +14,9 @@ option(SUB0PHYSICS_BUILD_BENCHMARKS "Build benchmarks"                   OFF)
 option(SUB0PHYSICS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(SUB0PHYSICS_ENABLE_ITT "Intel ITT task markers for VTune (fetches intel/ittapi)" OFF)
 
-include(cmake/Sub0PhysicsTooling.cmake)
+include(cmake/Dependencies.cmake)
+# Benchmark, budget, profiler and vectorization tooling for the Sub0 family, from Sub0Math.
+include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")
 
 # ── Core library ─────────────────────────────────────────────────────────────
 
@@ -27,6 +29,7 @@ add_library(Sub0Physics STATIC
 add_library(Sub0Physics::Sub0Physics ALIAS Sub0Physics)
 
 target_compile_features(Sub0Physics PUBLIC cxx_std_23)
+target_link_libraries(Sub0Physics PUBLIC Sub0Math::Sub0Math)
 
 target_compile_options(Sub0Physics PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive- /Zc:preprocessor>
@@ -36,11 +39,10 @@ target_compile_options(Sub0Physics PRIVATE
     $<$<AND:$<BOOL:${SUB0PHYSICS_WARNINGS_AS_ERRORS}>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-Werror>
 )
 
-sub0physics_target_perf_options(Sub0Physics)
+sub0math_target_perf_options(Sub0Physics)
 
 # Profiler task markers (sub0physics/profiling/profile_task.hpp); compiled out unless enabled.
 if(SUB0PHYSICS_ENABLE_ITT)
-    include(cmake/CPM.cmake)
     CPMAddPackage(NAME ittapi GITHUB_REPOSITORY intel/ittapi
         GIT_TAG 69521ad9163f62b5e650f01c2e70f91595ec405e # v3.28.2
         EXCLUDE_FROM_ALL YES OPTIONS "ITT_API_INSTALL OFF")
@@ -61,7 +63,8 @@ endif()
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
-if(NOT IS_SUBPROJECT AND NOT SUB0PHYSICS_ENABLE_ITT)
+# Installing needs Sub0Math and ittapi exported too; consumers use CPM instead until that is needed.
+if(FALSE)
 
     include(CMakePackageConfigHelpers)
 
