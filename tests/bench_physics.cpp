@@ -1,8 +1,8 @@
 #define ANKERL_NANOBENCH_IMPLEMENT
+#include <bench_runner.hpp>
 #include <cmath>
+#include <cstdint>
 #include <expected>
-#include <nanobench.h>
-#include <numbers>
 #include <vector>
 
 #include "sub0physics/sub0physics.hpp"
@@ -29,31 +29,29 @@ struct ContactOscillator
 };
 
 template<typename Integrator>
-void benchStep(ankerl::nanobench::Bench& bench, const char* name)
+void benchStep(sub0bench::BenchRunner& runner, const char* name)
 {
     ContactOscillator system;
     Integrator integrator;
     StateVector<2> x{0.36, 0.0};
-    double t = 0.0;
-    const double h = 0.0005;
-    bench.run(name, [&] {
-        if (!integrator.step(system, t, h, x))
+    std::uint64_t tick = 0;
+    runner.run(name, [&] {
+        if (!integrator.stepTick(system, tick++, 0.0005, x))
         {
             x = {0.36, 0.0};
         }
-        t += h;
         ankerl::nanobench::doNotOptimizeAway(x);
     });
 }
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
-    ankerl::nanobench::Bench bench;
-    bench.title("Sub0Physics").relative(true).warmup(1000).minEpochIterations(20000);
-    benchStep<Rk4<2>>(bench, "Rk4 step, contact oscillator");
-    benchStep<Midpoint<2>>(bench, "Midpoint step, contact oscillator");
+    sub0bench::BenchRunner runner(argc, argv, "Sub0Physics");
+    runner.bench().minEpochIterations(20000);
+    benchStep<Rk4<2>>(runner, "Rk4 step, contact oscillator");
+    benchStep<Midpoint<2>>(runner, "Midpoint step, contact oscillator");
 
     std::vector<Point2> points;
     for (int i = 0; i <= 2047; ++i)
@@ -62,13 +60,17 @@ int main()
         points.push_back({x, 0.05 * std::sin(3.0 * x)});
     }
     const auto profile = *PolylineProfile::create(points);
-    bench.relative(false).minEpochIterations(200);
-    bench.run("Circle clearance, 2048-point profile", [&] {
+    runner.bench().minEpochIterations(200);
+    runner.run("Circle clearance, 2048-point profile", [&] {
         auto c = measureCircleClearance(profile, {{0.3, 0.5}, 0.36, 1e-10});
         ankerl::nanobench::doNotOptimizeAway(c);
     });
-    bench.minEpochIterations(20000);
-    bench.run("Surface height, 2048-point profile", [&] {
+    runner.bench().minEpochIterations(20000);
+    runner.run("Surface height, 2048-point profile", [&] {
         ankerl::nanobench::doNotOptimizeAway(profile.surfaceHeight(0.3));
     });
+    runner.run("Damped oscillator closed form", [&] {
+        ankerl::nanobench::doNotOptimizeAway(evaluateDampedOscillator({45.0, 9000.0, 500.0, 0.03, 0.4}, 0.731));
+    });
+    return runner.finish();
 }

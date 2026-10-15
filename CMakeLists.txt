@@ -12,6 +12,9 @@ include(GNUInstallDirs)
 option(SUB0PHYSICS_BUILD_TESTING    "Build unit-tests"                   ON)
 option(SUB0PHYSICS_BUILD_BENCHMARKS "Build benchmarks"                   OFF)
 option(SUB0PHYSICS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(SUB0PHYSICS_ENABLE_ITT "Intel ITT task markers for VTune (fetches intel/ittapi)" OFF)
+
+include(cmake/Sub0PhysicsTooling.cmake)
 
 # ── Core library ─────────────────────────────────────────────────────────────
 
@@ -27,10 +30,23 @@ target_compile_features(Sub0Physics PUBLIC cxx_std_23)
 
 target_compile_options(Sub0Physics PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive- /Zc:preprocessor>
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wdouble-promotion>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wdouble-promotion
+        -fstrict-aliasing -Wstrict-aliasing=2>
     $<$<AND:$<BOOL:${SUB0PHYSICS_WARNINGS_AS_ERRORS}>,$<CXX_COMPILER_ID:MSVC>>:/WX>
     $<$<AND:$<BOOL:${SUB0PHYSICS_WARNINGS_AS_ERRORS}>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-Werror>
 )
+
+sub0physics_target_perf_options(Sub0Physics)
+
+# Profiler task markers (sub0physics/profiling/profile_task.hpp); compiled out unless enabled.
+if(SUB0PHYSICS_ENABLE_ITT)
+    include(cmake/CPM.cmake)
+    CPMAddPackage(NAME ittapi GITHUB_REPOSITORY intel/ittapi
+        GIT_TAG 69521ad9163f62b5e650f01c2e70f91595ec405e # v3.28.2
+        EXCLUDE_FROM_ALL YES OPTIONS "ITT_API_INSTALL OFF")
+    target_link_libraries(Sub0Physics PUBLIC ittnotify)
+    target_compile_definitions(Sub0Physics PUBLIC SUB0PHYSICS_ITT=1)
+endif()
 
 target_include_directories(Sub0Physics
     PUBLIC
@@ -45,7 +61,7 @@ endif()
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
-if(NOT IS_SUBPROJECT)
+if(NOT IS_SUBPROJECT AND NOT SUB0PHYSICS_ENABLE_ITT)
 
     include(CMakePackageConfigHelpers)
 

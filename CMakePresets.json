@@ -71,20 +71,112 @@
                 "lhs": "${hostSystemName}",
                 "rhs": "Windows"
             }
+        },
+        {
+            "name": "profile",
+            "displayName": "Profile (optimised, debug info, frame pointers, ITT markers)",
+            "binaryDir": "${sourceDir}/build-profile",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUB0PHYSICS_BUILD_TESTING": "ON",
+                "SUB0PHYSICS_BUILD_BENCHMARKS": "ON",
+                "SUB0PHYSICS_PROFILE_FLAGS": "ON",
+                "SUB0PHYSICS_ENABLE_ITT": "ON"
+            }
+        },
+        {
+            "name": "vectorization",
+            "displayName": "Vectorization remarks (use tools/perf/vectorization_report.py)",
+            "binaryDir": "${sourceDir}/build-vec",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "SUB0PHYSICS_BUILD_TESTING": "ON",
+                "SUB0PHYSICS_BUILD_BENCHMARKS": "ON",
+                "SUB0PHYSICS_VECTORIZATION_REPORT": "ON"
+            }
         }
     ],
     "buildPresets": [
-        { "name": "default", "configurePreset": "default", "configuration": "Release" },
-        { "name": "debug", "configurePreset": "debug", "configuration": "Debug" },
-        { "name": "ci-unix", "configurePreset": "ci-unix" },
-        { "name": "ci-msvc", "configurePreset": "ci-msvc", "configuration": "Release" },
-        { "name": "ci-asan", "configurePreset": "ci-asan" }
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "configuration": "Release"
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "ci-unix",
+            "configurePreset": "ci-unix"
+        },
+        {
+            "name": "ci-msvc",
+            "configurePreset": "ci-msvc",
+            "configuration": "Release"
+        },
+        {
+            "name": "ci-asan",
+            "configurePreset": "ci-asan"
+        },
+        {
+            "name": "profile",
+            "configurePreset": "profile",
+            "configuration": "Release"
+        },
+        {
+            "name": "vectorization",
+            "configurePreset": "vectorization",
+            "configuration": "Release"
+        }
     ],
     "testPresets": [
-        { "name": "default", "configurePreset": "default", "configuration": "Release", "output": { "outputOnFailure": true } },
-        { "name": "debug", "configurePreset": "debug", "configuration": "Debug", "output": { "outputOnFailure": true } },
-        { "name": "ci-unix", "configurePreset": "ci-unix", "output": { "outputOnFailure": true } },
-        { "name": "ci-msvc", "configurePreset": "ci-msvc", "configuration": "Release", "output": { "outputOnFailure": true } },
-        { "name": "ci-asan", "configurePreset": "ci-asan", "output": { "outputOnFailure": true } }
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "ci-unix",
+            "configurePreset": "ci-unix",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "ci-msvc",
+            "configurePreset": "ci-msvc",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "ci-asan",
+            "configurePreset": "ci-asan",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "profile",
+            "configurePreset": "profile",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
     ]
 }

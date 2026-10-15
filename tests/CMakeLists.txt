@@ -25,6 +25,12 @@ target_compile_options(Sub0Physics_Tests PRIVATE
 
 add_test(NAME Sub0Physics_Tests COMMAND Sub0Physics_Tests)
 
+# Replacement allocation operators count every heap allocation, so they live in their own executable.
+add_executable(Sub0Physics_AllocationTests test_main.cpp test_allocations.cpp)
+target_link_libraries(Sub0Physics_AllocationTests PRIVATE Sub0Physics::Sub0Physics Threads::Threads)
+target_include_directories(Sub0Physics_AllocationTests SYSTEM PRIVATE "${VENDOR_DIR}")
+add_test(NAME Sub0Physics_AllocationTests COMMAND Sub0Physics_AllocationTests)
+
 # ── Header self-containment ───────────────────────────────────────────────────
 # One translation unit per public header, each including only that header (twice,
 # to exercise its include guard). A header that leans on another's transitive
@@ -50,7 +56,6 @@ target_link_libraries(Sub0Physics_HeaderCheck PRIVATE Sub0Physics::Sub0Physics)
 # ── Benchmarks (not run by ctest — run manually) ──────────────────────────────
 
 if(SUB0PHYSICS_BUILD_BENCHMARKS)
-    add_executable(Sub0Physics_Bench bench_physics.cpp)
+    sub0physics_add_benchmark(Sub0Physics_Bench bench_physics.cpp)
     target_link_libraries(Sub0Physics_Bench PRIVATE Sub0Physics::Sub0Physics)
-    target_include_directories(Sub0Physics_Bench SYSTEM PRIVATE "${VENDOR_DIR}")
 endif()
