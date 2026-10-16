@@ -29,6 +29,14 @@ library-rooted (`"sub0physics/fault.hpp"`); each group alphabetical. Every folde
 header (`element/` → `elements.hpp`); `sub0physics.hpp` includes everything.
 `Sub0Physics_HeaderCheck` compiles every public header on its own.
 
+## Performance notes in code
+
+Where performance has been measured and iterated, leave a `// PERF:` comment at the code, ten words or
+fewer, saying what was found faster than what. Numbers and evidence go in `docs/PERFORMANCE.md` under
+Findings. PERF notes are hints that record the area has been worked on; later work may override one
+when its own measurement says so, and then updates the note. The family convention is in Sub0Math's
+STYLE_GUIDE.md.
+
 ## Documentation
 
 Doxygen `/** */` on every public declaration; the first sentence is the brief (no `@brief`);
