@@ -1,15 +1,51 @@
 {
+  "format": 2,
   "host": "CrogLegion",
   "machine": "AMD64",
   "system": "Windows 11",
-  "note": "Median ns per op from nanobench. Regenerate deliberately; say why in the commit.",
+  "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. Regenerate deliberately; say why in the commit.",
+  "calibration_ns": 4899.441,
   "benchmarks": {
-    "Circle clearance, 2048-point profile": 424.917,
-    "Damped oscillator closed form": 15.832,
-    "Midpoint step, contact oscillator": 17.088,
-    "Rk4 step, contact oscillator": 30.854,
-    "Surface height, 2048-point profile": 6.503,
-    "page height x1024, HeightPage::heightAt": 3115.32,
-    "page height x1024, hand-written raw arrays": 3210.48
+    "Circle clearance, 2048-point profile": {
+      "median_ns": 534.925,
+      "cv": 0.0345,
+      "rounds": 5
+    },
+    "Damped oscillator closed form": {
+      "median_ns": 19.378,
+      "cv": 0.1279,
+      "rounds": 5
+    },
+    "Midpoint step, contact oscillator": {
+      "median_ns": 19.656,
+      "cv": 0.0079,
+      "rounds": 5
+    },
+    "Rk4 step, contact oscillator": {
+      "median_ns": 33.952,
+      "cv": 0.007,
+      "rounds": 5
+    },
+    "Surface height, 2048-point profile": {
+      "median_ns": 7.13,
+      "cv": 0.0142,
+      "rounds": 5
+    },
+    "page height x1024, HeightPage::heightAt": {
+      "median_ns": 4244.703,
+      "cv": 0.0173,
+      "rounds": 5
+    },
+    "page height x1024, hand-written raw arrays": {
+      "median_ns": 3809.912,
+      "cv": 0.0201,
+      "rounds": 5
+    }
+  },
+  "pairs": {
+    "page height x1024, HeightPage::heightAt": {
+      "reference": "page height x1024, hand-written raw arrays",
+      "ratio": 1.1025
+    }
   }
 }

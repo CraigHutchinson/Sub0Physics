@@ -99,4 +99,4 @@ Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANC
 
 | Since | Pair | Gap | Cause | Follow-up |
 |---|---|---|---|---|
-| 2026-10-16 | `page height x1024`, `HeightPage::heightAt` | about 1.07x (3.0 vs 2.8 µs) | Per-call conversion and bounds work around an otherwise identical kernel | Terrain step G3: the batch extraction API (many samples per call, SoA out) is the real consumer; close it there or accept it with its numbers |
+| 2026-10-16 | `page height x1024`, `HeightPage::heightAt` | about 1.07x in one process, 1.10x interleaved (pair ratio) | Per-call conversion and bounds work around an otherwise identical kernel | Terrain step G3: the batch extraction API (many samples per call, SoA out) is the real consumer; close it there or accept it with its numbers |
