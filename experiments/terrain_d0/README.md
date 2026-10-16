@@ -103,3 +103,19 @@ Two amendments follow from the results:
      costs less than the queries it saves (R1).
   2. **Local heavy-deformation zones:** only with a separate field per material, and with
      re-distancing after edits (R2).
+
+## D1: vertical-height contact vs contact along surface normals
+
+`contact_projection.py` (standard library only) takes a 2D section across the tread: a 29 mm crown
+carrying 400 N over a 50 mm patch, pressed into a rut 8 cm wide and 6 cm deep, and onto a 45° berm
+face. It solves both contact models for vertical equilibrium. Results are in
+[CONTACT_PROJECTION.md](CONTACT_PROJECTION.md).
+
+- Querying heights straight down gives **no lateral force**, so a rut cannot steer and a berm cannot
+  support a corner.
+- Along normals, an off-centre crown is pushed toward the rut centre at 1–2× the load. That exceeds
+  grip of about 0.6, so the tyre slides until it is centred or rides out over the rim. The berm
+  supports a load of tan 45° = 1.0.
+
+The penalty model is illustrative; its conclusion is geometric. Contact and terrain sampling must
+follow the tyre's support normal, not world vertical.
