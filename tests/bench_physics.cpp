@@ -1,4 +1,5 @@
 #define ANKERL_NANOBENCH_IMPLEMENT
+#include <algorithm>
 #include <bench_runner.hpp>
 #include <cmath>
 #include <cstdint>
@@ -45,6 +46,70 @@ void benchStep(sub0bench::BenchRunner& runner, const char* name)
     });
 }
 
+// Height lookup on a terrain page, against the fastest hand-written form of the same job: 16-bit heights,
+// a known-node bit mask and the fixed-diagonal triangulation, read from raw arrays.
+void benchPageHeight(sub0bench::BenchRunner& runner)
+{
+    using namespace sub0physics::terrain;
+    constexpr int nodes = HeightPage::Nodes;
+    constexpr std::size_t count = static_cast<std::size_t>(nodes) * nodes;
+    const GridSpec grid{sub0math::f64::Length::fromSi(0.01), 4};
+    std::vector<sub0math::f64::Length> heights(count);
+    std::vector<std::uint8_t> known(count, 1);
+    std::vector<std::uint16_t> raw(count);
+    std::vector<std::uint64_t> mask((count + 63) / 64, ~std::uint64_t{0});
+    for (int j = 0; j < nodes; ++j)
+        for (int i = 0; i < nodes; ++i)
+        {
+            const double z = 0.2 + 0.05 * std::sin(0.11 * i) * std::cos(0.07 * j);
+            const auto n = static_cast<std::size_t>(j) * nodes + static_cast<std::size_t>(i);
+            heights[n] = sub0math::f64::Length::fromSi(z);
+            raw[n] = static_cast<std::uint16_t>(std::lround((z - 0.15) / 1e-4));
+        }
+    const auto page = *buildHeightPage(grid, {0, 0, 0}, SourceRevision{1}, heights, known);
+    std::vector<float> xs(1024), ys(1024);
+    for (std::size_t k = 0; k < xs.size(); ++k)
+    {
+        xs[k] = 0.0025F * static_cast<float>(k % 997);
+        ys[k] = 2.55F - 0.0023F * static_cast<float>((k * 7) % 1013);
+    }
+
+    runner.run("page height x1024, hand-written raw arrays", [&] {
+        float sum = 0.0F;
+        const auto bit = [&](int i, int j) {
+            const auto n = static_cast<std::size_t>(j) * nodes + static_cast<std::size_t>(i);
+            return ((mask[n >> 6] >> (n & 63)) & 1U) != 0U;
+        };
+        const auto at = [&](int i, int j) { return static_cast<float>(raw[static_cast<std::size_t>(j) * nodes + static_cast<std::size_t>(i)]); };
+        for (std::size_t k = 0; k < xs.size(); ++k)
+        {
+            const float lx = xs[k] * 100.0F, ly = ys[k] * 100.0F;
+            if (!(lx >= 0.0F && ly >= 0.0F && lx <= 256.0F && ly <= 256.0F)) continue;
+            const int i = std::min(static_cast<int>(lx), 255), j = std::min(static_cast<int>(ly), 255);
+            const float fx = lx - static_cast<float>(i), fy = ly - static_cast<float>(j);
+            if (fx >= fy)
+            {
+                if (!bit(i, j) || !bit(i + 1, j) || !bit(i + 1, j + 1)) continue;
+                sum += (at(i, j) + (at(i + 1, j) - at(i, j)) * fx + (at(i + 1, j + 1) - at(i + 1, j)) * fy) * 1e-4F;
+            }
+            else
+            {
+                if (!bit(i, j) || !bit(i + 1, j + 1) || !bit(i, j + 1)) continue;
+                sum += (at(i, j) + (at(i + 1, j + 1) - at(i, j + 1)) * fx + (at(i, j + 1) - at(i, j)) * fy) * 1e-4F;
+            }
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+    runner.run("page height x1024, HeightPage::heightAt", [&] {
+        float sum = 0.0F;
+        for (std::size_t k = 0; k < xs.size(); ++k)
+        {
+            if (const auto z = page.heightAt(sub0math::Length::fromSi(xs[k]), sub0math::Length::fromSi(ys[k]))) sum += z.height.si();
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -73,5 +138,6 @@ int main(int argc, char** argv)
     runner.run("Damped oscillator closed form", [&] {
         ankerl::nanobench::doNotOptimizeAway(evaluateDampedOscillator({sub0math::kilograms(45.0), sub0math::newtonsPerMetre(9000.0), sub0math::newtonSecondsPerMetre(500.0), sub0math::metres(0.03), sub0math::metresPerSecond(0.4)}, sub0math::seconds(0.731)));
     });
+    benchPageHeight(runner);
     return runner.finish();
 }

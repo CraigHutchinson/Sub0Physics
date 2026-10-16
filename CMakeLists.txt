@@ -24,6 +24,7 @@ add_library(Sub0Physics STATIC
     src/circle_clearance.cpp
     src/damped_oscillator.cpp
     src/fidelity_selector.cpp
+    src/height_page.cpp
     src/polyline_profile.cpp
 )
 add_library(Sub0Physics::Sub0Physics ALIAS Sub0Physics)

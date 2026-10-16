@@ -1,6 +1,7 @@
 // Counts every heap allocation in this executable, to pin the "no allocation while stepping" contract.
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <doctest.h>
 #include <expected>
@@ -113,4 +114,24 @@ TEST_CASE("A clearance query allocates only its witness list")
     const AllocationCount refused;
     CHECK(measureCircleClearance(*profile, {{test_profiles::at(0.9, 1.0), sub0math::metres(0.2)}, sub0math::metres(1e-10)}).status == ClearanceStatus::OutsideDomain);
     CHECK(refused.since() == 0U);
+}
+
+TEST_CASE("Terrain page lookups never allocate")
+{
+    using namespace sub0physics::terrain;
+    constexpr std::size_t count = static_cast<std::size_t>(HeightPage::Nodes) * HeightPage::Nodes;
+    std::vector<sub0math::f64::Length> heights(count);
+    for (std::size_t n = 0; n < count; ++n) heights[n] = sub0math::metres(1.0 + 0.001 * static_cast<double>(n % HeightPage::Nodes));
+    const std::vector<std::uint8_t> known(count, 1);
+    const auto page = buildHeightPage(GridSpec{sub0math::metres(0.01), 2}, TileKey{0, 0, 0}, SourceRevision{1}, heights, known);
+    REQUIRE(page);
+    const AllocationCount lookups;
+    float sum = 0.0F;
+    for (int k = 0; k < 1000; ++k)
+    {
+        if (const auto z = page->heightAt(sub0math::Length::fromSi(0.002F * static_cast<float>(k)), sub0math::Length::fromSi(1.0F))) sum += z.height.si();
+        sum += static_cast<float>(page->blockRange(k % 6, 0, 0).hi);
+    }
+    CHECK(sum > 0.0F);
+    CHECK(lookups.since() == 0U);
 }

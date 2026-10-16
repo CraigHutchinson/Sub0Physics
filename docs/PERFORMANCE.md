@@ -91,3 +91,12 @@ Rules that keep hot code fast and analysable:
 | 2026-10-15 | GCC keeps `evaluate` out of line in the RK4 stages ("statement clobbers memory") | VTune hotspots, vectorization report | Forcing inlining measured no change (39.5 vs 39.8 ns/step); not applied |
 | 2026-10-15 | `std::hypot` dominated dense clearance queries (11.7 µs on a 1024-segment arc in BikeDynamics) | BikeDynamics bench | Squared distances, `sqrt` only on improvement, coordinates bounded at 1e100 m; 3.9 µs |
 | 2026-10-15 | Moving the geometry interface to Sub0Math quantities regressed clearance by 52% (395 to 601 ns, best of 7) | Budget gate, then a scalar rewrite of the kernel to locate it | Fixed in Sub0Math (compile-time component expansion, no zero-initialised sums); 394 vs 402 ns, within noise |
+| 2026-10-16 | Terrain page height lookup started 2.5x slower than the hand-written kernel (raw arrays, bit mask, fixed diagonal) | Paired benchmark `page height x1024` | Inline definition with reciprocal spacing (7.1 to 5.4 µs); a plain `HeightSample` return instead of `std::optional` (5.6 to 3.5 µs; `std::optional<float>` was equally slow, so the optional, not the quantity, kept the result in memory on GCC 16); two plain branches instead of a merged triangle select (3.5 to 3.0 µs). Force-inlining alone: no gain. Now 1.07x |
+
+## Open gaps
+
+Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANCE.md`).
+
+| Since | Pair | Gap | Cause | Follow-up |
+|---|---|---|---|---|
+| 2026-10-16 | `page height x1024`, `HeightPage::heightAt` | about 1.07x (3.0 vs 2.8 µs) | Per-call conversion and bounds work around an otherwise identical kernel | Terrain step G3: the batch extraction API (many samples per call, SoA out) is the real consumer; close it there or accept it with its numbers |

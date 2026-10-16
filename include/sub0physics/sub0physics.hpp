@@ -8,4 +8,5 @@
 #include "sub0physics/lod.hpp"
 #include "sub0physics/profiling.hpp"
 #include "sub0physics/references.hpp"
+#include "sub0physics/terrain.hpp"
 #include "sub0physics/verification.hpp"

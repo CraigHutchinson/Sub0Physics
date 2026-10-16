@@ -13,6 +13,7 @@ add_executable(Sub0Physics_Tests
     test_fidelity_selector.cpp
     test_integrators.cpp
     test_polyline_profile.cpp
+    test_terrain_page.cpp
 )
 
 find_package(Threads REQUIRED)
