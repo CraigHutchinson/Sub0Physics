@@ -12,6 +12,7 @@ include(GNUInstallDirs)
 option(SUB0PHYSICS_BUILD_TESTING    "Build unit-tests"                   ON)
 option(SUB0PHYSICS_BUILD_BENCHMARKS "Build benchmarks"                   OFF)
 option(SUB0PHYSICS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(SUB0PHYSICS_BUILD_EXPERIMENTS "Build decision experiments (experiments/)" OFF)
 option(SUB0PHYSICS_ENABLE_ITT "Intel ITT task markers for VTune (fetches intel/ittapi)" OFF)
 
 include(cmake/Dependencies.cmake)
@@ -55,6 +56,10 @@ target_include_directories(Sub0Physics
         $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+
+if(SUB0PHYSICS_BUILD_EXPERIMENTS AND NOT IS_SUBPROJECT)
+    add_subdirectory(experiments/terrain_d0)
+endif()
 
 if(SUB0PHYSICS_BUILD_TESTING AND NOT IS_SUBPROJECT)
     enable_testing()
