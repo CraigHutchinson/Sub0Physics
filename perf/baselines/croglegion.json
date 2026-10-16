@@ -3,49 +3,58 @@
   "host": "CrogLegion",
   "machine": "AMD64",
   "system": "Windows 11",
-  "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. Regenerate deliberately; say why in the commit.",
-  "calibration_ns": 4899.441,
+  "note": "Medians per op after calibration scaling, with robust CV across interleaved rounds. Regenerate deliberately; say why in the commit. Regressions are accepted with `accept`.",
+  "calibration_ns": 4799.592,
+  "epochs": 0,
   "benchmarks": {
     "Circle clearance, 2048-point profile": {
-      "median_ns": 534.925,
-      "cv": 0.0345,
+      "median_ns": 495.641,
+      "cv": 0.0364,
       "rounds": 5
     },
     "Damped oscillator closed form": {
-      "median_ns": 19.378,
-      "cv": 0.1279,
+      "median_ns": 17.362,
+      "cv": 0.0065,
       "rounds": 5
     },
     "Midpoint step, contact oscillator": {
-      "median_ns": 19.656,
-      "cv": 0.0079,
+      "median_ns": 18.91,
+      "cv": 0.0208,
       "rounds": 5
     },
     "Rk4 step, contact oscillator": {
-      "median_ns": 33.952,
-      "cv": 0.007,
+      "median_ns": 33.687,
+      "cv": 0.0245,
       "rounds": 5
     },
     "Surface height, 2048-point profile": {
-      "median_ns": 7.13,
-      "cv": 0.0142,
+      "median_ns": 6.843,
+      "cv": 0.004,
       "rounds": 5
     },
     "page height x1024, HeightPage::heightAt": {
-      "median_ns": 4244.703,
-      "cv": 0.0173,
+      "median_ns": 3840.612,
+      "cv": 0.0319,
       "rounds": 5
     },
     "page height x1024, hand-written raw arrays": {
-      "median_ns": 3809.912,
-      "cv": 0.0201,
+      "median_ns": 3530.916,
+      "cv": 0.0276,
       "rounds": 5
     }
   },
   "pairs": {
     "page height x1024, HeightPage::heightAt": {
       "reference": "page height x1024, hand-written raw arrays",
-      "ratio": 1.1025
+      "ratio": 1.0737
     }
-  }
+  },
+  "accepted": [
+    {
+      "date": "2026-10-16",
+      "commit": "68b6007a447776fe6cbeb9ac33a994ce0a151672",
+      "reason": "nanobench 4.3.11 -> 4.6.0 (via Sub0Math a0dee34): every benchmark re-measured under the new harness",
+      "benchmarks": "all (re-recorded)"
+    }
+  ]
 }
