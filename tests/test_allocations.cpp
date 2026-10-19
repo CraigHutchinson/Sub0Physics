@@ -135,3 +135,18 @@ TEST_CASE("Terrain page lookups never allocate")
     CHECK(sum > 0.0F);
     CHECK(lookups.since() == 0U);
 }
+
+TEST_CASE("Travel buffer creation, refusal and evaluation never allocate")
+{
+    const AllocationCount count;
+    double sum = 0.0;
+    const auto buffer = TravelBuffer::create(sub0math::metres(0.065), sub0math::metres(0.008), sub0math::newtonsPerMetre(1.0e6), sub0math::newtonSecondsPerMetre(3000.0));
+    REQUIRE(buffer);
+    CHECK_FALSE(TravelBuffer::create(sub0math::metres(0.01), sub0math::metres(0.008), sub0math::newtonsPerMetre(1.0e6), sub0math::newtonSecondsPerMetre(0.0)));
+    for (int k = 0; k < 1000; ++k)
+    {
+        sum += buffer->respond(sub0math::metres(0.0001 * static_cast<double>(k % 700)), sub0math::metresPerSecond(0.01 * static_cast<double>(k % 200 - 100))).force.si();
+    }
+    CHECK(sum != 0.0);
+    CHECK(count.since() == 0U);
+}

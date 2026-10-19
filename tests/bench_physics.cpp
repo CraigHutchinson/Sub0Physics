@@ -110,6 +110,50 @@ void benchPageHeight(sub0bench::BenchRunner& runner)
     });
 }
 
+// Travel buffer over 1024 (q, v) samples spanning both zones and the free zone, against plain doubles.
+void benchTravelBuffer(sub0bench::BenchRunner& runner)
+{
+    constexpr double travel = 0.065, width = 0.008, stiffness = 1.0e6, damping = 3000.0;
+    const auto buffer = *TravelBuffer::create(sub0math::metres(travel), sub0math::metres(width),
+                                              sub0math::newtonsPerMetre(stiffness), sub0math::newtonSecondsPerMetre(damping));
+    std::vector<double> qs(1024), vs(1024);
+    for (std::size_t k = 0; k < qs.size(); ++k)
+    {
+        qs[k] = -0.004 + 0.073 * static_cast<double>((k * 389) % 1024) / 1024.0;
+        vs[k] = -2.0 + 4.0 * static_cast<double>((k * 613) % 1024) / 1024.0;
+    }
+
+    runner.run("travel buffer x1024, hand-written scalars", [&] {
+        double sum = 0.0;
+        const double invWidth = 1.0 / width;
+        for (std::size_t k = 0; k < qs.size(); ++k)
+        {
+            const double q = qs[k], v = vs[k];
+            const double top = std::max(0.0, width - q), bottom = std::max(0.0, q - (travel - width));
+            const bool closingTop = v < 0.0;
+            const double speed = closingTop ? -v : v;
+            const double topForce = (stiffness * top + (closingTop ? damping * speed : 0.0)) * top * invWidth;
+            const double bottomForce = (stiffness * bottom + (closingTop ? 0.0 : damping * speed)) * bottom * invWidth;
+            const double depth = closingTop ? top : bottom;
+            const double slope = (top > 0.0 ? 2.0 * stiffness * top + (closingTop ? damping * speed : 0.0) : 0.0) +
+                                 (bottom > 0.0 ? 2.0 * stiffness * bottom + (closingTop ? 0.0 : damping * speed) : 0.0);
+            sum += (topForce - bottomForce) + stiffness * (top * top * top + bottom * bottom * bottom) * invWidth / 3.0 +
+                   damping * speed * speed * depth * invWidth + topForce + bottomForce - slope * invWidth - damping * depth * invWidth;
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+    runner.run("travel buffer x1024, TravelBuffer::respond", [&] {
+        double sum = 0.0;
+        for (std::size_t k = 0; k < qs.size(); ++k)
+        {
+            const TravelBufferResponse r = buffer.respond(sub0math::f64::Length::fromSi(qs[k]), sub0math::f64::Velocity::fromSi(vs[k]));
+            sum += r.force.si() + r.potential.si() + r.lossPower.si() + r.topForce.si() + r.bottomForce.si() +
+                   r.dForceDPosition.si() + r.dForceDVelocity.si();
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -139,5 +183,6 @@ int main(int argc, char** argv)
         ankerl::nanobench::doNotOptimizeAway(evaluateDampedOscillator({sub0math::kilograms(45.0), sub0math::newtonsPerMetre(9000.0), sub0math::newtonSecondsPerMetre(500.0), sub0math::metres(0.03), sub0math::metresPerSecond(0.4)}, sub0math::seconds(0.731)));
     });
     benchPageHeight(runner);
+    benchTravelBuffer(runner);
     return runner.finish();
 }

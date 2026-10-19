@@ -1,7 +1,7 @@
 {
   "name": "BikeLab",
   "repository": "https://github.com/CraigHutchinson/BikeLab",
-  "commit": "0abfde70c96a134de069f5b23160a0c91dcd9d5a",
+  "commit": "a9afcd5e1752452d14457df22a01bf81b3161809",
   "watch": [
     "dist/"
   ],
@@ -52,6 +52,14 @@
       "targets": [
         "src/polyline_profile.cpp",
         "src/circle_clearance.cpp"
+      ]
+    },
+    {
+      "source": "dist/travel-buffer.js",
+      "blob": "2159b5155acb8ee35a841ff005d998266a246637",
+      "what": "Progressive travel buffer: quadratic spring plus entering-only damping, potential and loss power; Jacobians are new here",
+      "targets": [
+        "include/sub0physics/element/travel_buffer.hpp"
       ]
     }
   ]
