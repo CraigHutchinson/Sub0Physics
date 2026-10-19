@@ -12,6 +12,7 @@ add_executable(Sub0Physics_Tests
     test_error_statistics.cpp
     test_fidelity_selector.cpp
     test_integrators.cpp
+    test_multibody.cpp
     test_polyline_profile.cpp
     test_terrain_page.cpp
     test_travel_buffer.cpp
@@ -32,6 +33,11 @@ add_executable(Sub0Physics_AllocationTests test_main.cpp test_allocations.cpp)
 target_link_libraries(Sub0Physics_AllocationTests PRIVATE Sub0Physics::Sub0Physics Threads::Threads)
 target_include_directories(Sub0Physics_AllocationTests SYSTEM PRIVATE "${VENDOR_DIR}")
 add_test(NAME Sub0Physics_AllocationTests COMMAND Sub0Physics_AllocationTests)
+
+add_executable(Sub0Physics_MultibodyAllocationTests test_main.cpp test_multibody_allocations.cpp)
+target_link_libraries(Sub0Physics_MultibodyAllocationTests PRIVATE Sub0Physics::Sub0Physics Threads::Threads)
+target_include_directories(Sub0Physics_MultibodyAllocationTests SYSTEM PRIVATE "${VENDOR_DIR}")
+add_test(NAME Sub0Physics_MultibodyAllocationTests COMMAND Sub0Physics_MultibodyAllocationTests)
 
 # ── Header self-containment ───────────────────────────────────────────────────
 # One translation unit per public header, each including only that header (twice,
@@ -58,6 +64,6 @@ target_link_libraries(Sub0Physics_HeaderCheck PRIVATE Sub0Physics::Sub0Physics)
 # ── Benchmarks (not run by ctest — run manually) ──────────────────────────────
 
 if(SUB0PHYSICS_BUILD_BENCHMARKS)
-    sub0math_add_benchmark(Sub0Physics_Bench bench_physics.cpp)
+    sub0math_add_benchmark(Sub0Physics_Bench bench_physics.cpp bench_multibody.cpp)
     target_link_libraries(Sub0Physics_Bench PRIVATE Sub0Physics::Sub0Physics)
 endif()

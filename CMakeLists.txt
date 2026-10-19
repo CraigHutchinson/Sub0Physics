@@ -25,8 +25,15 @@ add_library(Sub0Physics STATIC
     src/damped_oscillator.cpp
     src/fidelity_selector.cpp
     src/height_page.cpp
+    src/model_builder.cpp
+    src/multibody_dynamics.cpp
+    src/multibody_kinematics.cpp
     src/polyline_profile.cpp
 )
+
+# Determinism (docs/MULTIBODY.md section 8): no floating-point contraction in the multibody core.
+set_source_files_properties(src/model_builder.cpp src/multibody_dynamics.cpp src/multibody_kinematics.cpp
+    PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/fp:precise,-ffp-contract=off>")
 add_library(Sub0Physics::Sub0Physics ALIAS Sub0Physics)
 
 target_compile_features(Sub0Physics PUBLIC cxx_std_23)

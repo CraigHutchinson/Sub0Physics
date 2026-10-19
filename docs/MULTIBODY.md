@@ -161,6 +161,36 @@ Constraints here are few by design:
 
 Each step ships through the pre-push gate, with goldens and provenance as usual.
 
+
+### M1a status (2026-10-19)
+
+**Landed.** Sub0Math `linear/`: `SpatialMotion`, `SpatialForce` (`dot`, `cross` as crm/crf),
+`SpatialInertia`, `PluckerTransform`. Sub0Physics `multibody/`: the description (`BodyDescription`,
+`JointDescription`, `SiteDescription`, `RotationalInertia`, `BodyId`, `SiteId`), `ModelBuilder` →
+`std::expected<Model, Fault>`, `Model`, `State`, `Workspace`; kinematics (`updateKinematics`, site pose,
+velocity and translational Jacobian, `computeEnergy`); `computeMassMatrix` (CRBA),
+`computeBiasForces` and `inverseDynamics` (RNEA), `factorMassMatrix` / `solveMassMatrix`,
+`forwardDynamics`; `stepSymplecticEuler`. The analytic gates, allocation gate and paired benchmarks
+are in `tests/test_multibody*.cpp` and `tests/bench_multibody.cpp`.
+
+**Deviations and decisions:**
+
+- The factorisation is Featherstone's LTDL, `M = Lᵀ D L`, eliminating from the leaves: the ordering of
+  `LDLᵀ` that creates no fill-in on a tree. It is used for every size; no dense fallback was needed
+  (parity with a hand-written version, 69 ns at 10 DOF).
+- A body's frame is its joint's frame; centre of mass, inertia and sites are given in it. One
+  coordinate per joint, so `dofCount() == bodyCount()` until multi-DOF joints arrive.
+- Spatial vectors hold plain SI doubles (like `Mat`); quantities and roles sit at the description.
+- The explicit stepping is semi-implicit Euler. With a configuration-dependent `M` it is not
+  symplectic, so energy is bounded to first order rather than conserved: about 1e-3 of `m g l` at
+  `h` = 0.1 ms on the double pendulum, halving with `h`. Conservation to round-off is shown with the
+  existing `Rk4` through an `OdeSystem` adapter in the tests (9e-11 over 20 s at 1 ms).
+- `Workspace` exposes its arrays as fields, sized once (the Pinocchio `Data` pattern); the site and
+  energy queries recompute kinematics per call (O(n)).
+- The multibody sources build with `-ffp-contract=off` (`/fp:precise` on MSVC), per section 8.
+- Gaps against hand-written planar code (CRBA 2.9x, forward dynamics 2.8x) are recorded in
+  `docs/PERFORMANCE.md` with an M1d follow-up.
+
 ## 10. Open questions, to be answered by measurement
 
 - **Higher-order implicit scheme:** whether one is needed, and which, for the tyre ring (M2).

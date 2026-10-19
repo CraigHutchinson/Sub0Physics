@@ -11,6 +11,8 @@
 
 using namespace sub0physics;
 
+void benchMultibody(sub0bench::BenchRunner& runner); // bench_multibody.cpp
+
 namespace
 {
 
@@ -184,5 +186,6 @@ int main(int argc, char** argv)
     });
     benchPageHeight(runner);
     benchTravelBuffer(runner);
+    benchMultibody(runner);
     return runner.finish();
 }

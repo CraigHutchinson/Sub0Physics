@@ -1,0 +1,66 @@
+// Counts every heap allocation in this executable, to pin "a multibody step never allocates".
+#include <atomic>
+#include <cstddef>
+#include <cmath>
+#include <cstdlib>
+#include <doctest.h>
+#include <new>
+#include <vector>
+
+#include <sub0math/units.hpp>
+
+#include "sub0physics/multibody.hpp"
+#include "test_multibody_models.hpp"
+
+namespace
+{
+
+std::atomic<std::size_t> allocations{0};
+
+} // namespace
+
+void* operator new(std::size_t size)
+{
+    ++allocations;
+    if (void* p = std::malloc(size == 0U ? 1U : size))
+    {
+        return p;
+    }
+    throw std::bad_alloc();
+}
+
+void operator delete(void* p) noexcept
+{
+    std::free(p);
+}
+
+void operator delete(void* p, std::size_t) noexcept
+{
+    std::free(p);
+}
+
+using namespace sub0physics::multibody;
+
+TEST_CASE("Multibody dynamics and stepping never allocate")
+{
+    const Model model = testmodels::planarTree();
+    Workspace ws(model);
+    State s = State::atRest(model);
+    s.q[2] = 0.4;
+    std::vector<double> tau(model.dofCount(), 0.1);
+    std::vector<double> out(model.dofCount());
+    std::vector<double> jacobian(3 * model.dofCount());
+    const SiteId tip = *model.findSite("tip");
+
+    const std::size_t start = allocations.load();
+    for (int k = 0; k < 2000; ++k)
+    {
+        REQUIRE(stepSymplecticEuler(model, sub0math::seconds(1e-3), tau, s, ws));
+    }
+    REQUIRE(inverseDynamics(model, s, ws.qdd, out, ws));
+    REQUIRE(computeSiteJacobian(model, s, tip, ws, jacobian));
+    const SiteKinematics site = computeSiteKinematics(model, s, tip, ws);
+    const MechanicalEnergy energy = computeEnergy(model, s, ws);
+    CHECK(allocations.load() - start == 0U);
+    CHECK(std::isfinite(site.pose.translation.x.si() + energy.total().si()));
+}
