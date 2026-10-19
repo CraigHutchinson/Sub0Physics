@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <doctest.h>
+#include <ostream> // doctest prints strings (MSVC needs it explicitly)
 #include <new>
 #include <vector>
 

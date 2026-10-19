@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <doctest.h>
+#include <ostream> // doctest prints strings (MSVC needs it explicitly)
 #include <expected>
 #include <limits>
 #include <numbers>
@@ -24,6 +25,22 @@ using namespace testmodels;
 
 namespace
 {
+
+// Complete elliptic integral of the first kind K(k) by the arithmetic-geometric mean: K = pi / (2 AGM(1, sqrt(1-k^2))).
+// std::comp_ellint_1 is not available in libc++ (macOS), so the test computes it.
+double completeEllipticK(double k)
+{
+    double a = 1.0;
+    double b = std::sqrt(1.0 - k * k);
+    for (int i = 0; i < 32 && std::abs(a - b) > 1e-16 * a; ++i)
+    {
+        const double next = 0.5 * (a + b);
+        b = std::sqrt(a * b);
+        a = next;
+    }
+    return 3.14159265358979323846 / (2.0 * a);
+}
+
 
 constexpr double G = 9.81;
 
@@ -250,7 +267,7 @@ TEST_CASE("Single pendulum: exact acceleration, period and bounded energy error"
         const auto crossings = upwardCrossings(model, start, h, 8.0);
         REQUIRE(crossings.size() >= 3);
         const double period = (crossings.back() - crossings.front()) / static_cast<double>(crossings.size() - 1);
-        const double expected = 4.0 * std::sqrt(pivotInertia / (m * G * l)) * std::comp_ellint_1(std::sin(0.6));
+        const double expected = 4.0 * std::sqrt(pivotInertia / (m * G * l)) * completeEllipticK(std::sin(0.6));
         CHECK(period == doctest::Approx(expected).epsilon(1e-5));
     }
     SUBCASE("energy error stays bounded")

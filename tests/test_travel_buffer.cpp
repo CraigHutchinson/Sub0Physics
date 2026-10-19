@@ -1,5 +1,6 @@
 #include <cmath>
 #include <doctest.h>
+#include <ostream> // doctest prints strings (MSVC needs it explicitly)
 #include <sub0math/units.hpp>
 
 #include "sub0physics/elements.hpp"
