@@ -43,6 +43,7 @@ struct Workspace
           bodyAcceleration(model.bodyCount()),
           bodyForce(model.bodyCount()),
           compositeInertia(model.bodyCount()),
+          worldToBody(model.bodyCount()),
           bodyPose(model.bodyCount()),
           massMatrix(dof * dof, 0.0),
           massFactor(dof * dof, 0.0),
@@ -73,7 +74,8 @@ struct Workspace
     std::vector<sub0math::SpatialMotiond> bodyAcceleration; ///< Spatial acceleration (gravity included as -g).
     std::vector<sub0math::SpatialForced> bodyForce;         ///< Net spatial force transmitted by each joint.
     std::vector<sub0math::SpatialInertiad> compositeInertia; ///< Inertia of each body's subtree, in its frame.
-    std::vector<sub0math::RigidTransform<double, sub0math::f64::Length>> bodyPose; ///< Each body frame in the world.
+    std::vector<sub0math::PluckerTransformd> worldToBody; ///< Transform from the world frame to each body frame.
+    std::vector<sub0math::RigidTransform<double, sub0math::f64::Length>> bodyPose; ///< Each body frame in the world: `toRigidTransform(worldToBody)`.
 
     std::vector<double> massMatrix; ///< M(q) from CRBA; symmetric; zero except ancestor pairs (zeroed at construction).
     std::vector<double> massFactor; ///< Tree-sparse factor of M (lower triangle: L below the diagonal, D on it).

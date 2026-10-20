@@ -36,7 +36,7 @@ OscillatorState integrate(const DampedOscillator& p, double t)
     const double h = t / steps;
     for (int i = 0; i < steps; ++i)
     {
-        REQUIRE(rk4.step(system, i * h, h, x));
+        REQUIRE(rk4.step(system, sub0math::seconds(i * h), sub0math::seconds(h), x));
     }
     return {f64::Length::fromSi(x[0]), f64::Velocity::fromSi(x[1])};
 }

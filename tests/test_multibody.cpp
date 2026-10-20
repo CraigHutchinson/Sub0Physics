@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <numbers>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -104,8 +106,8 @@ struct CartPoles
     // Lagrange's equations for q = (x, theta0, theta1).
     [[nodiscard]] std::array<double, 9> massMatrix(const State& s) const
     {
-        const double c0 = mass[0] * length[0] * std::cos(s.q[1]);
-        const double c1 = mass[1] * length[1] * std::cos(s.q[2]);
+        const double c0 = mass[0] * length[0] * std::cos(s.q()[1]);
+        const double c1 = mass[1] * length[1] * std::cos(s.q()[2]);
         return {cart + mass[0] + mass[1], c0, c1,
                 c0, inertia[0] + mass[0] * length[0] * length[0], 0.0,
                 c1, 0.0, inertia[1] + mass[1] * length[1] * length[1]};
@@ -113,9 +115,9 @@ struct CartPoles
 
     [[nodiscard]] std::array<double, 3> bias(const State& s) const
     {
-        const double s0 = std::sin(s.q[1]);
-        const double s1 = std::sin(s.q[2]);
-        return {-mass[0] * length[0] * s0 * s.qd[1] * s.qd[1] - mass[1] * length[1] * s1 * s.qd[2] * s.qd[2],
+        const double s0 = std::sin(s.q()[1]);
+        const double s1 = std::sin(s.q()[2]);
+        return {-mass[0] * length[0] * s0 * s.qd()[1] * s.qd()[1] - mass[1] * length[1] * s1 * s.qd()[2] * s.qd()[2],
                 mass[0] * G * length[0] * s0, mass[1] * G * length[1] * s1};
     }
 };
@@ -181,40 +183,11 @@ State spatialState(const Model& model)
     for (std::size_t i = 0; i < model.dofCount(); ++i)
     {
         const double f = static_cast<double>(i);
-        s.q[i] = 0.4 * f - 0.7;
-        s.qd[i] = 0.9 - 0.35 * f;
+        s.q()[i] = 0.4 * f - 0.7;
+        s.qd()[i] = 0.9 - 0.35 * f;
     }
     return s;
 }
-
-// The multibody model as a first-order system for the existing explicit Runge-Kutta integrators.
-template<std::size_t N>
-struct MultibodyOde
-{
-    const Model& model;
-    Workspace workspace{model};
-    State state = State::atRest(model);
-
-    std::expected<void, Fault> evaluate(double, const StateVector<N>& x, StateVector<N>& dxdt)
-    {
-        constexpr std::size_t n = N / 2;
-        for (std::size_t i = 0; i < n; ++i)
-        {
-            state.q[i] = x[i];
-            state.qd[i] = x[n + i];
-        }
-        if (auto r = forwardDynamics(model, state, {}, workspace); !r)
-        {
-            return r;
-        }
-        for (std::size_t i = 0; i < n; ++i)
-        {
-            dxdt[i] = x[n + i];
-            dxdt[n + i] = workspace.qdd[i];
-        }
-        return {};
-    }
-};
 
 // Times of upward zero crossings of q[0], linearly interpolated.
 std::vector<double> upwardCrossings(const Model& model, State s, double h, double duration)
@@ -224,11 +197,11 @@ std::vector<double> upwardCrossings(const Model& model, State s, double h, doubl
     const auto steps = static_cast<std::uint64_t>(duration / h);
     for (std::uint64_t k = 0; k < steps; ++k)
     {
-        const double before = s.q[0];
-        REQUIRE(stepSymplecticEuler(model, sub0math::seconds(h), {}, s, ws));
-        if (before < 0.0 && s.q[0] >= 0.0)
+        const double before = s.q()[0];
+        REQUIRE(stepSemiImplicitEuler(model, {}, s.tick, sub0math::seconds(h), s, ws));
+        if (before < 0.0 && s.q()[0] >= 0.0)
         {
-            times.push_back((static_cast<double>(k) + before / (before - s.q[0])) * h);
+            times.push_back((static_cast<double>(k) + before / (before - s.q()[0])) * h);
         }
     }
     return times;
@@ -244,8 +217,8 @@ TEST_CASE("Single pendulum: exact acceleration, period and bounded energy error"
     const Model model = pendulum(m, l, ic);
     Workspace ws(model);
     State s = State::atRest(model);
-    s.q[0] = 0.3;
-    s.qd[0] = 1.1; // a revolute joint's rate does not change its own acceleration
+    s.q()[0] = 0.3;
+    s.qd()[0] = 1.1; // a revolute joint's rate does not change its own acceleration
     REQUIRE(forwardDynamics(model, s, {}, ws));
     const double pivotInertia = ic + m * l * l;
     CHECK(ws.qdd[0] == doctest::Approx(-m * G * l * std::sin(0.3) / pivotInertia).epsilon(1e-13));
@@ -254,7 +227,7 @@ TEST_CASE("Single pendulum: exact acceleration, period and bounded energy error"
     SUBCASE("small amplitude matches 2 pi sqrt(I / m g l)")
     {
         State start = State::atRest(model);
-        start.q[0] = -0.01;
+        start.q()[0] = -0.01;
         const auto crossings = upwardCrossings(model, start, h, 6.0);
         REQUIRE(crossings.size() >= 3);
         const double period = (crossings.back() - crossings.front()) / static_cast<double>(crossings.size() - 1);
@@ -264,7 +237,7 @@ TEST_CASE("Single pendulum: exact acceleration, period and bounded energy error"
     SUBCASE("large amplitude matches the elliptic-integral period")
     {
         State start = State::atRest(model);
-        start.q[0] = -1.2;
+        start.q()[0] = -1.2;
         const auto crossings = upwardCrossings(model, start, h, 8.0);
         REQUIRE(crossings.size() >= 3);
         const double period = (crossings.back() - crossings.front()) / static_cast<double>(crossings.size() - 1);
@@ -274,14 +247,14 @@ TEST_CASE("Single pendulum: exact acceleration, period and bounded energy error"
     SUBCASE("energy error stays bounded")
     {
         State state = State::atRest(model);
-        state.q[0] = 1.0;
-        const double e0 = computeEnergy(model, state, ws).value().total().si();
+        state.q()[0] = 1.0;
+        const double e0 = computeEnergy(model, state, ws).value().mechanical().si();
         CHECK(e0 == doctest::Approx(-m * G * l * std::cos(1.0)));
         double worst = 0.0;
         for (int k = 0; k < 100000; ++k)
         {
-            REQUIRE(stepSymplecticEuler(model, sub0math::seconds(h), {}, state, ws));
-            worst = std::max(worst, std::abs(computeEnergy(model, state, ws).value().total().si() - e0));
+            REQUIRE(stepSemiImplicitEuler(model, {}, state.tick, sub0math::seconds(h), state, ws));
+            worst = std::max(worst, std::abs(computeEnergy(model, state, ws).value().mechanical().si() - e0));
         }
         CHECK(state.tick == 100000U);
         CHECK(worst / (m * G * l) < 2e-4);
@@ -293,9 +266,8 @@ TEST_CASE("Double pendulum conserves energy over long runs")
     const Model model = doublePendulum();
     Workspace ws(model);
     State start = State::atRest(model);
-    start.q = {1.2, -0.6};
-    start.qd = {0.0, 1.5};
-    const double e0 = computeEnergy(model, start, ws).value().total().si();
+    start = State::fromCoordinates({1.2, -0.6}, {0.0, 1.5});
+    const double e0 = computeEnergy(model, start, ws).value().mechanical().si();
     const double scale = 1.0 * G * 1.0; // m g l of the upper link
 
     SUBCASE("symplectic Euler: first-order error that does not grow")
@@ -308,8 +280,8 @@ TEST_CASE("Double pendulum conserves energy over long runs")
             std::array<double, 2> worst{};
             for (int k = 0; k < steps; ++k)
             {
-                REQUIRE(stepSymplecticEuler(model, sub0math::seconds(h), {}, s, ws));
-                const double error = std::abs(computeEnergy(model, s, ws).value().total().si() - e0) / scale;
+                REQUIRE(stepSemiImplicitEuler(model, {}, s.tick, sub0math::seconds(h), s, ws));
+                const double error = std::abs(computeEnergy(model, s, ws).value().mechanical().si() - e0) / scale;
                 if (k < window)
                 {
                     worst[0] = std::max(worst[0], error);
@@ -331,19 +303,16 @@ TEST_CASE("Double pendulum conserves energy over long runs")
         // conservation to round-off is RK4's job (next subcase).
         CHECK(fine[0] < 0.6 * coarse[0]);
     }
-    SUBCASE("RK4 through the ODE interface, h = 1 ms, 20 s")
+    SUBCASE("RK4 reference stepper, h = 1 ms, 20 s")
     {
-        MultibodyOde<4> ode{model, Workspace(model)};
-        Rk4<4> rk4;
-        StateVector<4> x{start.q[0], start.q[1], start.qd[0], start.qd[1]};
+        Rk4Stepper rk4(model, ws);
+        State s = start;
         for (std::uint64_t tick = 0; tick < 20000U; ++tick)
         {
-            REQUIRE(rk4.stepTick(ode, tick, 1e-3, x));
+            REQUIRE(rk4.step(model, {}, tick, sub0math::seconds(1e-3), s, ws));
         }
-        State s = start;
-        s.q = {x[0], x[1]};
-        s.qd = {x[2], x[3]};
-        const double error = std::abs(computeEnergy(model, s, ws).value().total().si() - e0) / scale;
+        CHECK(s.tick == 20000U);
+        const double error = std::abs(computeEnergy(model, s, ws).value().mechanical().si() - e0) / scale;
         MESSAGE("double pendulum RK4: relative energy error " << error);
         CHECK(error < 1e-7);
     }
@@ -364,8 +333,8 @@ TEST_CASE("Slider under gravity follows the exact discrete trajectory")
     const Model model = *builder.build();
     Workspace ws(model);
     State s = State::atRest(model);
-    s.q[0] = 0.5;
-    s.qd[0] = 2.0;
+    s.q()[0] = 0.5;
+    s.qd()[0] = 2.0;
     const double a = -G * std::sin(angle);
     REQUIRE(forwardDynamics(model, s, {}, ws));
     CHECK(ws.qdd[0] == doctest::Approx(a).epsilon(1e-15));
@@ -375,11 +344,11 @@ TEST_CASE("Slider under gravity follows the exact discrete trajectory")
     const int steps = 1000;
     for (int k = 0; k < steps; ++k)
     {
-        REQUIRE(stepSymplecticEuler(model, sub0math::seconds(h), {}, s, ws));
+        REQUIRE(stepSemiImplicitEuler(model, {}, s.tick, sub0math::seconds(h), s, ws));
     }
     const double n = steps;
-    CHECK(s.qd[0] == doctest::Approx(2.0 + a * h * n).epsilon(1e-12));
-    CHECK(s.q[0] == doctest::Approx(0.5 + n * h * 2.0 + a * h * h * n * (n + 1.0) / 2.0).epsilon(1e-12));
+    CHECK(s.qd()[0] == doctest::Approx(2.0 + a * h * n).epsilon(1e-12));
+    CHECK(s.q()[0] == doctest::Approx(0.5 + n * h * 2.0 + a * h * h * n * (n + 1.0) / 2.0).epsilon(1e-12));
 }
 
 TEST_CASE("Cart with two poles matches the hand-derived equations of motion")
@@ -391,8 +360,7 @@ TEST_CASE("Cart with two poles matches the hand-derived equations of motion")
     for (const auto& [q, qd] : {std::pair{std::array{0.3, 0.4, -1.1}, std::array{0.7, -2.0, 1.3}},
                                 std::pair{std::array{-1.0, 2.5, 0.2}, std::array{-0.3, 0.6, -4.0}}})
     {
-        s.q = {q.begin(), q.end()};
-        s.qd = {qd.begin(), qd.end()};
+        s = State::fromCoordinates(q, qd);
         REQUIRE(computeMassMatrix(model, s, ws));
         REQUIRE(computeBiasForces(model, s, ws));
         const auto m = reference.massMatrix(s);
@@ -502,7 +470,7 @@ TEST_CASE("Dynamics do not depend on the choice of body frames")
             CHECK(b.massMatrix[i * n + j] == doctest::Approx(a.massMatrix[i * n + j]).epsilon(1e-12).scale(1.0));
         }
     }
-    CHECK(computeEnergy(turned, s, b).value().total().si() == doctest::Approx(computeEnergy(plain, s, a).value().total().si()).epsilon(1e-12));
+    CHECK(computeEnergy(turned, s, b).value().mechanical().si() == doctest::Approx(computeEnergy(plain, s, a).value().mechanical().si()).epsilon(1e-12));
 
     const SiteId site = *plain.findSite("end");
     const SiteKinematics ka = computeSiteKinematics(plain, s, site, a).value();
@@ -532,7 +500,7 @@ TEST_CASE("Site Jacobian maps rates to the site velocity and matches finite diff
         double jqd = 0.0;
         for (std::size_t c = 0; c < n; ++c)
         {
-            jqd += j[r * n + c] * s.qd[c];
+            jqd += j[r * n + c] * s.qd()[c];
         }
         CHECK(jqd == doctest::Approx(velocity[r]).epsilon(1e-12).scale(1.0));
     }
@@ -542,8 +510,8 @@ TEST_CASE("Site Jacobian maps rates to the site velocity and matches finite diff
     {
         State plus = s;
         State minus = s;
-        plus.q[c] += step;
-        minus.q[c] -= step;
+        plus.q()[c] += step;
+        minus.q()[c] -= step;
         const auto p = computeSiteKinematics(model, plus, site, ws).value().pose.translation;
         const auto m = computeSiteKinematics(model, minus, site, ws).value().pose.translation;
         CHECK((p.x.si() - m.x.si()) / (2.0 * step) == doctest::Approx(j[c]).epsilon(1e-7).scale(1.0));
@@ -656,16 +624,120 @@ TEST_CASE("Stepping is transactional and rejects bad input")
     const Model model = pendulum(1.0, 0.5, 0.01);
     Workspace ws(model);
     State s = State::atRest(model);
-    s.q[0] = 0.2;
+    s.q()[0] = 0.2;
     const State before = s;
-    CHECK_FALSE(stepSymplecticEuler(model, sub0math::seconds(0.0), {}, s, ws));
+    CHECK_FALSE(stepSemiImplicitEuler(model, {}, s.tick, sub0math::seconds(0.0), s, ws));
     const std::array<double, 2> wrongSize{1.0, 2.0};
-    CHECK_FALSE(stepSymplecticEuler(model, sub0math::seconds(1e-3), wrongSize, s, ws));
-    s.qd[0] = std::numeric_limits<double>::infinity();
-    const auto r = stepSymplecticEuler(model, sub0math::seconds(1e-3), {}, s, ws);
+    CHECK_FALSE(stepSemiImplicitEuler(model, {wrongSize}, s.tick, sub0math::seconds(1e-3), s, ws));
+    s.qd()[0] = std::numeric_limits<double>::infinity();
+    const auto r = stepSemiImplicitEuler(model, {}, s.tick, sub0math::seconds(1e-3), s, ws);
     REQUIRE_FALSE(r);
-    s.qd[0] = 0.0;
+    s.qd()[0] = 0.0;
     CHECK(s == before);
+    // The tick must be the state's.
+    CHECK_FALSE(stepSemiImplicitEuler(model, {}, s.tick + 1U, sub0math::seconds(1e-3), s, ws));
+    CHECK(s == before);
+}
+
+TEST_CASE("Every stepper has one shape and is transactional")
+{
+    const Model model = doublePendulum();
+    Workspace ws(model);
+    const State start = State::fromCoordinates({0.4, -0.3}, {0.2, 0.1});
+    const auto check = [&](auto& stepper) {
+        static_assert(Stepper<std::remove_cvref_t<decltype(stepper)>>);
+        State s = start;
+        REQUIRE(stepper.step(model, {}, 0U, sub0math::seconds(1e-3), s, ws));
+        CHECK(s.tick == 1U);
+        CHECK(s != start);
+        const State before = s;
+        const auto rejected = [&](const auto& result) {
+            REQUIRE_FALSE(result);
+            CHECK(result.error().kind == FaultKind::InvalidInput);
+            CHECK(s == before);
+        };
+        rejected(stepper.step(model, {}, 0U, sub0math::seconds(1e-3), s, ws)); // wrong tick
+        rejected(stepper.step(model, {}, 1U, sub0math::seconds(-1e-3), s, ws));
+        const std::array<double, 3> wrongSize{};
+        rejected(stepper.step(model, {wrongSize}, 1U, sub0math::seconds(1e-3), s, ws));
+        s.qd()[1] = std::numeric_limits<double>::infinity();
+        const State poisoned = s;
+        REQUIRE_FALSE(stepper.step(model, {}, 1U, sub0math::seconds(1e-3), s, ws));
+        CHECK(s == poisoned);
+    };
+    SemiImplicitEuler euler;
+    check(euler);
+    Rk4Stepper rk4(model, ws);
+    check(rk4);
+    MidpointStepper midpoint(model, ws);
+    check(midpoint);
+}
+
+TEST_CASE("RK steppers converge at their order and follow a change of forcing")
+{
+    const Model model = doublePendulum();
+    Workspace ws(model);
+    const State start = State::fromCoordinates({0.9, -0.4}, {0.0, 0.8});
+    // A torque applied from tick 50 onward; the cached first stage must not survive the change.
+    const std::array<double, 2> torque{0.7, -0.2};
+    const auto run = [&](auto stepper, double h) {
+        State s = start;
+        const auto steps = static_cast<std::uint64_t>(std::llround(1.0 / h));
+        for (std::uint64_t tick = 0; tick < steps; ++tick)
+        {
+            const Forcing forcing{tick * 2U < steps ? std::span<const double>{} : std::span<const double>{torque}};
+            REQUIRE(stepper.step(model, forcing, tick, sub0math::seconds(h), s, ws));
+        }
+        return s;
+    };
+    const State reference = run(Rk4Stepper(model, ws), 1e-4);
+    const auto error = [&](const State& s) {
+        double sum = 0.0;
+        for (std::size_t i = 0; i < s.values.size(); ++i)
+        {
+            sum += (s.values[i] - reference.values[i]) * (s.values[i] - reference.values[i]);
+        }
+        return std::sqrt(sum);
+    };
+    const double rk4Coarse = error(run(Rk4Stepper(model, ws), 0.004));
+    const double rk4Fine = error(run(Rk4Stepper(model, ws), 0.002));
+    const double midCoarse = error(run(MidpointStepper(model, ws), 0.004));
+    const double midFine = error(run(MidpointStepper(model, ws), 0.002));
+    MESSAGE("RK4 order " << std::log2(rk4Coarse / rk4Fine) << ", midpoint order " << std::log2(midCoarse / midFine));
+    CHECK(std::log2(rk4Coarse / rk4Fine) == doctest::Approx(4.0).epsilon(0.1));
+    CHECK(std::log2(midCoarse / midFine) == doctest::Approx(2.0).epsilon(0.1));
+}
+
+TEST_CASE("Rk4Stepper matches the fixed-size Rk4 on the same system")
+{
+    const Model model = doublePendulum();
+    Workspace ws(model);
+    const State start = State::fromCoordinates({1.2, -0.6}, {0.0, 1.5});
+    // The fixed-size integrator over the same adapter, through arrays.
+    struct Fixed
+    {
+        ModelOde ode;
+        std::expected<void, Fault> evaluate(double t, const StateVector<4>& x, StateVector<4>& dxdt)
+        {
+            return ode.evaluate(t, x, dxdt);
+        }
+    };
+    Workspace fixedWs(model);
+    Fixed fixed{ModelOde(model, fixedWs)};
+    Rk4<4> rk4;
+    StateVector<4> x{};
+    std::copy(start.values.begin(), start.values.end(), x.begin());
+    Rk4Stepper stepper(model, ws);
+    State s = start;
+    for (std::uint64_t tick = 0; tick < 500U; ++tick)
+    {
+        REQUIRE(rk4.stepTick(fixed, tick, sub0math::seconds(1e-3), x));
+        REQUIRE(stepper.step(model, {}, tick, sub0math::seconds(1e-3), s, ws));
+    }
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+        CHECK(s.values[i] == x[i]);
+    }
 }
 
 TEST_CASE("Entry points reject a workspace built for another model and a mis-sized state")
@@ -707,7 +779,7 @@ TEST_CASE("Entry points reject a workspace built for another model and a mis-siz
     rejected(factorMassMatrix(tree, chainWs));
     rejected(solveMassMatrix(tree, chainWs, x));
     State stepped = s;
-    rejected(stepSymplecticEuler(tree, sub0math::seconds(1e-3), {}, stepped, chainWs));
+    rejected(stepSemiImplicitEuler(tree, {}, stepped.tick, sub0math::seconds(1e-3), stepped, chainWs));
     CHECK(stepped == s);
 
     // A different dof count is caught the same way, and a copy of the model shares its workspace.
@@ -719,9 +791,9 @@ TEST_CASE("Entry points reject a workspace built for another model and a mis-siz
 
     // State sizes.
     State shortQ = s;
-    shortQ.q.pop_back();
+    shortQ.values.pop_back();
     State shortQd = s;
-    shortQd.qd.clear();
+    shortQd.values.clear();
     for (const State* bad : {&shortQ, &shortQd})
     {
         rejected(computeMassMatrix(tree, *bad, treeWs));
@@ -734,7 +806,7 @@ TEST_CASE("Entry points reject a workspace built for another model and a mis-siz
         rejected(computeEnergy(tree, *bad, treeWs));
     }
     State badStep = shortQ;
-    rejected(stepSymplecticEuler(tree, sub0math::seconds(1e-3), {}, badStep, treeWs));
+    rejected(stepSemiImplicitEuler(tree, {}, badStep.tick, sub0math::seconds(1e-3), badStep, treeWs));
     CHECK(badStep == shortQ);
 
     // Sites and span sizes.
@@ -755,7 +827,7 @@ TEST_CASE("Mass matrix entries outside ancestor pairs are zero")
     State s = State::atRest(model);
     for (std::size_t i = 0; i < model.dofCount(); ++i)
     {
-        s.q[i] = 0.1 * static_cast<double>(i) - 0.3;
+        s.q()[i] = 0.1 * static_cast<double>(i) - 0.3;
     }
     REQUIRE(computeMassMatrix(model, s, ws));
     const auto parents = model.parents();

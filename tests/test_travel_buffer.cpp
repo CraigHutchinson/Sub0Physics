@@ -66,7 +66,7 @@ TEST_CASE("Travel buffer is silent in the free zone")
             const TravelBufferResponse r = at(buffer, q, v);
             CHECK(r.force.si() == 0.0);
             CHECK(r.potential.si() == 0.0);
-            CHECK(r.lossPower.si() == 0.0);
+            CHECK(r.dissipationPower.si() == 0.0);
             CHECK(r.topForce.si() == 0.0);
             CHECK(r.bottomForce.si() == 0.0);
             CHECK(r.dForceDPosition.si() == 0.0);
@@ -85,11 +85,11 @@ TEST_CASE("Travel buffer top zone pushes toward larger q")
     CHECK(r.bottomForce.si() == 0.0);
     CHECK(r.force.si() == r.topForce.si());
     CHECK(r.potential.si() == doctest::Approx(K * 0.004 * 0.004 * 0.004 / (3 * Width)));
-    CHECK(r.lossPower.si() == doctest::Approx(C * 0.25 * 0.004 / Width));
+    CHECK(r.dissipationPower.si() == doctest::Approx(C * 0.25 * 0.004 / Width));
     // Leaving the buffer is undamped.
     const TravelBufferResponse leaving = at(buffer, 0.004, 0.5);
     CHECK(leaving.topForce.si() == doctest::Approx(2000.0));
-    CHECK(leaving.lossPower.si() == 0.0);
+    CHECK(leaving.dissipationPower.si() == 0.0);
 }
 
 TEST_CASE("Travel buffer bottom zone pushes toward smaller q")
@@ -102,10 +102,10 @@ TEST_CASE("Travel buffer bottom zone pushes toward smaller q")
     CHECK(r.topForce.si() == 0.0);
     CHECK(r.force.si() == doctest::Approx(-2750.0));
     CHECK(r.potential.si() == doctest::Approx(K * 0.004 * 0.004 * 0.004 / (3 * Width)));
-    CHECK(r.lossPower.si() == doctest::Approx(C * 0.25 * 0.004 / Width));
+    CHECK(r.dissipationPower.si() == doctest::Approx(C * 0.25 * 0.004 / Width));
     const TravelBufferResponse leaving = at(buffer, q, -0.5);
     CHECK(leaving.force.si() == doctest::Approx(-2000.0));
-    CHECK(leaving.lossPower.si() == 0.0);
+    CHECK(leaving.dissipationPower.si() == 0.0);
 }
 
 TEST_CASE("Travel buffer at the kinks")
@@ -152,7 +152,7 @@ TEST_CASE("Travel buffer power balance: force * u = -dU/dt - loss")
         {
             const TravelBufferResponse r = at(buffer, q, v);
             const double dUdq = (at(buffer, q + h, v).potential.si() - at(buffer, q - h, v).potential.si()) / (2 * h);
-            CHECK(r.force.si() * v == doctest::Approx(-dUdq * v - r.lossPower.si()).epsilon(1e-6).scale(1.0));
+            CHECK(r.force.si() * v == doctest::Approx(-dUdq * v - r.dissipationPower.si()).epsilon(1e-6).scale(1.0));
         }
     }
 }
@@ -165,7 +165,7 @@ TEST_CASE("Travel buffer loss power is never negative")
         for (double v = -4.0; v <= 4.0; v += 0.5)
         {
             const TravelBufferResponse r = at(buffer, q, v);
-            CHECK(r.lossPower.si() >= 0.0);
+            CHECK(r.dissipationPower.si() >= 0.0);
             CHECK(r.potential.si() >= 0.0);
             CHECK(r.topForce.si() >= 0.0);
             CHECK(r.bottomForce.si() >= 0.0);
@@ -215,7 +215,7 @@ TEST_CASE("Travel buffer matches BikeLab's formula on a grid")
             const TravelBufferResponse r = at(buffer, q, v);
             CHECK(close(r.force.si(), ref.force));
             CHECK(close(r.potential.si(), ref.potential));
-            CHECK(close(r.lossPower.si(), ref.lossPower));
+            CHECK(close(r.dissipationPower.si(), ref.lossPower));
             CHECK(close(r.topForce.si(), ref.topForce));
             CHECK(close(r.bottomForce.si(), ref.bottomForce));
             ++compared;

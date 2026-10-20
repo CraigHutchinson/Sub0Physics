@@ -12,6 +12,7 @@
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/state.hpp"
 #include "sub0physics/multibody/workspace.hpp"
+#include "sub0physics/verification/energy_account.hpp"
 
 namespace sub0physics::multibody
 {
@@ -24,23 +25,12 @@ struct SiteKinematics
     sub0math::Vec3<sub0math::f64::AngularVelocity> angularVelocity; ///< Angular velocity of its body.
 };
 
-/** Kinetic and gravitational potential energy of a model in a state. */
-struct MechanicalEnergy
-{
-    sub0math::f64::Energy kinetic;   ///< Sum of 1/2 v . I v over the bodies.
-    sub0math::f64::Energy potential; ///< Gravitational: -sum m g . c, zero with every centre of mass at the world origin.
-
-    /** @return kinetic + potential. */
-    [[nodiscard]] sub0math::f64::Energy total() const noexcept
-    {
-        return kinetic + potential;
-    }
-};
-
 /**
  * Computes each body's transform from its parent, spatial velocity and world pose.
  *
- * Writes `parentToBody`, `bodyVelocity` and `bodyPose`.
+ * Writes `parentToBody`, `bodyVelocity`, `worldToBody` and `bodyPose`. There is one pose pipeline: each
+ * joint's transform is evaluated once (one sin/cos pair of its coordinate), world transforms are composed
+ * from them, and each world pose is `toRigidTransform(worldToBody)`.
  *
  * @param model The model.
  * @param state Coordinates and rates, sized for the model.
@@ -81,13 +71,17 @@ struct MechanicalEnergy
 /**
  * Computes the kinetic and gravitational potential energy.
  *
+ * Kinetic energy is the sum of `v . I v / 2` over the bodies; gravitational potential is `-sum m g . c`,
+ * zero with every centre of mass at the world origin. Elements add their own potential, and a run
+ * accumulates `dissipated` and `externalWork`; this call leaves those two zero.
+ *
  * @param model The model.
  * @param state Coordinates and rates.
  * @param workspace Workspace built for the model; its kinematics are updated.
- * @return The energies, or InvalidInput for a workspace built for another model or a state that is not
- *         sized for this one.
+ * @return The account (kinetic and gravitational potential), or InvalidInput for a workspace built for
+ *         another model or a state that is not sized for this one.
  */
-[[nodiscard]] std::expected<MechanicalEnergy, Fault> computeEnergy(const Model& model, const State& state,
-                                                                  Workspace& workspace) noexcept;
+[[nodiscard]] std::expected<EnergyAccount, Fault> computeEnergy(const Model& model, const State& state,
+                                                                Workspace& workspace) noexcept;
 
 } // namespace sub0physics::multibody

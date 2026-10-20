@@ -230,8 +230,8 @@ void benchMultibody(sub0bench::BenchRunner& runner)
     std::array<double, N> tau{};
     for (std::size_t i = 0; i < N; ++i)
     {
-        state.q[i] = 0.3 * std::sin(static_cast<double>(i) + 1.0);
-        state.qd[i] = 0.5 * std::cos(static_cast<double>(i));
+        state.q()[i] = 0.3 * std::sin(static_cast<double>(i) + 1.0);
+        state.qd()[i] = 0.5 * std::cos(static_cast<double>(i));
         tau[i] = 0.1 * static_cast<double>(i);
     }
     HandPlanarTree hand(model);
@@ -242,7 +242,7 @@ void benchMultibody(sub0bench::BenchRunner& runner)
         std::fprintf(stderr, "forwardDynamics failed\n");
         std::exit(1);
     }
-    hand.forwardDynamics(state.q.data(), state.qd.data(), tau.data());
+    hand.forwardDynamics(state.q().data(), state.qd().data(), tau.data());
     for (std::size_t i = 0; i < N; ++i)
     {
         if (std::abs(hand.qdd[i] - ws.qdd[i]) > 1e-9 * (1.0 + std::abs(ws.qdd[i])))
@@ -255,7 +255,7 @@ void benchMultibody(sub0bench::BenchRunner& runner)
     runner.bench().minEpochIterations(20000);
     runner.run("planar tree 10-DOF mass matrix, hand-written planar", [&] {
         ankerl::nanobench::doNotOptimizeAway(state);
-        hand.transforms(state.q.data());
+        hand.transforms(state.q().data());
         hand.massMatrix();
         ankerl::nanobench::doNotOptimizeAway(hand.h);
     });
@@ -287,7 +287,7 @@ void benchMultibody(sub0bench::BenchRunner& runner)
 
     runner.run("planar tree 10-DOF forward dynamics, hand-written planar", [&] {
         ankerl::nanobench::doNotOptimizeAway(state);
-        hand.forwardDynamics(state.q.data(), state.qd.data(), tau.data());
+        hand.forwardDynamics(state.q().data(), state.qd().data(), tau.data());
         ankerl::nanobench::doNotOptimizeAway(hand.qdd);
     });
     runner.run("planar tree 10-DOF forward dynamics, forwardDynamics", [&] {

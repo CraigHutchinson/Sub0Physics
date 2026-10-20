@@ -1,30 +1,29 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <expected>
 #include <sub0math/config.hpp>
 #include <sub0math/units/quantities.hpp>
 
+#include "sub0physics/element/law_response.hpp"
 #include "sub0physics/fault.hpp"
 
 namespace sub0physics
 {
 
 /**
- * Forces, energy, power and Jacobians of a travel buffer at one instant.
+ * Response of a TravelBuffer: the common law response plus the force of each buffer.
  *
  * Sign convention: `force` is the generalized force on the compression coordinate `q`. The top buffer
- * pushes toward larger `q` (positive), the bottom buffer toward smaller `q` (negative).
+ * pushes toward larger `q` (positive), the bottom buffer toward smaller `q` (negative), so
+ * `force = topForce - bottomForce`. `potential` is the elastic energy of the two buffers and
+ * `dissipationPower` the damper power, both never negative.
  */
-struct TravelBufferResponse
+struct TravelBufferResponse : LawResponse<sub0math::f64::Length>
 {
-    sub0math::f64::Force force;               ///< Generalized force on `q`: `topForce - bottomForce`.
-    sub0math::f64::Energy potential;          ///< Elastic energy of the two buffers; never negative.
-    sub0math::f64::Power lossPower;           ///< Power removed by the damping; never negative.
-    sub0math::f64::Force topForce;            ///< Top buffer (near `q = 0`) force magnitude; never negative.
-    sub0math::f64::Force bottomForce;         ///< Bottom buffer (near `q = travel`) force magnitude; never negative.
-    sub0math::f64::Stiffness dForceDPosition; ///< Exact partial derivative of `force` with respect to `q`.
-    sub0math::f64::Damping dForceDVelocity;   ///< Exact partial derivative of `force` with respect to `u`.
+    sub0math::f64::Force topForce;    ///< Top buffer (near `q = 0`) force magnitude; never negative.
+    sub0math::f64::Force bottomForce; ///< Bottom buffer (near `q = travel`) force magnitude; never negative.
 };
 
 /**
@@ -51,7 +50,7 @@ struct TravelBufferSpec
  * leaving a buffer is undamped.
  *
  * `potential` is the exact integral of the spring part, so `-d(potential)/dq` equals the spring part
- * of `force`. `lossPower` is the damper power, so `force * u = -d(potential)/dt - lossPower`.
+ * of `force`. `dissipationPower` is the damper power, so `force * u = -d(potential)/dt - dissipationPower`.
  *
  * Jacobians are exact piecewise partial derivatives of `force`. At the kinks the derivative of the
  * branch the input selects is used, consistently:
@@ -123,7 +122,7 @@ public:
      *
      * @param position Compression `q` [m]; 0 is fully extended, `travel` fully compressed.
      * @param velocity Compression rate `u = dq/dt` [m/s].
-     * @return Force, energy, loss power, per-buffer forces and the two Jacobian entries.
+     * @return Force, the two Jacobian entries, energy, dissipated power and the per-buffer forces.
      */
     [[nodiscard]] SUB0MATH_FORCE_INLINE TravelBufferResponse respond(sub0math::f64::Length position,
                                                                      sub0math::f64::Velocity velocity) const noexcept
@@ -134,9 +133,9 @@ public:
         const double c = damping_;
         const double invWidth = 1.0 / width_;
 
-        // PERF: fmax measured equal to compare-select; kept.
-        const double top = std::fmax(0.0, width_ - q);
-        const double bottom = std::fmax(0.0, q - (travel_ - width_));
+        // PERF: std::max (maxsd) beats std::fmax (a libcall on MinGW GCC).
+        const double top = std::max(0.0, width_ - q);
+        const double bottom = std::max(0.0, q - (travel_ - width_));
         // A buffer is damped only while its own side closes: u < 0 closes the top, u >= 0 the bottom.
         const bool closingTop = v < 0.0;
         const double speed = closingTop ? -v : v;
@@ -153,13 +152,15 @@ public:
         const double slopeBottom = bottom > 0.0 ? 2.0 * k * bottom + bottomDamping : 0.0;
 
         return TravelBufferResponse{
-            sub0math::f64::Force::fromSi(topForce - bottomForce),
-            sub0math::f64::Energy::fromSi(k * (top * top * top + bottom * bottom * bottom) * invWidth / 3.0),
-            sub0math::f64::Power::fromSi(c * speed * speed * closingDepth * invWidth),
+            {
+                sub0math::f64::Force::fromSi(topForce - bottomForce),
+                sub0math::f64::Stiffness::fromSi(-(slopeTop + slopeBottom) * invWidth),
+                sub0math::f64::Damping::fromSi(-c * closingDepth * invWidth),
+                sub0math::f64::Energy::fromSi(k * (top * top * top + bottom * bottom * bottom) * invWidth / 3.0),
+                sub0math::f64::Power::fromSi(c * speed * speed * closingDepth * invWidth),
+            },
             sub0math::f64::Force::fromSi(topForce),
             sub0math::f64::Force::fromSi(bottomForce),
-            sub0math::f64::Stiffness::fromSi(-(slopeTop + slopeBottom) * invWidth),
-            sub0math::f64::Damping::fromSi(-c * closingDepth * invWidth),
         };
     }
 
@@ -174,5 +175,7 @@ private:
     double stiffness_; ///< Spring scale [N/m].
     double damping_;   ///< Damping scale [N s/m].
 };
+
+static_assert(Law<TravelBuffer, sub0math::f64::Length>);
 
 } // namespace sub0physics

@@ -57,12 +57,14 @@ namespace
 
 struct Contact
 {
-    UnilateralSpringDamper tyre{sub0math::newtonsPerMetre(90000.0), sub0math::newtonSecondsPerMetre(400.0)};
+    UnilateralSpringDamper tyre =
+        *UnilateralSpringDamper::create({.stiffness = sub0math::newtonsPerMetre(90000.0), .damping = sub0math::newtonSecondsPerMetre(400.0)});
 
     std::expected<void, Fault> evaluate(double, const StateVector<2>& x, StateVector<2>& dxdt) const
     {
         dxdt[0] = x[1];
-        dxdt[1] = tyre.respond(sub0math::metres(0.36 - x[0]), sub0math::metresPerSecond(-x[1])).force.si() / 45.0 - StandardGravity;
+        // The generalized force on the penetration 0.36 - x[0] acts on x[0] with the opposite sign.
+        dxdt[1] = -tyre.respond(sub0math::metres(0.36 - x[0]), sub0math::metresPerSecond(-x[1])).force.si() / 45.0 - StandardGravity;
         return {};
     }
 };
@@ -78,7 +80,7 @@ TEST_CASE("Integrator steps never allocate")
     const AllocationCount count;
     for (std::uint64_t tick = 0; tick < 10000U; ++tick)
     {
-        REQUIRE(((tick % 2U == 0U) ? rk4.stepTick(system, tick, 0.0005, x) : midpoint.stepTick(system, tick, 0.0005, x)));
+        REQUIRE(((tick % 2U == 0U) ? rk4.stepTick(system, tick, sub0math::seconds(0.0005), x) : midpoint.stepTick(system, tick, sub0math::seconds(0.0005), x)));
     }
     CHECK(count.since() == 0U);
 }
@@ -86,7 +88,7 @@ TEST_CASE("Integrator steps never allocate")
 TEST_CASE("Recording, ledgers, statistics and selection never allocate after construction")
 {
     ChannelTable<4> table(1000);
-    EnergyLedger ledger(1.0, 1.0);
+    EnergyLedger ledger(EnergyAccount{.kinetic = sub0math::joules(1.0)}, sub0math::joules(1.0));
     ErrorStatistics stats(1.0);
     auto selector = FidelitySelector::create({{{"cheap", 1U, 1.0}, 0.5, 1.0}, {{"full", 1U, 2.0}, 10.0, 10.0}}, 3U, 0U);
     REQUIRE(selector);
@@ -95,8 +97,8 @@ TEST_CASE("Recording, ledgers, statistics and selection never allocate after con
     {
         const double v = static_cast<double>(i);
         REQUIRE(table.append({v, v, v, v}));
-        ledger.record(v, 0.0, 0.0);
-        ledger.includeScale(v);
+        ledger.record(EnergyAccount{.kinetic = sub0math::joules(v)});
+        ledger.includeScale(sub0math::joules(v));
         stats.add(v * 1e-6);
         const auto d = selector->decide(static_cast<double>(i % 3U), i);
         REQUIRE(selector->commit(d, i));

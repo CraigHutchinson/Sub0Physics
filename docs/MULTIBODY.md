@@ -86,7 +86,7 @@ Jacobians.
 | Kind | Notes |
 |---|---|
 | Coordinate spring-damper | On one joint coordinate; linear, with a reference |
-| `TravelBuffer` | Progressive buffer on a coordinate; ported from BikeLab with exact analytic Jacobians. **Landed** as a stand-alone law (`element/travel_buffer.hpp`: force, potential, loss power and both Jacobian entries, built by the validating `TravelBuffer::create`); binding it to a coordinate as a `ForceElement` is M1b |
+| `TravelBuffer` | Progressive buffer on a coordinate; ported from BikeLab with exact analytic Jacobians. **Landed** as a stand-alone law (`element/travel_buffer.hpp`, a `LawResponse` with per-buffer forces, built by the validating `TravelBuffer::create`); binding it to a coordinate as a `ForceElement` is M1b |
 | Spatial tendon spring-damper | Two-site length, like BikeLab's shock: force along the line, Jacobian through the site Jacobians |
 | External wrench | Prescribed or scripted, at a site |
 | Tyre and contact (M2) | Over terrain extracts, with Jacobians from the contact law |
@@ -171,7 +171,7 @@ Each step ships through the pre-push gate, with goldens and provenance as usual.
 `std::expected<Model, Fault>`, `Model`, `State`, `Workspace`; kinematics (`updateKinematics`, site pose,
 velocity and translational Jacobian, `computeEnergy`); `computeMassMatrix` (CRBA),
 `computeBiasForces` and `inverseDynamics` (RNEA), `factorMassMatrix` / `solveMassMatrix`,
-`forwardDynamics`; `stepSymplecticEuler` (a semi-implicit Euler step). The analytic gates, allocation gate and paired benchmarks
+`forwardDynamics`; a semi-implicit Euler step (now `stepSemiImplicitEuler`, see M1b foundations). The analytic gates, allocation gate and paired benchmarks
 are in `tests/test_multibody*.cpp` and `tests/bench_multibody.cpp`.
 
 **Deviations and decisions:**
@@ -185,7 +185,8 @@ are in `tests/test_multibody*.cpp` and `tests/bench_multibody.cpp`.
 - The explicit stepping is semi-implicit Euler. With a configuration-dependent `M` it is not
   symplectic, so energy is bounded to first order rather than conserved: about 1e-3 of `m g l` at
   `h` = 0.1 ms on the double pendulum, halving with `h`. Conservation to round-off is shown with the
-  existing `Rk4` through an `OdeSystem` adapter in the tests (9e-11 over 20 s at 1 ms).
+  existing `Rk4` through an `OdeSystem` adapter (9e-11 over 20 s at 1 ms); since M1b foundations that
+  adapter is the library's `ModelOde` and `Rk4Stepper`.
 - `Workspace` exposes its arrays as fields, sized once (the Pinocchio `Data` pattern); the site and
   energy queries recompute kinematics per call (O(n)). A workspace is bound to the model it was built for
   (`Model::id`): every public entry point returns `InvalidInput` for another model's workspace or a state
@@ -264,6 +265,46 @@ M1b builds on these contracts, which a cross-repository review fixed before more
 - World `bodyPose` is composed from those transforms through Sub0Math `toRigidTransform(PluckerTransform)`.
 - The quaternion half-angle path is removed, so kinematics, Jacobians, energy and dynamics all come from
   one representation.
+
+### M1b foundations status (2026-10-20)
+
+**Landed** (the four contracts above; consolidation D2, D4, D5, D6):
+
+- **Laws:** `LawResponse<Coordinate>`, `CoordinateRate`, `GeneralizedForce` and the `Law` concept in
+  `element/law_response.hpp`. `AxialSpringDamper`, `UnilateralSpringDamper` and `TravelBuffer` are built by
+  validating `create(Spec)` and return responses derived from `LawResponse<f64::Length>`, keeping their
+  diagnostic extras (`springForce`/`damperForce`, `compression`/`normalForce`, `topForce`/`bottomForce`).
+  A typed test over every law checks `force · qd = −dV/dt − dissipationPower` along trajectories through
+  every branch, and both Jacobian entries against one-sided finite differences (at a kink the entry must
+  match the side its branch selects).
+- **Energy:** `EnergyAccount` (`verification/energy_account.hpp`); `computeEnergy` returns it with
+  `kinetic` and gravitational `potential`; `EnergyLedger` is built from an initial account and records
+  accounts. `MechanicalEnergy` is gone.
+- **Stepping:** `State` is `values = [q; qd]` with `q()`/`qd()` spans (`State::fromCoordinates` for set-up);
+  `Forcing{tau}`, the `Stepper` concept, `stepSemiImplicitEuler` and `SemiImplicitEuler` (`stepSymplecticEuler`
+  is removed, no alias was needed); `ExplicitRungeKutta` takes `f64::Time` and has a `std::dynamic_extent`
+  span form; `ModelOde` and `Rk4Stepper`/`MidpointStepper` (`multibody/runge_kutta_stepper.hpp`) are the RK
+  reference run, satisfying `Stepper`.
+- **One pose pipeline:** the quaternion half-angle path is gone. `updateKinematics` composes
+  `worldToBody` from `parentToBody` and sets `bodyPose = toRigidTransform(worldToBody)`; site velocities,
+  Jacobians and energy read the world transforms. `Model` stores each placement once (`treeTransforms()`;
+  `jointPlacements()` is removed).
+
+**Deviations and decisions:**
+
+- `State` keeps its `tick`; a stepper refuses (`InvalidInput`) a `tick` argument that differs from
+  `state.tick`, and sets `state.tick = tick + 1` on success. The argument stays because the contract fixes the
+  signature; the check stops the two from disagreeing.
+- `Forcing` holds only `tau`, constant over the step. Elements join it with the element binding (rest of M1b).
+- `RungeKuttaStepper` is bound to the model it was built for, like a `Workspace`, and keeps a copy of the
+  forcing: when `tau` changes between ticks the cached first stage is discarded, so a change of forcing at a
+  tick boundary keeps the method's order (tested).
+- `EnergyAccount::potential` holds gravitational plus element potential, so no separate elastic channel.
+- The fixed-size RK step flattens its call tree (`SUB0PHYSICS_FLATTEN`, GCC/Clang): the richer law
+  response pushed a station's `evaluate` past GCC's early-inlining budget (RK4 contact step 43 to 52 ns);
+  flattened, it is back at or below the old time.
+- Revolute joints about the z axis take a short branch of the joint transform (about 4% on CRBA and forward
+  dynamics); the CRBA/forward-dynamics gap is otherwise unchanged (docs/PERFORMANCE.md).
 
 ## 10. Open questions, to be answered by measurement
 

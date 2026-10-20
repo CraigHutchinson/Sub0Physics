@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <span>
 #include <string_view>
@@ -10,7 +11,7 @@
 
 #include "multibody_joint.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
-#include "sub0physics/multibody/symplectic_euler.hpp"
+#include "sub0physics/multibody/stepper.hpp"
 
 namespace sub0physics::multibody
 {
@@ -30,13 +31,14 @@ void recursiveNewtonEuler(const Model& model, const State& state, const double* 
     const auto types = model.jointTypes();
     const auto axes = model.jointAxes();
     const std::size_t n = parents.size();
+    const double* qd = state.values.data() + n;
     for (std::size_t i = 0; i < n; ++i)
     {
         const std::size_t p = parents[i];
         const sub0math::SpatialMotiond& v = ws.bodyVelocity[i];
         const sub0math::SpatialMotiond& parentAcceleration =
             p == NoParent ? model.baseAcceleration() : ws.bodyAcceleration[p];
-        sub0math::SpatialMotiond a = ws.parentToBody[i].apply(parentAcceleration) + cross(v, subspace[i] * state.qd[i]);
+        sub0math::SpatialMotiond a = ws.parentToBody[i].apply(parentAcceleration) + cross(v, subspace[i] * qd[i]);
         if constexpr (WithAcceleration)
         {
             a += subspace[i] * qdd[i];
@@ -238,34 +240,40 @@ std::expected<void, Fault> forwardDynamics(const Model& model, const State& stat
     return {};
 }
 
-std::expected<void, Fault> stepSymplecticEuler(const Model& model, sub0math::f64::Time h, std::span<const double> tau,
-                                               State& state, Workspace& workspace) noexcept
+std::expected<void, Fault> stepSemiImplicitEuler(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                 sub0math::f64::Time h, State& state, Workspace& workspace) noexcept
 {
     const double dt = h.si();
     if (!std::isfinite(dt) || !(dt > 0.0))
     {
         return invalidInput("step needs a finite positive step size");
     }
-    if (auto accelerated = forwardDynamics(model, state, tau, workspace); !accelerated)
+    if (tick != state.tick)
+    {
+        return invalidInput("tick differs from the state's tick");
+    }
+    if (auto accelerated = forwardDynamics(model, state, forcing.tau, workspace); !accelerated)
     {
         return accelerated;
     }
     const std::size_t n = model.dofCount();
+    double* q = state.values.data();
+    double* qd = q + n;
     // Validate the whole endpoint before committing any of it.
     for (std::size_t i = 0; i < n; ++i)
     {
-        const double qd = state.qd[i] + dt * workspace.qdd[i];
-        if (!std::isfinite(qd) || !std::isfinite(state.q[i] + dt * qd))
+        const double rate = qd[i] + dt * workspace.qdd[i];
+        if (!std::isfinite(rate) || !std::isfinite(q[i] + dt * rate))
         {
             return std::unexpected(Fault{FaultKind::NonFiniteState, "nonfinite physical state"});
         }
     }
     for (std::size_t i = 0; i < n; ++i)
     {
-        state.qd[i] += dt * workspace.qdd[i];
-        state.q[i] += dt * state.qd[i];
+        qd[i] += dt * workspace.qdd[i];
+        q[i] += dt * qd[i];
     }
-    ++state.tick;
+    state.tick = tick + 1U;
     return {};
 }
 

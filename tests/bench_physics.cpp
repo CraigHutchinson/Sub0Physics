@@ -24,7 +24,8 @@ namespace
 // A loaded wheel on a clipped contact: the shape of BikeLab's first station.
 struct ContactOscillator
 {
-    UnilateralSpringDamper contact{sub0math::newtonsPerMetre(90000.0), sub0math::newtonSecondsPerMetre(400.0)};
+    UnilateralSpringDamper contact =
+        *UnilateralSpringDamper::create({.stiffness = sub0math::newtonsPerMetre(90000.0), .damping = sub0math::newtonSecondsPerMetre(400.0)});
     double mass = 45.0;
     double radius = 0.36;
 
@@ -32,7 +33,7 @@ struct ContactOscillator
     {
         const ContactResponse r = contact.respond(sub0math::metres(radius - x[0]), sub0math::metresPerSecond(-x[1]));
         dxdt[0] = x[1];
-        dxdt[1] = r.force.si() / mass - StandardGravity;
+        dxdt[1] = -r.force.si() / mass - StandardGravity; // force on the penetration radius - x[0]
         return {};
     }
 };
@@ -45,7 +46,7 @@ void benchStep(sub0bench::BenchRunner& runner, const char* name)
     StateVector<2> x{0.36, 0.0};
     std::uint64_t tick = 0;
     runner.run(name, [&] {
-        if (!integrator.stepTick(system, tick++, 0.0005, x))
+        if (!integrator.stepTick(system, tick++, sub0math::seconds(0.0005), x))
         {
             x = {0.36, 0.0};
         }
@@ -438,7 +439,7 @@ void benchTravelBuffer(sub0bench::BenchRunner& runner)
         for (std::size_t k = 0; k < qs.size(); ++k)
         {
             const TravelBufferResponse r = buffer.respond(sub0math::f64::Length::fromSi(qs[k]), sub0math::f64::Velocity::fromSi(vs[k]));
-            sum += r.force.si() + r.potential.si() + r.lossPower.si() + r.topForce.si() + r.bottomForce.si() +
+            sum += r.force.si() + r.potential.si() + r.dissipationPower.si() + r.topForce.si() + r.bottomForce.si() +
                    r.dForceDPosition.si() + r.dForceDVelocity.si();
         }
         ankerl::nanobench::doNotOptimizeAway(sum);

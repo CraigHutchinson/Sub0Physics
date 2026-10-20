@@ -204,7 +204,6 @@ std::expected<Model, Fault> ModelBuilder::build() const
     model.coordinate_.reserve(n);
     model.jointType_.reserve(n);
     model.axis_.reserve(n);
-    model.placement_.reserve(n);
     model.treeTransform_.reserve(n);
     model.placementUnrotated_.reserve(n);
     model.motionSubspace_.reserve(n);
@@ -229,7 +228,6 @@ std::expected<Model, Fault> ModelBuilder::build() const
         model.coordinate_.push_back(i);
         model.jointType_.push_back(joint.type);
         model.axis_.push_back(axis);
-        model.placement_.push_back(placement);
         model.treeTransform_.push_back(sub0math::PluckerTransformd::fromPose(placement));
         model.placementUnrotated_.push_back(model.treeTransform_.back().rotation == sub0math::Mat3d::identity() ? 1U : 0U);
         model.motionSubspace_.push_back(joint.type == JointType::Revolute

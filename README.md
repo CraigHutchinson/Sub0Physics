@@ -13,13 +13,13 @@ primitives. Sub0Physics knows nothing of them.
 
 | Area | Header | Provides |
 |---|---|---|
-| Integrators | `sub0physics/integrators.hpp` | `OdeSystem` concept; transactional fixed-step `Rk4` and `Midpoint` that reuse the endpoint derivative and never commit a refused or non-finite state |
-| Elements | `sub0physics/elements.hpp` | `AxialSpringDamper` (preload, compression/rebound damping), `UnilateralSpringDamper` (push-only penalty contact) and `TravelBuffer` (progressive end-stops inside a finite stroke, built by the validating `TravelBuffer::create`, with exact Jacobians), with stored energy and dissipated power |
+| Integrators | `sub0physics/integrators.hpp` | `OdeSystem` concept; transactional fixed-step `Rk4` and `Midpoint` (step size as `f64::Time`) that reuse the endpoint derivative and never commit a refused or non-finite state; a fixed-size form for small systems and a `std::dynamic_extent` span form for run-time-sized ones |
+| Elements | `sub0physics/elements.hpp` | Laws of one coordinate, each built by a validating `create` and answering a `LawResponse` (generalized force on its coordinate, exact Jacobians, `potential`, `dissipationPower`): `AxialSpringDamper` (preload, compression/rebound damping), `UnilateralSpringDamper` (push-only penalty contact) and `TravelBuffer` (progressive end-stops inside a finite stroke) |
 | References | `sub0physics/references.hpp` | Closed-form damped linear oscillator for all damping regimes, numerically guarded |
-| Verification | `sub0physics/verification.hpp` | `EnergyLedger` (work/energy balance residual), `ErrorStatistics` (peak/RMS against a limit), `observedOrder` (convergence), `ChannelTable` (preallocated column recording) |
+| Verification | `sub0physics/verification.hpp` | `EnergyAccount` and `EnergyLedger` (work/energy balance residual), `ErrorStatistics` (peak/RMS against a limit), `observedOrder` (convergence), `ChannelTable` (preallocated column recording) |
 | Geometry | `sub0physics/geometry.hpp` | `PolylineProfile` of `ProfilePoint` (`sub0math::Point2<f64::Length>`; a validated height field, searched with `sub0math::closestPoint` with vertical faces) and `sub0math::Circle` clearance. Tied nearest features are `Witness` values (`point`, approach `normal`, `WitnessKind` vertex/edge/face, `index`) written to a caller-owned buffer: no allocation, an `overflowed` flag when it is full |
 | Core | `sub0physics/core.hpp` | `Id<Tag, Rep>`: a strongly typed identifier with explicit construction, `<=>`, `std::hash`, an invalid sentinel and a saturating `next()` |
-| Multibody | `sub0physics/multibody.hpp` | Articulated rigid-body trees in reduced coordinates: a typed description compiled by `ModelBuilder` into an immutable `Model`; `State` and a per-model `Workspace`; kinematics, site poses and Jacobians, energy; CRBA mass matrix, RNEA bias and inverse dynamics, tree-sparse LTDL factorisation; forward dynamics and a semi-implicit Euler step. No allocation once the workspace exists. Design: [docs/MULTIBODY.md](docs/MULTIBODY.md) |
+| Multibody | `sub0physics/multibody.hpp` | Articulated rigid-body trees in reduced coordinates: a typed description compiled by `ModelBuilder` into an immutable `Model`; `State` and a per-model `Workspace`; kinematics, site poses and Jacobians, energy; CRBA mass matrix, RNEA bias and inverse dynamics, tree-sparse LTDL factorisation; forward dynamics; one `Stepper` shape for `SemiImplicitEuler` and the RK reference steppers (`Rk4Stepper`, `MidpointStepper`). No allocation once the workspace exists. Design: [docs/MULTIBODY.md](docs/MULTIBODY.md) |
 | Terrain | `sub0physics/terrain.hpp` | `GridSpec`: paging of the plane into levels of pages on `sub0math::RegularGrid`, with a runtime cells-per-side, a placement anchor and node or cell-centre registration, so a source of any shape (a 256-cell survey page, a 40-cell fixture) is expressible exactly; ownership (`pageOf`, `cellOf`, half-open) and coverage (`cellsTouching`, `pagesTouching`, closed) are separate operations. `TileKey` and `PageFrame` (double-precision terrain frame, float page-local frame). `HeightPage`: a quantised 257 x 257 height page with an authored-node mask, a min/max pyramid and a fixed-triangulation `heightAt`. `CorridorBuilder`: oriented boxes that bound a wheel footprint over a pose pair, rasterised to grid cells. `terrain/testing.hpp`: an analytic-surface catalogue (`Plane`, `Ramp`, `Step`, `RoundedBlock`, `Bridge`, `Berm`, `Rut`) with exact heights and normals for tests. Design notes: [docs/TERRAIN.md](docs/TERRAIN.md) |
 | Profiling | `sub0physics/profiling.hpp` | `ProfileTask`: ITT task markers for VTune, compiled out unless `SUB0PHYSICS_ENABLE_ITT` |
 | Level of detail | `sub0physics/lod.hpp` | `ModelDescriptor` and `FidelitySelector`: choose between models of one mechanism from a physical demand, with hysteresis, dwell and commit-after-transfer. See [docs/LOD.md](docs/LOD.md) |
@@ -29,13 +29,14 @@ Everything is reachable from `sub0physics/sub0physics.hpp`.
 ```cpp
 struct Wheel                                  // a model owned by the product
 {
-    sub0physics::UnilateralSpringDamper tyre{newtonsPerMetre(90000.0), newtonSecondsPerMetre(400.0)};
+    sub0physics::UnilateralSpringDamper tyre =
+        *sub0physics::UnilateralSpringDamper::create({.stiffness = newtonsPerMetre(90000.0), .damping = newtonSecondsPerMetre(400.0)});
     std::expected<void, sub0physics::Fault> evaluate(double t, const sub0physics::StateVector<2>& x,
                                                      sub0physics::StateVector<2>& dxdt);
 };
 
 sub0physics::Rk4<2> rk4;
-if (auto stepped = rk4.step(wheel, t, h, state); !stepped)
+if (auto stepped = rk4.stepTick(wheel, tick, milliseconds(0.5), state); !stepped)
 {
     report(stepped.error());                  // state is unchanged
 }

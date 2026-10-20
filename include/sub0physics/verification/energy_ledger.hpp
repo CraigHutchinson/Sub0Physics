@@ -3,11 +3,16 @@
 #include <algorithm>
 #include <cmath>
 
+#include <sub0math/units/quantities.hpp>
+
+#include "sub0physics/verification/energy_account.hpp"
+
 namespace sub0physics
 {
 
 /**
- * Tracks the energy balance of a run: E(t) + dissipated - external work = E(0).
+ * Tracks the energy balance of a run: `balance(t) = balance(0)`, where an account's balance is
+ * kinetic + potential + dissipated - external work (EnergyAccount).
  *
  * The residual of that balance measures integration error. Dividing its peak by the largest energy
  * magnitude seen in the run gives a scale-free figure that can be compared with a tolerance.
@@ -15,82 +20,78 @@ namespace sub0physics
 class EnergyLedger
 {
 public:
-    /** Smallest scale used for the relative residual, J; keeps an idle run from dividing by zero. */
-    static constexpr double MinimumScale = 1e-6;
+    /** Smallest scale used for the relative residual; keeps an idle run from dividing by zero. */
+    static constexpr sub0math::f64::Energy MinimumScale = sub0math::f64::Energy::fromSi(1e-6);
 
     /**
      * Starts a ledger.
      *
-     * @param initialEnergy Mechanical energy at the start, J.
-     * @param initialScale Energy magnitude known at the start, J.
+     * @param initial The account at the start of the run.
+     * @param initialScale Energy magnitude known at the start.
      */
-    EnergyLedger(double initialEnergy, double initialScale) noexcept
-        : initialEnergy_(initialEnergy)
-        , scale_(std::abs(initialScale))
+    EnergyLedger(const EnergyAccount& initial, sub0math::f64::Energy initialScale) noexcept
+        : initialBalance_(initial.balance().si())
+        , scale_(std::abs(initialScale.si()))
     {
     }
 
     /**
-     * Computes the balance residual for one state.
+     * Computes the balance residual of one account.
      *
-     * @param energy Mechanical energy now, J.
-     * @param work External work done on the system so far, J.
-     * @param dissipated Energy dissipated so far, J.
-     * @return energy + dissipated - work - initial energy, J.
+     * @param account The account now.
+     * @return Its balance minus the initial balance.
      */
-    [[nodiscard]] double residual(double energy, double work, double dissipated) const noexcept
+    [[nodiscard]] sub0math::f64::Energy residual(const EnergyAccount& account) const noexcept
     {
-        return energy + dissipated - work - initialEnergy_;
+        return sub0math::f64::Energy::fromSi(account.balance().si() - initialBalance_);
     }
 
     /**
-     * Records one state's residual into the running peak.
+     * Records one account's residual into the running peak.
      *
-     * @param energy Mechanical energy now, J.
-     * @param work External work done on the system so far, J.
-     * @param dissipated Energy dissipated so far, J.
+     * @param account The account now.
      */
-    void record(double energy, double work, double dissipated) noexcept
+    void record(const EnergyAccount& account) noexcept
     {
-        maxResidual_ = std::max(maxResidual_, std::abs(residual(energy, work, dissipated)));
+        maxResidual_ = std::max(maxResidual_, std::abs(residual(account).si()));
     }
 
     /**
      * Widens the run's energy scale.
      *
-     * @param magnitude An energy magnitude seen in the run, J.
+     * @param magnitude An energy magnitude seen in the run.
      */
-    void includeScale(double magnitude) noexcept
+    void includeScale(sub0math::f64::Energy magnitude) noexcept
     {
-        scale_ = std::max(scale_, std::abs(magnitude));
+        scale_ = std::max(scale_, std::abs(magnitude.si()));
     }
 
-    /** @return Mechanical energy at the start, J. */
-    [[nodiscard]] double initialEnergy() const noexcept
+    /** @return The balance of the initial account. */
+    [[nodiscard]] sub0math::f64::Energy initialBalance() const noexcept
     {
-        return initialEnergy_;
+        return sub0math::f64::Energy::fromSi(initialBalance_);
     }
 
-    /** @return Largest absolute residual recorded, J. */
-    [[nodiscard]] double maxResidual() const noexcept
+    /** @return Largest absolute residual recorded. */
+    [[nodiscard]] sub0math::f64::Energy maxResidual() const noexcept
     {
-        return maxResidual_;
+        return sub0math::f64::Energy::fromSi(maxResidual_);
     }
 
-    /** @return Largest energy magnitude seen, J. */
-    [[nodiscard]] double scale() const noexcept
+    /** @return Largest energy magnitude seen. */
+    [[nodiscard]] sub0math::f64::Energy scale() const noexcept
     {
-        return scale_;
+        return sub0math::f64::Energy::fromSi(scale_);
     }
 
     /** @return Peak residual divided by the energy scale (at least MinimumScale). */
     [[nodiscard]] double relativeResidual() const noexcept
     {
-        return maxResidual_ / std::max(scale_, MinimumScale);
+        return maxResidual_ / std::max(scale_, MinimumScale.si());
     }
 
 private:
-    double initialEnergy_;
+    double initialBalance_;
     double scale_;
     double maxResidual_ = 0.0;
 };

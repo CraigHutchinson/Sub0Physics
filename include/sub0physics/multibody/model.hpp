@@ -84,13 +84,12 @@ public:
         return axis_;
     }
 
-    /** @return Each joint's frame in its parent's frame at coordinate zero, as a pose. */
-    [[nodiscard]] std::span<const sub0math::RigidTransform<double, sub0math::f64::Length>> jointPlacements() const noexcept
-    {
-        return placement_;
-    }
-
-    /** @return The Plücker transform from each parent's frame to the joint frame at coordinate zero. */
+    /**
+     * The joint placements: the Plücker transform from each parent's frame to the joint frame at
+     * coordinate zero. It is the only stored form of a placement; `toRigidTransform` recovers the pose.
+     *
+     * @return One transform per body.
+     */
     [[nodiscard]] std::span<const sub0math::PluckerTransformd> treeTransforms() const noexcept
     {
         return treeTransform_;
@@ -197,7 +196,6 @@ private:
     std::vector<std::size_t> coordinate_;
     std::vector<JointType> jointType_;
     std::vector<sub0math::Vec3d> axis_;
-    std::vector<sub0math::RigidTransform<double, sub0math::f64::Length>> placement_;
     std::vector<sub0math::PluckerTransformd> treeTransform_;
     std::vector<std::uint8_t> placementUnrotated_;
     std::vector<sub0math::SpatialMotiond> motionSubspace_;
