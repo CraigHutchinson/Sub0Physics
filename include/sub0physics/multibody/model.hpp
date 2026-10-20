@@ -16,6 +16,7 @@
 #include <sub0math/linear/vec.hpp>
 #include <sub0math/units/quantities.hpp>
 
+#include "sub0physics/multibody/constraint.hpp"
 #include "sub0physics/multibody/description.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 
@@ -237,6 +238,61 @@ public:
         return tendonElements_;
     }
 
+    /** @return The number of constraints, of every kind, as described (a two-sided limit is one). */
+    [[nodiscard]] std::size_t constraintCount() const noexcept
+    {
+        return constraintName_.size();
+    }
+
+    /**
+     * Finds a constraint by name.
+     *
+     * @param name The name given to the builder.
+     * @return The constraint, or nothing if no constraint has that name.
+     */
+    [[nodiscard]] std::optional<ConstraintId> findConstraint(std::string_view name) const noexcept;
+
+    /** @return The compiled loop closures, in the order added. */
+    [[nodiscard]] std::span<const LoopClosure> closures() const noexcept
+    {
+        return closures_;
+    }
+
+    /** @return The compiled one-sided limits, in the order added (a two-sided limit gives its lower one first). */
+    [[nodiscard]] std::span<const UnilateralLimit> limits() const noexcept
+    {
+        return limits_;
+    }
+
+    /**
+     * The constraint layout: every closure's rows (3 or 6 each, in order), then one row per one-sided limit. The
+     * workspace's per-row results (constraintImpulse, constraintForce) follow it.
+     *
+     * @return The number of rows.
+     */
+    [[nodiscard]] std::size_t constraintRowCount() const noexcept
+    {
+        return closureRowCount_ + limits_.size();
+    }
+
+    /** @return The number of closure rows, the first rows of the layout. */
+    [[nodiscard]] std::size_t closureRowCount() const noexcept
+    {
+        return closureRowCount_;
+    }
+
+    /** @return The number of constraint site wrenches: two per closure and per one-sided distance limit. */
+    [[nodiscard]] std::size_t constraintWrenchCount() const noexcept
+    {
+        return constraintWrenchCount_;
+    }
+
+    /** @return The constraint solver's levers, set with ModelBuilder::setConstraintSettings. */
+    [[nodiscard]] const ConstraintSettings& constraintSettings() const noexcept
+    {
+        return constraintSettings_;
+    }
+
 private:
     friend class ModelBuilder;
 
@@ -260,6 +316,12 @@ private:
     TendonElementLists tendonElements_;
     std::vector<std::string> elementName_;
     std::size_t tendonCount_ = 0;
+    std::vector<LoopClosure> closures_;
+    std::vector<UnilateralLimit> limits_;
+    std::vector<std::string> constraintName_;
+    std::size_t closureRowCount_ = 0;
+    std::size_t constraintWrenchCount_ = 0;
+    ConstraintSettings constraintSettings_{};
     bool elementsFollowTree_ = true;
     sub0math::Vec3<sub0math::f64::Acceleration> gravity_{};
     sub0math::SpatialMotiond baseAcceleration_{};

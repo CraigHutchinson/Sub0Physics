@@ -115,8 +115,13 @@ enum class ElementJacobians : std::uint8_t
                                                          std::span<double> x) noexcept;
 
 /**
- * Computes the generalized accelerations qdd = M^-1 (tau + tau_e - c), where tau_e is the model's force
- * elements.
+ * Computes the generalized accelerations qdd = M^-1 (tau + tau_e - c + J^T lambda), where tau_e is the model's
+ * force elements and lambda the forces of its constraints (docs/MULTIBODY.md section 6).
+ *
+ * Constraints act at acceleration level here: every loop closure (`J qdd + Jdot qd = 0`) and every limit that is
+ * engaged (gap within ConstraintSettings::eventTolerance) and not separating, as a small LCP. An impact needs an
+ * impulse, which only a step gives: the steppers solve constraints at velocity level instead. The forces are
+ * written to `constraintForce` in the model's constraint layout.
  *
  * Writes `qdd`, and on the way `massMatrix`, `massFactor`, `bias`, the kinematics and, when the model has
  * elements, their force, energy terms and site wrenches (not their Jacobians).
@@ -130,5 +135,46 @@ enum class ElementJacobians : std::uint8_t
  */
 [[nodiscard]] std::expected<void, Fault> forwardDynamics(const Model& model, const State& state,
                                                          std::span<const double> tau, Workspace& workspace) noexcept;
+
+/**
+ * Projects a state onto its model's constraints (docs/MULTIBODY.md section 6): positions onto the loop closures and
+ * the violated limits by Gauss-Newton in the mass metric, `dq = -M^-1 J^T (J M^-1 J^T)^-1 phi`, until the residual
+ * meets ConstraintSettings::closureTolerance; coordinate limits still violated are then set to their bound; and
+ * velocities onto the closures' tangent space. Use it to assemble a mechanism from an approximate configuration;
+ * the steppers project every accepted step themselves.
+ *
+ * The achieved residuals and iterations are written to `constraintReport`; the energy the projection changed is
+ * added to `state.projectionEnergy` (when ConstraintSettings::measureProjectionEnergy).
+ *
+ * @param model The model.
+ * @param state The state; projected in place only on success.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or a fault: InvalidInput for a workspace built for another model or a mis-sized state;
+ *         OutsideDomain when the tolerance is not met within ConstraintSettings::maxProjectionIterations, or a
+ *         distance limit's sites coincide.
+ */
+[[nodiscard]] std::expected<void, Fault> projectConstraints(const Model& model, State& state,
+                                                            Workspace& workspace) noexcept;
+
+/**
+ * Computes the joint reactions and constraint site loads at a state (docs/MULTIBODY.md section 7): the constrained
+ * accelerations from forwardDynamics, then a recursive Newton-Euler pass that includes every force: gravity, the
+ * applied forces, the elements (coordinate elements in their joints, tendons as wrenches at their sites) and the
+ * constraint forces (closures and distance limits as wrenches at their sites, coordinate limits in their joints).
+ * No force category is left out.
+ *
+ * Writes `jointReactions` (the wrench each joint transmits from the parent to its body, world axes, about the joint
+ * origin), `constraintSiteWrenches`, `constraintForce`, `qdd` and, through forwardDynamics, the element site
+ * wrenches. A joint reaction's projection on the joint's motion axis equals the applied, coordinate-element and
+ * coordinate-limit force on that coordinate.
+ *
+ * @param model The model.
+ * @param state Coordinates and rates.
+ * @param tau Applied generalized forces, dofCount entries; empty for none.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or the forwardDynamics fault.
+ */
+[[nodiscard]] std::expected<void, Fault> computeReactions(const Model& model, const State& state,
+                                                          std::span<const double> tau, Workspace& workspace) noexcept;
 
 } // namespace sub0physics::multibody

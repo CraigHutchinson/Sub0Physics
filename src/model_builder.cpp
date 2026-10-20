@@ -12,6 +12,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <sub0math/linear/mat.hpp>
@@ -302,6 +303,10 @@ std::expected<Model, Fault> ModelBuilder::build() const
     {
         return std::unexpected(compiled.error());
     }
+    if (auto compiled = compileConstraints(model); !compiled)
+    {
+        return std::unexpected(compiled.error());
+    }
 
     model.gravity_ = gravity_;
     model.baseAcceleration_ = {{}, {-gravity_.x.si(), -gravity_.y.si(), -gravity_.z.si()}};
@@ -443,6 +448,183 @@ std::expected<void, Fault> ModelBuilder::compileElements(Model& model) const
     }
     model.tendonCount_ = tendons;
     return {};
+}
+
+std::expected<void, Fault> ModelBuilder::compileConstraints(Model& model) const
+{
+    const ConstraintSettings& settings = constraintSettings_;
+    const auto positiveFinite = [](double v) { return std::isfinite(v) && v > 0.0; };
+    if (!positiveFinite(settings.closureTolerance) || !positiveFinite(settings.eventTolerance) ||
+        !positiveFinite(settings.solverTolerance) || !(settings.solverTolerance < 1e-3) ||
+        settings.maxEventIterations == 0U)
+    {
+        return invalidInput("constraint settings need positive finite tolerances (solver tolerance below 1e-3) and "
+                            "at least one event iteration");
+    }
+    model.constraintSettings_ = settings;
+    for (std::size_t i = 0; i < constraintNames_.size(); ++i)
+    {
+        if (constraintNames_[i].empty())
+        {
+            return invalidInput("constraint name is empty");
+        }
+        for (std::size_t j = 0; j < i; ++j)
+        {
+            if (constraintNames_[j] == constraintNames_[i])
+            {
+                return invalidInput("constraint name is not unique");
+            }
+        }
+    }
+    model.constraintName_ = constraintNames_;
+
+    const std::size_t sites = model.siteBody_.size();
+    // Two sites that the constraint can act between: resolved, and on different bodies (one may be the world).
+    const auto checkSites = [&](SiteId first, SiteId second) -> std::optional<Fault> {
+        if (first.value() >= sites || second.value() >= sites)
+        {
+            return Fault{FaultKind::InvalidInput, "constraint site is not a site of this model"};
+        }
+        if (model.siteBody_[first.value()] == model.siteBody_[second.value()])
+        {
+            return Fault{FaultKind::InvalidInput, "constraint sites must be on different bodies (or one on the world)"};
+        }
+        return std::nullopt;
+    };
+    const auto validRestitution = [](double e) { return std::isfinite(e) && e >= 0.0 && e <= 1.0; };
+
+    std::size_t rows = 0;
+    std::size_t wrenches = 0;
+    for (std::size_t i = 0; i < constraints_.size(); ++i)
+    {
+        const auto* closure = std::get_if<LoopClosureDescription>(&constraints_[i]);
+        if (closure == nullptr)
+        {
+            continue;
+        }
+        if (const auto fault = checkSites(closure->first, closure->second))
+        {
+            return std::unexpected(*fault);
+        }
+        if (closure->kind != ClosureKind::Point && closure->kind != ClosureKind::Frame)
+        {
+            return invalidInput("closure kind is not supported");
+        }
+        model.closures_.push_back({.id = ConstraintId{static_cast<std::uint32_t>(i)},
+                                   .first = closure->first,
+                                   .second = closure->second,
+                                   .kind = closure->kind,
+                                   .firstRow = rows,
+                                   .wrenchSlot = wrenches});
+        rows += model.closures_.back().rows();
+        wrenches += 2;
+    }
+    model.closureRowCount_ = rows;
+
+    for (std::size_t i = 0; i < constraints_.size(); ++i)
+    {
+        const ConstraintId id{static_cast<std::uint32_t>(i)};
+        if (const auto* limit = std::get_if<CoordinateLimitDescription>(&constraints_[i]))
+        {
+            const std::size_t n = model.parent_.size();
+            if (limit->body == WorldBody || limit->body.value() >= n)
+            {
+                return invalidInput("coordinate limit body is not a body of this model");
+            }
+            if (!limit->lower && !limit->upper)
+            {
+                return invalidInput("limit needs at least one bound");
+            }
+            if ((limit->lower && !std::isfinite(*limit->lower)) || (limit->upper && !std::isfinite(*limit->upper)) ||
+                (limit->lower && limit->upper && !(*limit->lower < *limit->upper)))
+            {
+                return invalidInput("limit bounds must be finite, with lower below upper");
+            }
+            if (!validRestitution(limit->restitution))
+            {
+                return invalidInput("limit restitution must be in [0, 1]");
+            }
+            const std::size_t coordinate = model.coordinate_[limit->body.value()];
+            const auto add = [&](double bound, double sign) {
+                model.limits_.push_back({.id = id,
+                                         .kind = LimitKind::Coordinate,
+                                         .coordinate = coordinate,
+                                         .first = {},
+                                         .second = {},
+                                         .bound = bound,
+                                         .sign = sign,
+                                         .restitution = limit->restitution,
+                                         .row = rows + model.limits_.size(),
+                                         .wrenchSlot = 0});
+            };
+            if (limit->lower)
+            {
+                add(*limit->lower, 1.0);
+            }
+            if (limit->upper)
+            {
+                add(*limit->upper, -1.0);
+            }
+        }
+        else if (const auto* distance = std::get_if<DistanceLimitDescription>(&constraints_[i]))
+        {
+            if (const auto fault = checkSites(distance->first, distance->second))
+            {
+                return std::unexpected(*fault);
+            }
+            if (!distance->minimum && !distance->maximum)
+            {
+                return invalidInput("limit needs at least one bound");
+            }
+            const double minimum = distance->minimum ? distance->minimum->si() : 0.0;
+            const double maximum = distance->maximum ? distance->maximum->si() : 0.0;
+            if ((distance->minimum && (!std::isfinite(minimum) || !(minimum > 0.0))) ||
+                (distance->maximum && (!std::isfinite(maximum) || !(maximum > 0.0))) ||
+                (distance->minimum && distance->maximum && !(minimum < maximum)))
+            {
+                return invalidInput("distance limit bounds must be finite and positive, with minimum below maximum");
+            }
+            if (!validRestitution(distance->restitution))
+            {
+                return invalidInput("limit restitution must be in [0, 1]");
+            }
+            const auto add = [&](double bound, double sign) {
+                model.limits_.push_back({.id = id,
+                                         .kind = LimitKind::Distance,
+                                         .coordinate = 0,
+                                         .first = distance->first,
+                                         .second = distance->second,
+                                         .bound = bound,
+                                         .sign = sign,
+                                         .restitution = distance->restitution,
+                                         .row = rows + model.limits_.size(),
+                                         .wrenchSlot = wrenches});
+                wrenches += 2;
+            };
+            if (distance->minimum)
+            {
+                add(minimum, 1.0);
+            }
+            if (distance->maximum)
+            {
+                add(maximum, -1.0);
+            }
+        }
+    }
+    model.constraintWrenchCount_ = wrenches;
+    return {};
+}
+
+std::optional<ConstraintId> Model::findConstraint(std::string_view name) const noexcept
+{
+    for (std::size_t i = 0; i < constraintName_.size(); ++i)
+    {
+        if (constraintName_[i] == name)
+        {
+            return ConstraintId{static_cast<std::uint32_t>(i)};
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<ElementId> Model::findElement(std::string_view name) const noexcept

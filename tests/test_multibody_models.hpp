@@ -3,6 +3,7 @@
 // Small multibody models shared by the multibody tests, the allocation gate and the benchmark.
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string>
 
@@ -134,6 +135,68 @@ inline Model planarTreeWithElements(const PlanarTreeElements& p = {})
         .sense = LawSense::Decreasing,
         .reference = metres(p.strutReference)});
     return *builder.build();
+}
+
+/** Geometry and masses of sliderCrank(). */
+struct SliderCrankSpec
+{
+    double crank = 0.1;       ///< Crank length a [m].
+    double rod = 0.3;         ///< Rod length b [m].
+    double crankMass = 1.0;   ///< [kg]
+    double rodMass = 0.5;     ///< [kg]
+    double sliderMass = 2.0;  ///< [kg]
+};
+
+/** Planar link along +x from its joint: centre of mass at (length / 2, 0, 0). */
+inline BodyDescription linkAlongX(std::string_view name, BodyId parent, const Pose& placement, double mass, double length)
+{
+    const double izz = mass * length * length / 12.0;
+    return {.name = name,
+            .mass = sub0math::kilograms(mass),
+            .centreOfMass = {metres(0.5 * length), metres(0.0), metres(0.0)},
+            .inertia = diagonalInertia(0.1 * izz + 1e-6, izz, izz),
+            .joint = {.type = JointType::Revolute, .parent = parent, .placement = placement, .axis = {0.0, 0.0, 1.0}}};
+}
+
+/**
+ * A planar slider-crank in the xy plane, gravity along -y: a crank (body 0) turning about z at the origin, a rod
+ * (body 1) pinned to the crank's tip, and a slider (body 2) moving along the world x axis. The loop is closed by a
+ * point closure between the rod's tip (site "rod tip") and the slider's origin (site "slider pin"); its z row is
+ * dependent. Coordinates: crank angle, rod angle relative to the crank, slider position.
+ */
+inline ModelBuilder sliderCrankBuilder(const SliderCrankSpec& spec = {})
+{
+    ModelBuilder builder;
+    builder.setGravity(gravityAlong(0.0, -9.81, 0.0));
+    const BodyId crank = builder.addBody(linkAlongX("crank", WorldBody, {}, spec.crankMass, spec.crank));
+    const BodyId rod = builder.addBody(linkAlongX("rod", crank, offset(spec.crank, 0.0, 0.0), spec.rodMass, spec.rod));
+    const double slider = 0.01 * spec.sliderMass;
+    const BodyId block = builder.addBody({.name = "slider",
+                                          .mass = sub0math::kilograms(spec.sliderMass),
+                                          .centreOfMass = {metres(0.0), metres(0.0), metres(0.0)},
+                                          .inertia = diagonalInertia(slider, slider, slider),
+                                          .joint = {.type = JointType::Prismatic, .axis = {1.0, 0.0, 0.0}}});
+    const SiteId tip = builder.addSite({.name = "rod tip", .body = rod, .frame = offset(spec.rod, 0.0, 0.0)});
+    const SiteId pin = builder.addSite({.name = "slider pin", .body = block, .frame = {}});
+    builder.addConstraint(LoopClosureDescription{.name = "loop", .first = tip, .second = pin});
+    return builder;
+}
+
+/**
+ * A state of sliderCrank() on the closure manifold: crank angle and rate, the rod and slider from the closed form.
+ *
+ * @param theta Crank angle [rad].
+ * @param rate Crank rate [rad/s].
+ */
+inline State sliderCrankState(const SliderCrankSpec& spec, double theta, double rate)
+{
+    const double a = spec.crank;
+    const double b = spec.rod;
+    const double phi = -std::asin(a * std::sin(theta) / b); // rod's world angle
+    const double phiRate = -a * std::cos(theta) * rate / (b * std::cos(phi));
+    const double x = a * std::cos(theta) + b * std::cos(phi);
+    const double xRate = -a * std::sin(theta) * rate - b * std::sin(phi) * phiRate;
+    return State::fromCoordinates({theta, phi - theta, x}, {rate, phiRate - rate, xRate});
 }
 
 } // namespace testmodels

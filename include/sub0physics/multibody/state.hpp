@@ -24,7 +24,10 @@ namespace sub0physics::multibody
  *
  * The run's energy flows are part of the state, so a snapshot restores them with the rest: every stepper
  * adds the energy its force elements dissipated and the work its applied forces did over each step, and
- * computeEnergy reports them in the EnergyAccount.
+ * computeEnergy reports them in the EnergyAccount. Impact losses at strict limits are dissipation and go to
+ * `dissipated`. The loop closures' impulse work and the projection's energy change are not physical flows (ideal
+ * constraints do no work): they are measured and kept apart, in `closureWork` and `projectionEnergy`, so a
+ * ledger's residual can be read against them.
  */
 struct State
 {
@@ -32,6 +35,8 @@ struct State
     std::uint64_t tick = 0;               ///< Index of the fixed step the state is at.
     sub0math::f64::Energy dissipated{};   ///< Energy the force elements dissipated since the run began.
     sub0math::f64::Energy externalWork{}; ///< Work the applied forces (Forcing) did since the run began.
+    sub0math::f64::Energy closureWork{};  ///< Work the loop closures' impulses did since the run began: zero for exact ideal constraints, so what is here is discretisation, reported apart from the balance.
+    sub0math::f64::Energy projectionEnergy{}; ///< Energy the projection onto the constraints changed since the run began (when measured), reported apart from the balance.
 
     /**
      * Makes the rest state of a model: every coordinate and rate zero, at tick zero.

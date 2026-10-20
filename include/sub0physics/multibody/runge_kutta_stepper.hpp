@@ -131,6 +131,11 @@ static_assert(OdeSystem<ModelOde, std::dynamic_extent>);
  * the applied forces' work `tau . (q1 - q0)` is exact for forces constant over the step. It is bound to the
  * model it was built for, like a Workspace, and allocates only at construction.
  *
+ * **Constraints.** Loop closures act at acceleration level in every stage (forwardDynamics), and each step ends
+ * with projectConstraints (positions and velocities, its energy change in `state.projectionEnergy`); the cached
+ * endpoint derivative is then dropped, so an RK4 step with closures costs 5 evaluations. Strict limits are refused
+ * (InvalidInput): an impact needs event location and an impulse, which the Euler steppers provide.
+ *
  * @tparam Method The tableau.
  */
 template<RungeKuttaMethod Method>
@@ -148,7 +153,7 @@ public:
      */
     RungeKuttaStepper(const Model& model, Workspace& workspace)
         : modelId_(model.id()), integrator_(2 * model.dofCount() + 1), ode_(model, workspace),
-          x_(2 * model.dofCount() + 1, 0.0)
+          x_(2 * model.dofCount() + 1, 0.0), candidate_(State::atRest(model))
     {
     }
 
@@ -175,6 +180,10 @@ public:
         {
             return invalidInput("tick differs from the state's tick");
         }
+        if (!model.limits().empty())
+        {
+            return invalidInput("the Runge-Kutta stepper does not support strict limits; use an Euler stepper");
+        }
         const auto changed = ode_.setForcing(forcing.tau);
         if (!changed)
         {
@@ -191,6 +200,20 @@ public:
         if (auto stepped = integrator_.stepTick(ode_, tick, h, x_); !stepped)
         {
             return stepped;
+        }
+        if (!model.closures().empty())
+        {
+            // Project onto the closures; the projected state is not the integrator's endpoint, so its cached
+            // derivative is dropped (one more evaluation per step).
+            std::copy_n(x_.begin(), 2 * n, candidate_.values.begin());
+            candidate_.projectionEnergy = state.projectionEnergy;
+            integrator_.invalidate();
+            if (auto projected = projectConstraints(model, candidate_, workspace); !projected)
+            {
+                return projected;
+            }
+            std::copy_n(candidate_.values.begin(), 2 * n, x_.begin());
+            state.projectionEnergy = candidate_.projectionEnergy;
         }
         double work = 0.0;
         for (std::size_t i = 0; i < forcing.tau.size(); ++i)
@@ -209,6 +232,7 @@ private:
     ExplicitRungeKutta<std::dynamic_extent, Method> integrator_;
     ModelOde ode_;
     std::vector<double> x_; // [q; qd; dissipated]
+    State candidate_;       // the endpoint being projected onto the closures
 };
 
 /** Classic RK4 on a model: the reference stepper. */

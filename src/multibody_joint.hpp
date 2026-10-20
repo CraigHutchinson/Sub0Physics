@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <expected>
+#include <span>
 
 #include <sub0math/config.hpp>
 #include <sub0math/linear/mat.hpp>
@@ -15,6 +16,7 @@
 #include "sub0physics/fault.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/state.hpp"
+#include "sub0physics/multibody/stepper.hpp"
 #include "sub0physics/multibody/workspace.hpp"
 
 // Joint transforms shared by the kinematics and dynamics translation units.
@@ -151,5 +153,41 @@ SUB0MATH_FORCE_INLINE void composeWorldTransforms(const Model& model, Workspace&
 [[nodiscard]] std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const State& state,
                                                                    Workspace& ws, bool jacobians,
                                                                    bool geometricStiffness = true) noexcept;
+
+// The pieces of a step that the constraint solver (multibody_constraints.cpp) shares with the steppers
+// (multibody_dynamics.cpp), so the formulas exist once.
+
+// Transforms, velocities, world transforms, bias forces (RNEA at zero qdd, so bodyAcceleration holds the bias and
+// gravity), the mass matrix and the elements, with Jacobians when asked.
+[[nodiscard]] std::expected<void, Fault> prepareStepDynamics(const Model& model, const State& state, Workspace& ws,
+                                                             bool elementJacobians) noexcept;
+
+// Forms and factorises the step matrix (M - h D - h^2 K~ when implicit, else M) and its right-hand side
+// h (tau + tau_e - c [+ h K~ qd]) in implicitRhs. Returns whether the factor is dense.
+[[nodiscard]] std::expected<bool, Fault> formStepMatrix(const Model& model, const State& state,
+                                                        std::span<const double> tau, const double* elementForce,
+                                                        Workspace& ws, double dt, bool implicit,
+                                                        bool allowFallback) noexcept;
+
+// x := A^-1 x with the factor from formStepMatrix.
+void solveStepMatrix(const Model& model, const Workspace& ws, bool dense, double* x) noexcept;
+
+// x := M^-1 x with massFactor.
+void solveMassFactor(const Model& model, const Workspace& ws, double* x) noexcept;
+
+// RNEA with accelerations and external body wrenches (body frame): bodyForce ends as each joint's transmitted wrench,
+// tau as its generalized force. Updates the transforms, velocities and world transforms.
+void transmittedForces(const Model& model, const State& state, const double* qdd, double* tau,
+                       const sub0math::SpatialForced* external, Workspace& ws) noexcept;
+
+// The constrained step (multibody_constraints.cpp): semi-implicit (implicit = false) or linearly implicit Euler with
+// the model's closures and limits. The caller has checked the inputs.
+[[nodiscard]] std::expected<void, Fault> stepConstrained(const Model& model, const Forcing& forcing, double dt,
+                                                         State& state, Workspace& ws, bool implicit) noexcept;
+
+// Adds the constraint forces to the free accelerations in ws.qdd (acceleration level, closures and engaged limits),
+// after forwardDynamics' free solve: massFactor, bias accelerations and kinematics at `state` in the workspace.
+[[nodiscard]] std::expected<void, Fault> constrainAccelerations(const Model& model, const State& state,
+                                                                Workspace& ws) noexcept;
 
 } // namespace sub0physics::multibody::detail

@@ -12,11 +12,67 @@
 #include <sub0math/linear/vec.hpp>
 #include <sub0math/units/quantities.hpp>
 
+#include "sub0physics/multibody/constraint.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 #include "sub0physics/multibody/model.hpp"
+#include "sub0physics/multibody/state.hpp"
 
 namespace sub0physics::multibody
 {
+
+/**
+ * Preallocated scratch of the constraint solver, sized from the model's constraint layout. Internal; read the
+ * results from Workspace::constraintReport, constraintImpulse and constraintForce.
+ */
+struct ConstraintScratch
+{
+    /**
+     * Sizes the scratch.
+     *
+     * @param dof Degrees of freedom.
+     * @param rows Rows of the constraint layout (closure rows plus one per one-sided limit).
+     * @param limits One-sided limits.
+     * @param model The model, for the scratch states.
+     */
+    ConstraintScratch(std::size_t dof, std::size_t rows, std::size_t limits, const Model& model)
+        : jacobian(rows * dof, 0.0), solved(rows * dof, 0.0), delassus(rows * rows, 0.0), factor(rows * rows, 0.0),
+          rhs(rows, 0.0), target(rows, 0.0), impulse(rows, 0.0), slack(rows, 0.0), residual(rows, 0.0), bias(rows, 0.0),
+          vector(rows, 0.0), stepJacobian(rows * dof, 0.0), stepLayoutRow(rows, 0), layoutRow(rows, 0), subset(rows, 0),
+          permutation(rows, 0), active(rows, 0), gap(limits, 0.0),
+          engaged(limits, 0), elementForce(dof, 0.0), velocity(dof, 0.0), bodyExternal(dof), start(State::atRest(model)),
+          trial(State::atRest(model))
+    {
+    }
+
+    std::vector<double> jacobian;     ///< rows x dof, row-major, the assembled rows.
+    std::vector<double> solved;       ///< rows x dof: `A^-1 J^T`, stored by row.
+    std::vector<double> delassus;     ///< rows x rows: `J A^-1 J^T`.
+    std::vector<double> factor;       ///< rows x rows: the pivoted factor.
+    std::vector<double> rhs;          ///< rows.
+    std::vector<double> target;       ///< rows.
+    std::vector<double> impulse;      ///< rows.
+    std::vector<double> slack;        ///< rows.
+    std::vector<double> residual;     ///< rows.
+    std::vector<double> bias;         ///< rows: `Jdot qd`.
+    std::vector<double> vector;       ///< rows.
+    std::vector<double> stepJacobian; ///< rows x dof: the rows at the sub-step's start.
+    std::vector<std::size_t> stepLayoutRow; ///< rows: the layout row of each row at the sub-step's start.
+    std::vector<std::size_t> layoutRow;  ///< rows: the layout row of each assembled row.
+    std::vector<std::size_t> subset;     ///< rows: the rows of the LCP's active set.
+    std::vector<std::size_t> permutation; ///< rows.
+    std::vector<std::uint8_t> active;     ///< rows: assembled rows in the LCP's active set.
+    std::vector<double> gap;          ///< limits: gap at the current state.
+    std::vector<std::uint8_t> engaged; ///< limits: engaged at the sub-step's start.
+    std::vector<double> elementForce; ///< dof: the elements' force at the sub-step's start.
+    std::vector<double> velocity;     ///< dof.
+    std::vector<sub0math::SpatialForced> bodyExternal; ///< dof: external wrenches on each body, body frame.
+    State start;     ///< The sub-step's start.
+    State trial;     ///< A trial end of the sub-step.
+    double startDissipationPower = 0.0; ///< Elements' dissipation power at the sub-step's start [W].
+    std::size_t stepRows = 0;           ///< Rows at the sub-step's start.
+    std::size_t stepBilateral = 0;      ///< Of which closure rows (the first ones).
+};
+
 
 /**
  * Preallocated scratch and results for one model's kinematics and dynamics.
@@ -58,7 +114,12 @@ struct Workspace
           implicitMatrix(dof * dof, 0.0),
           implicitRhs(dof, 0.0),
           elementVectors(3 * dof),
-          elementScalars(dof * (dof + 2), 0.0)
+          elementScalars(dof * (dof + 2), 0.0),
+          constraintImpulse(model.constraintRowCount(), 0.0),
+          constraintForce(model.constraintRowCount(), 0.0),
+          constraintSiteWrenches(model.constraintWrenchCount()),
+          jointReactions(model.bodyCount()),
+          constraintScratch(dof, model.constraintRowCount(), model.limits().size(), model)
     {
     }
 
@@ -108,6 +169,15 @@ struct Workspace
     // Scratch for the tendon geometry.
     std::vector<sub0math::Vec3d> elementVectors; ///< 3 dofCount vectors.
     std::vector<double> elementScalars;          ///< dofCount (dofCount + 2) values.
+
+    // Constraints (docs/MULTIBODY.md section 6), in the model's constraint layout (Model::constraintRowCount):
+    // every closure's rows, then one row per one-sided limit.
+    std::vector<double> constraintImpulse; ///< Impulse of each row over the last step [N s or N m s], summed over its sub-steps; closure rows in world axes, limit rows along the gap (never negative).
+    std::vector<double> constraintForce;   ///< Force of each row from the last forwardDynamics or computeReactions [N or N m]: the acceleration-level solve.
+    std::vector<ConstraintSiteWrench> constraintSiteWrenches; ///< From computeReactions: two per closure and per distance limit (first site, then second).
+    std::vector<JointReaction> jointReactions; ///< From computeReactions: the wrench each joint transmits to its body.
+    ConstraintReport constraintReport{};    ///< What the last step or projection achieved against the requested targets.
+    ConstraintScratch constraintScratch;    ///< Solver scratch; internal.
 };
 
 } // namespace sub0physics::multibody

@@ -117,3 +117,36 @@ TEST_CASE("Stepping with force elements (implicit Euler, semi-implicit Euler, RK
     CHECK(allocations.load() - start == 0U);
     CHECK(std::isfinite(energy.balance().si()));
 }
+
+TEST_CASE("Constrained stepping (closures, limits, split steps), projection and reactions never allocate")
+{
+    // A slider-crank with a hard stop on the slider: closures, an LCP row and event location in one run.
+    sub0physics::multibody::ModelBuilder builder = testmodels::sliderCrankBuilder();
+    const State start = testmodels::sliderCrankState({}, 0.7, 6.0);
+    builder.addConstraint(CoordinateLimitDescription{.name = "stop", .body = BodyId{2}, .upper = start.q()[2] + 0.002,
+                                                     .restitution = 0.3});
+    const Model model = *builder.build();
+    const Model closed = *testmodels::sliderCrankBuilder().build();
+    Workspace ws(model);
+    Workspace closedWs(closed);
+    Rk4Stepper rk4(closed, closedWs);
+    State s = start;
+    State c = start;
+    std::vector<double> tau(model.dofCount(), 0.0);
+    tau[0] = 0.3;
+    std::size_t splits = 0;
+
+    const std::size_t before = allocations.load();
+    for (int k = 0; k < 500; ++k)
+    {
+        REQUIRE(stepLinearlyImplicitEuler(model, {tau}, s.tick, sub0math::seconds(1e-3), s, ws));
+        splits += ws.constraintReport.substeps > 1U ? 1U : 0U;
+        REQUIRE(stepSemiImplicitEuler(model, {tau}, s.tick, sub0math::seconds(1e-3), s, ws));
+        splits += ws.constraintReport.substeps > 1U ? 1U : 0U;
+        REQUIRE(rk4.step(closed, {tau}, c.tick, sub0math::seconds(1e-3), c, closedWs));
+    }
+    REQUIRE(projectConstraints(model, s, ws));
+    REQUIRE(computeReactions(model, s, tau, ws));
+    CHECK(allocations.load() - before == 0U);
+    CHECK(splits > 0U);
+}
