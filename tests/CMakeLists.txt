@@ -11,6 +11,7 @@ add_executable(Sub0Physics_Tests
     test_damped_oscillator.cpp
     test_elements.cpp
     test_energy_ledger.cpp
+    test_extruded_profile.cpp
     test_error_statistics.cpp
     test_fidelity_selector.cpp
     test_id.cpp

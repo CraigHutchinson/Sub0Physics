@@ -6,3 +6,4 @@
 #include "sub0physics/terrain/column_extract.hpp"
 #include "sub0physics/terrain/height_extract.hpp"
 #include "sub0physics/terrain/source_tile_cache.hpp"
+#include "sub0physics/terrain/feature.hpp"
