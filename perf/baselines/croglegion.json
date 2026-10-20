@@ -18,14 +18,14 @@
       "rounds": 5
     },
     "Midpoint step, contact oscillator": {
-      "median_ns": 18.91,
-      "cv": 0.0208,
-      "rounds": 5
+      "median_ns": 18.562,
+      "cv": 0.0503,
+      "rounds": 7
     },
     "Rk4 step, contact oscillator": {
-      "median_ns": 33.687,
-      "cv": 0.0245,
-      "rounds": 5
+      "median_ns": 33.005,
+      "cv": 0.0948,
+      "rounds": 7
     },
     "Surface height, 2048-point profile": {
       "median_ns": 6.843,
@@ -47,6 +47,14 @@
     "page height x1024, HeightPage::heightAt": {
       "reference": "page height x1024, hand-written raw arrays",
       "ratio": 1.0737
+    },
+    "Rk4 step, contact oscillator": {
+      "reference": "Rk4 step, contact oscillator, hand-written",
+      "ratio": 1.1136
+    },
+    "Midpoint step, contact oscillator": {
+      "reference": "Midpoint step, contact oscillator, hand-written",
+      "ratio": 1.2704
     }
   },
   "accepted": [
@@ -55,6 +63,31 @@
       "commit": "68b6007a447776fe6cbeb9ac33a994ce0a151672",
       "reason": "nanobench 4.3.11 -> 4.6.0 (via Sub0Math a0dee34): every benchmark re-measured under the new harness",
       "benchmarks": "all (re-recorded)"
+    },
+    {
+      "date": "2026-10-20",
+      "commit": "761298be7ef19b7698938c9bf687cc772097c2b1",
+      "reason": "Local-stage RK step reverted (761298b): it made consumer stations 1.7x slower (loaded-wheel adaptive drop 116 -> 202 us, A/B); the oscillator pairs are an Open gap again",
+      "benchmarks": {
+        "Rk4 step, contact oscillator": {
+          "from_ns": 33.687,
+          "to_ns": 33.005,
+          "change": -0.0202,
+          "pair_ratio": {
+            "from": null,
+            "to": 1.1136
+          }
+        },
+        "Midpoint step, contact oscillator": {
+          "from_ns": 18.91,
+          "to_ns": 18.562,
+          "change": -0.0184,
+          "pair_ratio": {
+            "from": null,
+            "to": 1.2704
+          }
+        }
+      }
     }
   ]
 }
