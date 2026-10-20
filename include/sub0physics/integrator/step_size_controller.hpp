@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -109,6 +110,50 @@ struct NoEvent
 {
 };
 
+namespace detail
+{
+
+// What an event function returns: one value, or an array of them (several switches).
+template<typename Event, std::size_t N>
+struct EventValueOf
+{
+    using type = std::remove_cvref_t<decltype(std::declval<Event&>()(0.0, std::declval<const StateVector<N>&>()))>;
+};
+
+template<std::size_t N>
+struct EventValueOf<NoEvent, N>
+{
+    using type = double;
+};
+
+// Fraction of the step at which the value changes sign (secant), or -1 without a change.
+[[nodiscard]] inline double crossingFraction(double start, double end) noexcept
+{
+    if ((start > 0.0) == (end > 0.0) || start == end)
+    {
+        return -1.0;
+    }
+    return std::clamp(start / (start - end), 0.0, 1.0);
+}
+
+// The earliest sign change over several event functions.
+template<std::size_t M>
+[[nodiscard]] double crossingFraction(const std::array<double, M>& start, const std::array<double, M>& end) noexcept
+{
+    double earliest = -1.0;
+    for (std::size_t i = 0; i < M; ++i)
+    {
+        const double f = crossingFraction(start[i], end[i]);
+        if (f >= 0.0 && (earliest < 0.0 || f < earliest))
+        {
+            earliest = f;
+        }
+    }
+    return earliest;
+}
+
+} // namespace detail
+
 /**
  * A stepper that proposes a step with an error estimate and commits it on request: EmbeddedRungeKutta and
  * LinearlyImplicitEuler.
@@ -136,7 +181,8 @@ concept ErrorEstimatingStepper = requires(T& stepper, S& system, double t, doubl
  * changing branch): the derivative has a kink there, and a step across it loses the method's order however small
  * its estimate. With an event function `g(t, x)` whose sign marks the branch, a step whose end has the other sign
  * is retried to end just past the zero (secant on the step length), until the zero lies within `eventTolerance` of
- * the step's end, so every step integrates one smooth branch and the switch is located to that time.
+ * the step's end, so every step integrates one smooth branch and the switch is located to that time. An event
+ * function may return a `std::array<double, M>` for several switches; the earliest crossing in a step decides.
  *
  * Decisions depend only on the state, the configuration and the times, so the result is deterministic.
  *
@@ -153,7 +199,7 @@ concept ErrorEstimatingStepper = requires(T& stepper, S& system, double t, doubl
  * @param onAccepted Called as `onAccepted(t, x)` after each accepted sub-step (`std::expected<void, Fault>`); a
  *        fault stops the advance and is returned.
  * @param stoppedAt Receives the time of the last accepted state.
- * @param event `double event(double t, const StateVector<N>& x)`, or NoEvent.
+ * @param event `double event(double t, const StateVector<N>& x)` (or returning `std::array<double, M>`), or NoEvent.
  * @param eventTolerance Time within which an event is located, s.
  * @return Nothing, or the first fault.
  */
@@ -170,7 +216,8 @@ template<std::size_t N, typename Stepper, typename S, typename OnAccepted, typen
     constexpr bool HasEvent = !std::is_same_v<std::remove_cvref_t<Event>, NoEvent>;
     double t = t0;
     stoppedAt = t0;
-    double eventAtStart = 0.0;
+    using EventValue = typename detail::EventValueOf<std::remove_cvref_t<Event>, N>::type;
+    EventValue eventAtStart{};
     if constexpr (HasEvent)
     {
         eventAtStart = event(t, std::as_const(x));
@@ -201,14 +248,14 @@ template<std::size_t N, typename Stepper, typename S, typename OnAccepted, typen
         }
         if (attempted && (ratio <= 1.0 || atMinimum))
         {
-            double eventAtEnd = 0.0;
+            EventValue eventAtEnd{};
             if constexpr (HasEvent)
             {
                 eventAtEnd = event(end, stepper.proposal());
-                const bool crosses = (eventAtStart > 0.0) != (eventAtEnd > 0.0);
-                if (crosses && step > eventTolerance && eventAtStart != eventAtEnd)
+                const double fraction = detail::crossingFraction(eventAtStart, eventAtEnd);
+                if (fraction >= 0.0 && step > eventTolerance)
                 {
-                    const double crossing = step * std::clamp(eventAtStart / (eventAtStart - eventAtEnd), 0.0, 1.0);
+                    const double crossing = step * fraction;
                     const double retry = crossing + 0.5 * eventTolerance;
                     if (step - crossing > eventTolerance && retry < step)
                     {
