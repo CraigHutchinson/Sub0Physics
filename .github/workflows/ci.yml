@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: CraigHutchinson/Sub0Math
-          ref: fae1f18bb316ba47cc7154be88636bb67a2cfaae  # shared Sub0Math tooling; keep equal to upstream-drift.yml
+          ref: 924289212d30e2a3abc8246dac4e1946ba986e94  # shared Sub0Math tooling; keep equal to upstream-drift.yml
           path: .sub0math
           sparse-checkout: tools/provenance
       - name: Check ported commit and blobs
