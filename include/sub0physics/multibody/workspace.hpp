@@ -94,7 +94,7 @@ struct Workspace
 
     // Force elements (evaluateElements): sums over every element of the model at the last evaluated state.
     std::vector<double> elementForce;     ///< Generalized force tau of the elements [N or N m].
-    std::vector<double> elementStiffness; ///< dtau/dq, row-major; exact (not symmetric for a damped tendon); written only when Jacobians are asked for.
+    std::vector<double> elementStiffness; ///< dtau/dq, row-major; exact (not symmetric for a damped tendon); written only when Jacobians are asked for; the material part only after an implicit step's fallback (geometricStiffnessDropped).
     std::vector<double> elementDamping;   ///< dtau/dqd, row-major, symmetric; written only when Jacobians are asked for.
     double elementPotential = 0.0;        ///< Stored energy of the elements [J].
     double elementDissipationPower = 0.0; ///< Power the elements remove [W]; never negative.

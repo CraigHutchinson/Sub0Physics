@@ -1,6 +1,6 @@
 # Multibody core (design, step M1 of ADR 0003)
 
-- **Status:** Design for implementation (2026-10-19)
+- **Status:** M1a and M1b landed (2026-10-20); M1c next
 - **Decision:** [ADR 0003](https://github.com/CraigHutchinson/.github/blob/main/docs/decisions/0003-dynamics-engine.md).
   Sub0Physics owns the dynamics core; MuJoCo 3.16.0 is a test-only reference.
 
@@ -307,6 +307,77 @@ M1b builds on these contracts, which a cross-repository review fixed before more
   flattened, it is back at or below the old time.
 - Revolute joints about the z axis take a short branch of the joint transform (about 4% on CRBA and forward
   dynamics); the CRBA/forward-dynamics gap is otherwise unchanged (docs/PERFORMANCE.md).
+
+### M1b status (2026-10-20)
+
+**Landed** (the M1b gate, section 9):
+
+- **Elements** (`multibody/force_element.hpp`): `CoordinateElementDescription<Law>` (a law on one joint coordinate,
+  optional reference, defaulting to the joint's `springReference`, and a `LawSense`) and
+  `TendonElementDescription<Law>` (a law on the distance between two sites, with a reference length and a sense:
+  extension or compression). `ModelBuilder::addElement` collects them and `build` compiles and validates them
+  (`std::expected`): resolved bodies and sites, a law on a length for a prismatic joint or a tendon and a law on an
+  angle for a revolute joint, finite references, unique names. `evaluateElements` writes into the `Workspace`
+  without allocating: `elementForce`, `elementStiffness` (dtau/dq) and `elementDamping` (dtau/dqd) as dense
+  `n x n` sums, `elementPotential`, `elementDissipationPower` and two `ElementSiteWrench` per tendon. The
+  `ForceElement` concept is satisfied by `CoordinateElement<L>` and `TendonElement<L>`; the laws are a closed
+  compile-time list (`CoordinateLaws`, `TendonLaws`), so evaluation is a fixed-order loop over typed vectors with no
+  virtual dispatch, and the law's formula exists only in the law.
+- **Tendon Jacobians, exact:** `dtau/dq = J_l^T (dF/dl) J_l + F d2l/dq2 + J_l^T (dF/dl') (d2l/dq2 qd)^T`, the
+  material, geometric and rate-transport terms; `d2l/dq2` comes from the site Hessians (`dJ_k/dq_j = w_j x J_k`
+  for a revolute ancestor j). Checked against central differences on a 6-DOF spatial tree with skew axes, rotated
+  placements, a world anchor and every law (largest error 1.3e-11 of the largest entry for dtau/dq, 8e-10 for
+  dtau/dqd), against the closed form of a pendulum anchored to the world (1e-12), against `-dV/dq` at rest rates, and
+  for a pure preload, where the whole stiffness is geometric (an implementation without the term would report
+  zero). Site wrenches reproduce `tau_e` through the site Jacobians to 1e-12.
+- **Energy:** `State` carries `dissipated` and `externalWork`; every stepper adds the elements' dissipated energy and
+  the applied forces' work `tau . (q1 - q0)`; `computeEnergy` adds the elements' potential and reports the flows, so
+  an `EnergyLedger` fed its accounts closes over a run. Over 1 s of the 10-DOF tree with both elements and applied
+  forces the relative residual is 1.2e-7 for RK4 at 1 ms, and 1.9e-3, 1.0e-3, 5.4e-4 for implicit Euler at 2, 1 and
+  0.5 ms (order 0.93): the residual is implicit Euler's own numerical damping.
+- **`stepLinearlyImplicitEuler` / `LinearlyImplicitEuler`** (`multibody/implicit_euler.hpp`):
+  `(M - h D - h^2 K~) dqd = h (tau + tau_e - c + h K~ qd)`, then `qd += dqd`, `q += h qd`. Gate evidence: a 1 kg
+  slider on 1e6 N/m at h = 10 ms (h omega = 10) is stable and its balance never rises, while `Rk4Stepper` reaches
+  1e12 J within 100 steps; the 10-DOF tree with a 1e6 N/m strut between branches and a 1e6 N/m cart spring at
+  h = 5 ms is stable while RK4 diverges; the step matches the exact backward-Euler map of a linear oscillator to
+  1e-12 and an independently assembled and solved system on both factorisation paths to 1e-11; measured order
+  1.16, 1.10, 1.05 for h = 2 to 0.25 ms against an RK4 reference (10-DOF tree with elements, 0.5 s).
+- **Allocation gate:** implicit Euler (dense and tree paths), semi-implicit Euler and RK4 with elements, element
+  evaluation and energy allocate nothing (`Sub0Physics_MultibodyAllocationTests`).
+
+**Deviations and decisions:**
+
+- **`Forcing` stays the external input** (`tau`). The elements belong to the `Model`, so every stepper,
+  `forwardDynamics` (`qdd = M^-1 (tau + tau_e - c)`), `inverseDynamics` (`tau = M qdd + c - tau_e`, its inverse) and
+  `computeEnergy` include them without being told; that is how the steppers "include element forces". Prescribed
+  external wrenches at sites (section 4) are not in M1b.
+- **`LinearSpringDamper<Coordinate>`** is a new law: the coordinate spring-damper of section 4 on a length or an angle
+  (the other laws are on lengths, and a revolute joint needs a law on an angle). The joint's `springReference`
+  is its default reference.
+- **Sites may be fixed to the world** (`SiteDescription::body = WorldBody`), for tendon anchors; `computeSiteKinematics`
+  and `computeSiteJacobian` report them as fixed.
+- **Dense `n x n` accumulation**, not per-element blocks: the implicit step needs the dense matrix anyway, and
+  zeroing two 40 x 40 matrices costs 90 ns against a 9.4 us implicit step on a 40-DOF tree with two tendons (one-off
+  measurement, docs/PERFORMANCE.md). An element adds only on its support.
+- **The step uses the symmetric part of K.** K is exact in the workspace (the rate-transport term of a damped tendon
+  is not symmetric); the step is a W-method, which keeps first order with any Jacobian, so the symmetric part costs
+  no accuracy and allows a symmetric factorisation.
+- **Factorisation:** while every tendon's ends lie on one chain (`Model::elementsFollowTree`) the matrix keeps the
+  tree sparsity and Featherstone's LTDL factorises it with no fill-in; a tendon between branches couples them and a
+  dense `LDL^T` is used (n <= 40). No pivoting: the matrix is symmetric positive definite whenever it is
+  factorised.
+- **Indefinite K:** every law here is passive (`dForceDPosition <= 0`, `dForceDVelocity <= 0`), so
+  `M - h D - h^2 K_material` is positive definite. The geometric term (a compressed strut softens transverse motion)
+  can make the matrix indefinite when the instability it describes is faster than `1/h`; the step then falls back to
+  the material stiffness only (`Workspace::geometricStiffnessDropped`), keeping stiff elements implicit, and faults
+  only if that fails. Dropping all of K (the first design) made a stiff strut explicit and diverged.
+- **Dissipation is integrated with the power at the start of the step** (left rectangle, first order like the
+  step). Starting from rest it telescopes to at most the true discrete dissipation of backward Euler, so the balance
+  never rises above its start on a linear system (tested); RK integrates the dissipated energy as one more state, to
+  its own order. `ModelOde` accepts `[q; qd]` or `[q; qd; E]`.
+- **Common prismatic ancestors are dropped from a tendon's support:** they move both ends equally and change no
+  entry (1.4x on the element evaluation).
+- **M is not differentiated** (as in MuJoCo's `implicitfast`): the step is implicit in the elements only.
 
 ## 10. Open questions, to be answered by measurement
 

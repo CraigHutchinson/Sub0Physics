@@ -14,7 +14,8 @@ These are deterministic, so they block in CI:
 | Gate | Test | Contract |
 |---|---|---|
 | No allocation while stepping | `Sub0Physics_AllocationTests` | RK4/midpoint steps, recording, ledgers, statistics, selection and the closed form allocate nothing; clearance queries (both overloads), every `PreparedProfile` query and the bounded periodic chain solve (once the solution has capacity) allocate nothing |
-| No allocation in multibody dynamics | `Sub0Physics_MultibodyAllocationTests` | Semi-implicit Euler and `Rk4Stepper` steps (with changing forcing), inverse dynamics, site kinematics and Jacobians, and energy on a 10-DOF tree allocate nothing once the `Workspace` exists |
+| No allocation in multibody dynamics | `Sub0Physics_MultibodyAllocationTests` | Semi-implicit Euler and `Rk4Stepper` steps (with changing forcing), inverse dynamics, site kinematics and Jacobians, and energy on a 10-DOF tree allocate nothing once the `Workspace` exists; with force elements, linearly implicit Euler (dense and tree factorisation), semi-implicit Euler, RK4, `evaluateElements` and energy allocate nothing |
+| Implicit stepping gate (M1b) | `test_multibody_elements.cpp` | Element Jacobians match central differences; stiff spring-damper stable at a step where RK4 diverges; energy ledger bounded; implicit Euler observed order 1 |
 | Evaluation count | `test_integrators.cpp` | Tick stepping costs exactly one evaluation per stage: 4 per RK4 step after the first |
 | Convergence order | `test_integrators.cpp` | RK4 observes order 4, midpoint order 2; a slower method that is "faster" is not a win |
 | Header self-containment | `Sub0Physics_HeaderCheck` | Every public header compiles alone |
@@ -45,14 +46,17 @@ factors out, and each is the twin of one library call:
 | `planar tree 10-DOF mass matrix, hand-written planar` | `computeMassMatrix` |
 | `planar tree 10-DOF LTDL factor and solve, hand-written` | `factorMassMatrix` + `solveMassMatrix` |
 | `planar tree 10-DOF forward dynamics, hand-written planar` | `forwardDynamics` |
+| `planar tree 10-DOF implicit Euler step, 2 elements, hand-written planar` | `stepLinearlyImplicitEuler` (the tree with a cart spring-damper and a preloaded strut between two branches; state, dissipated energy and external work checked against the library before timing) |
+| `planar tree 10-DOF elements with Jacobians, hand-written planar` | `evaluateElements` with Jacobians (world poses included on both sides) |
+| `Rk4 step, contact oscillator, hand-written` | `Rk4<2>::stepTick` on the contact oscillator (raw doubles, the law inline, the endpoint derivative kept; non-finite endpoints refused; trajectory checked against the library) |
+| `Midpoint step, contact oscillator, hand-written` | `Midpoint<2>::stepTick`, the same way |
 
 **Pairs judged by ratio.** Each row above is a pair. The ratio of library to reference is what the gate
 and the Open gaps table track, because it does not depend on the host. A reference weakened to look
 better is a defect: iterate, reshape the API, or record the gap under Open gaps (Sub0Math's rule).
 
-The remaining benchmarks (`Rk4` and `Midpoint` steps, the single-query circle clearance, surface height, the
-closed form, `corridor create` and `corridor rasterise`) have no hand-written twin, so they are judged against
-the host's baseline only.
+The remaining benchmarks (the single-query circle clearance, surface height, the closed form, `corridor create`
+and `corridor rasterise`) have no hand-written twin, so they are judged against the host's baseline only.
 
 ## Profiling
 
@@ -122,6 +126,10 @@ Rules that keep hot code fast and analysable:
 | 2026-10-20 | Revolute joints about z paid the general Rodrigues products | Pairs `planar tree 10-DOF ...` | Short branch for an axis of (0, 0, ±1): about 4% on mass matrix and forward dynamics; one pose pipeline (D6) does not touch the dynamics path |
 | 2026-10-20 | Wave 5 (D12): `PreparedProfile` and the chain solver moved here. The recorded clearance gap (1.9x to 2.0x) did not reproduce | GCC 16, MinGW, five interleaved rounds each: unprepared `measureCircleClearance` 0.89x to 0.94x of the twin before and 0.94x to 0.96x after (unchanged code; the earlier gap predates Sub0Math's force-inlined `closestPoint`); prepared overload 0.85x to 0.90x (79 to 82 vs 90 to 93 us per 256 queries); chain solve 0.89x to 0.95x | Prepared clearance kept: window from the centre segment, four minima. A reciprocal squared length was another 10% faster (74 vs 82 us) but changes the last bit of distance and of the projection parameter, so it was not taken (docs/TERRAIN.md Exactness). The clearance gap row is removed; no gap remains |
 
+| 2026-10-20 | M1b: the fixed-size RK step lost about 4 ns to its twins (`Rk4 step` 1.04x to 1.19x, `Midpoint step` 1.29x to 1.32x by minimum, GCC 16): the stages were members, so each step stored the endpoint and its derivative as two scalars and copied them on as 16-byte loads, which cannot be store-forwarded | Disassembly of the flattened step (`movsd` pairs then `movdqu` of the same 16 bytes); pairs over 7 interleaved rounds | The fixed size keeps its stages local to the step and commits from them; the dynamic size is unchanged. `Rk4 step` 0.97x (26.1 vs 26.7 ns min), `Midpoint step` 0.96x to 1.01x (12.8 vs 12.7 ns); 31.4 to 26.1 and 17.1 to 12.8 ns absolute. Removing the cache-state compare measured no change, so the cache contract stays |
+| 2026-10-20 | M1b element evaluation (the 10-DOF tree's cart spring and branch-coupling strut, Jacobians included) first measured 2.6x its twin (281 vs 108 ns min) | Pair `planar tree 10-DOF elements with Jacobians` | The site-Hessian term as a triple product with a precomputed `u x w` per joint, and the tendon's support without prismatic joints that carry both ends (they change no entry): 190 ns, 2.0x. The rest is the 3D joint transforms (see Open gaps) |
+| 2026-10-20 | Element Jacobians as dense `n x n` sums, or per-element blocks | One-off measurement, a 40-DOF tree (cart and three 13-link branches) with two branch-coupling tendons: zeroing the two 40 x 40 matrices 87 to 94 ns, `evaluateElements` with Jacobians 3.1 us, forward dynamics 4.1 to 4.3 us, the implicit step 8.8 to 9.9 us | Dense sums: the clearing is 1% of the step, an element still writes only its support, and the step needs the dense matrix anyway; blocks would add a scatter pass. Decision recorded in docs/MULTIBODY.md (M1b status) |
+
 ## Open gaps
 
 Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANCE.md`).
@@ -129,4 +137,7 @@ Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANC
 | Since | Pair | Gap | Cause | Follow-up |
 |---|---|---|---|---|
 | 2026-10-16 | `page height x1024`, `HeightPage::heightAt` | about 1.07x in one process, 1.10x interleaved (pair ratio) | Per-call conversion and bounds work around an otherwise identical kernel | Terrain step G3: the batch extraction API (many samples per call, SoA out) is the real consumer; close it there or accept it with its numbers |
+| 2026-10-20 | `planar tree 10-DOF implicit Euler step, 2 elements` | 2.0x (881 vs 445 ns min, 921 vs 454 median, 1.98x to 2.05x per round, 7 rounds, GCC 16); Clang 22 `-march=x86-64-v3` 2.5x | Mostly the recorded CRBA/RNEA gap below (about 320 of the 440 ns: the step runs the same transforms, RNEA and CRBA as `forwardDynamics`), then the elements (next row); the dense `LDL^T` and assembly are written the same way on both sides | M1d with the CRBA/RNEA gap (a planar joint type or compact axis-aligned transforms), judged on the rig's whole step; 0.9 us per step is far inside a 0.5 ms step |
+| 2026-10-20 | `planar tree 10-DOF elements with Jacobians` | 2.0x (190 vs 92 ns min, 7 rounds, GCC 16); Clang 3.1x | The tendon geometry runs in 3D on the general joint transforms (world rotation of each axis, 3-vector crosses) where the twin uses planar angles | With the M1d planar-joint work; it shares the cause |
+| 2026-10-20 | `Rk4 step` and `Midpoint step, contact oscillator` under Clang 22 (`-march=x86-64-v3`, Windows) | 1.2x and 1.35x to 1.4x (GCC 16 is at parity, above) | Clang does not inline the flattened step's nested calls the way GCC does (`stepBetween` or `advance` stay out of line); force-inlining them measured no clear gain, so it was not kept | Re-measure on the Linux Clang CI leg; GCC is the host baseline's compiler |
 | 2026-10-19 | `planar tree 10-DOF`: `computeMassMatrix`, `forwardDynamics` | 2.9x and 2.65x by median at the M1b foundations (271 vs 94 ns; 591 vs 223 ns; 3.2x and 2.9x by minimum), against 2.8x and 2.9x for the build before it, so not worsened; the tree-sparse LTDL factor and solve is at parity (1.02x median) | The reference uses three-component planar algebra and a compile-time tree; the core runs the general 3D formulation, by design (docs/MULTIBODY.md section 3) | M1d, with the bike rig as the consumer: a planar joint type or a compact transform for axis-aligned revolute joints (rotation about one coordinate axis), judged on the rig's whole step. About 0.6 us per evaluation is already far inside a 0.5 ms step |

@@ -54,6 +54,121 @@ void benchStep(sub0bench::BenchRunner& runner, const char* name)
     });
 }
 
+// The twin of `Rk4 step, contact oscillator` and `Midpoint step, contact oscillator`: the same tableau on the
+// same system, written out on raw doubles with the clipped contact law inline, the parameters as constants
+// and the endpoint derivative kept for the next step (as the library does). It keeps the library's contract
+// that a non-finite endpoint is refused and the state left unchanged.
+template<int Stages>
+struct HandContactStep
+{
+    static constexpr double Stiffness = 90000.0;
+    static constexpr double Damping = 400.0;
+    static constexpr double Mass = 45.0;
+    static constexpr double Radius = 0.36;
+
+    std::array<double, 2> x{Radius, 0.0};
+    std::array<double, 2> k1{};
+    bool cached = false;
+
+    static void derivative(const std::array<double, 2>& s, std::array<double, 2>& d)
+    {
+        const double penetration = Radius - s[0];
+        double normal = 0.0;
+        if (penetration > 0.0)
+        {
+            const double total = Stiffness * penetration + Damping * -s[1];
+            normal = total > 0.0 ? total : 0.0;
+        }
+        d[0] = s[1];
+        d[1] = normal / Mass - StandardGravity;
+    }
+
+    bool step(double h)
+    {
+        if (!cached)
+        {
+            derivative(x, k1);
+        }
+        std::array<double, 2> trial{};
+        std::array<double, 2> k2{};
+        std::array<double, 2> next{};
+        const double half = 0.5 * h;
+        for (std::size_t i = 0; i < 2; ++i)
+        {
+            trial[i] = x[i] + half * k1[i];
+        }
+        derivative(trial, k2);
+        if constexpr (Stages == 2)
+        {
+            for (std::size_t i = 0; i < 2; ++i)
+            {
+                next[i] = x[i] + h * k2[i];
+            }
+        }
+        else
+        {
+            std::array<double, 2> k3{};
+            std::array<double, 2> k4{};
+            for (std::size_t i = 0; i < 2; ++i)
+            {
+                trial[i] = x[i] + half * k2[i];
+            }
+            derivative(trial, k3);
+            for (std::size_t i = 0; i < 2; ++i)
+            {
+                trial[i] = x[i] + h * k3[i];
+            }
+            derivative(trial, k4);
+            for (std::size_t i = 0; i < 2; ++i)
+            {
+                next[i] = x[i] + h * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]) / 6.0;
+            }
+        }
+        if (!std::isfinite(next[0]) || !std::isfinite(next[1]))
+        {
+            return false;
+        }
+        derivative(next, k1);
+        x = next;
+        cached = true;
+        return true;
+    }
+};
+
+template<typename Integrator, int Stages>
+void benchStepPair(sub0bench::BenchRunner& runner, const char* handName, const char* name)
+{
+    // The twin must agree with the library before its time means anything.
+    {
+        ContactOscillator system;
+        Integrator integrator;
+        StateVector<2> x{0.36, 0.0};
+        HandContactStep<Stages> hand;
+        for (std::uint64_t tick = 0; tick < 4000U; ++tick)
+        {
+            if (!integrator.stepTick(system, tick, sub0math::seconds(0.0005), x) || !hand.step(0.0005))
+            {
+                std::fprintf(stderr, "contact oscillator step failed\n");
+                std::exit(1);
+            }
+            if (std::abs(hand.x[0] - x[0]) > 1e-12 || std::abs(hand.x[1] - x[1]) > 1e-9)
+            {
+                std::fprintf(stderr, "hand-written contact step disagrees at tick %llu\n", static_cast<unsigned long long>(tick));
+                std::exit(1);
+            }
+        }
+    }
+    HandContactStep<Stages> hand;
+    runner.run(handName, [&] {
+        if (!hand.step(0.0005))
+        {
+            hand = {};
+        }
+        ankerl::nanobench::doNotOptimizeAway(hand.x);
+    });
+    benchStep<Integrator>(runner, name);
+}
+
 // Height lookup on a terrain page, against the fastest hand-written form of the same job: 16-bit heights,
 // a known-node bit mask and the fixed-diagonal triangulation, read from raw arrays.
 void benchPageHeight(sub0bench::BenchRunner& runner)
@@ -539,8 +654,8 @@ int main(int argc, char** argv)
 {
     sub0bench::BenchRunner runner(argc, argv, "Sub0Physics");
     runner.bench().minEpochIterations(20000);
-    benchStep<Rk4<2>>(runner, "Rk4 step, contact oscillator");
-    benchStep<Midpoint<2>>(runner, "Midpoint step, contact oscillator");
+    benchStepPair<Rk4<2>, 4>(runner, "Rk4 step, contact oscillator, hand-written", "Rk4 step, contact oscillator");
+    benchStepPair<Midpoint<2>, 2>(runner, "Midpoint step, contact oscillator, hand-written", "Midpoint step, contact oscillator");
 
     std::vector<ProfilePoint> points;
     for (int i = 0; i <= 2047; ++i)

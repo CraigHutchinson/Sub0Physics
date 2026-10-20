@@ -412,15 +412,20 @@ std::expected<void, Fault> ModelBuilder::compileElements(Model& model) const
                                     .reference = reference,
                                     .wrenchSlot = 2 * tendons,
                                     .support = {},
+                                    .supportCoordinates = {},
                                     .onFirst = {},
                                     .onSecond = {}};
             for (std::size_t body = 0; body < n; ++body)
             {
                 const bool onFirst = std::ranges::find(first, body) != first.end();
                 const bool onSecond = std::ranges::find(second, body) != second.end();
-                if (onFirst || onSecond)
+                // A prismatic joint that carries both ends translates them together: it changes neither the length
+                // nor any other entry's Jacobian, so it is left out.
+                const bool inert = onFirst && onSecond && model.jointType_[body] == JointType::Prismatic;
+                if ((onFirst || onSecond) && !inert)
                 {
                     compiledElement.support.push_back(body);
+                    compiledElement.supportCoordinates.push_back(model.coordinate_[body]);
                     compiledElement.onFirst.push_back(onFirst ? 1U : 0U);
                     compiledElement.onSecond.push_back(onSecond ? 1U : 0U);
                 }

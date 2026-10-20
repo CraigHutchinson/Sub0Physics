@@ -269,7 +269,8 @@ struct TendonElement
     double sign;            ///< +1 (extension) or -1 (compression).
     double reference;       ///< Length at which the law's coordinate is zero [m].
     std::size_t wrenchSlot; ///< Index of the first end's wrench in ElementOutputs::siteWrenches; the second follows.
-    std::vector<std::size_t> support;   ///< Bodies whose joints move either end, ascending (topological order).
+    std::vector<std::size_t> support;   ///< Bodies whose joints change the length, ascending (topological order); a prismatic joint that moves both ends equally is left out.
+    std::vector<std::size_t> supportCoordinates; ///< The coordinate of each support entry.
     std::vector<std::uint8_t> onFirst;  ///< Per support entry: whether it moves the first end.
     std::vector<std::uint8_t> onSecond; ///< Per support entry: whether it moves the second end.
 
