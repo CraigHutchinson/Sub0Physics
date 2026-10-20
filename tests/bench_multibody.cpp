@@ -261,7 +261,7 @@ void benchMultibody(sub0bench::BenchRunner& runner)
     });
     runner.run("planar tree 10-DOF mass matrix, computeMassMatrix", [&] {
         ankerl::nanobench::doNotOptimizeAway(state);
-        computeMassMatrix(model, state, ws);
+        ankerl::nanobench::doNotOptimizeAway(computeMassMatrix(model, state, ws).has_value());
         ankerl::nanobench::doNotOptimizeAway(ws.massMatrix.data());
     });
 
@@ -280,7 +280,7 @@ void benchMultibody(sub0bench::BenchRunner& runner)
         ankerl::nanobench::doNotOptimizeAway(ws.massMatrix.data());
         if (factorMassMatrix(model, ws))
         {
-            solveMassMatrix(model, ws, x);
+            ankerl::nanobench::doNotOptimizeAway(solveMassMatrix(model, ws, x).has_value());
         }
         ankerl::nanobench::doNotOptimizeAway(x);
     });

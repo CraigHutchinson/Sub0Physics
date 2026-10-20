@@ -91,35 +91,9 @@ void compositeRigidBody(const Model& model, Workspace& ws) noexcept
     }
 }
 
-} // namespace
-
-void computeMassMatrix(const Model& model, const State& state, Workspace& workspace) noexcept
+// Featherstone, RBDA section 6.5: eliminate from the leaves; only ancestor entries are touched.
+std::expected<void, Fault> factorUnchecked(const Model& model, Workspace& workspace) noexcept
 {
-    detail::updateTransforms<false>(model, state, workspace);
-    compositeRigidBody(model, workspace);
-}
-
-void computeBiasForces(const Model& model, const State& state, Workspace& workspace) noexcept
-{
-    detail::updateTransforms<true>(model, state, workspace);
-    recursiveNewtonEuler<false>(model, state, nullptr, workspace.bias.data(), workspace);
-}
-
-std::expected<void, Fault> inverseDynamics(const Model& model, const State& state, std::span<const double> qdd,
-                                           std::span<double> tau, Workspace& workspace) noexcept
-{
-    if (qdd.size() != model.dofCount() || tau.size() != model.dofCount())
-    {
-        return invalidInput("inverse dynamics needs qdd and tau of dofCount entries");
-    }
-    detail::updateTransforms<true>(model, state, workspace);
-    recursiveNewtonEuler<true>(model, state, qdd.data(), tau.data(), workspace);
-    return {};
-}
-
-std::expected<void, Fault> factorMassMatrix(const Model& model, Workspace& workspace) noexcept
-{
-    // Featherstone, RBDA section 6.5: eliminate from the leaves; only ancestor entries are touched.
     const auto parents = model.parents();
     const std::size_t n = parents.size();
     double* h = workspace.massFactor.data();
@@ -148,7 +122,7 @@ std::expected<void, Fault> factorMassMatrix(const Model& model, Workspace& works
     return {};
 }
 
-void solveMassMatrix(const Model& model, const Workspace& workspace, std::span<double> x) noexcept
+void solveUnchecked(const Model& model, const Workspace& workspace, std::span<double> x) noexcept
 {
     const auto parents = model.parents();
     const std::size_t n = parents.size();
@@ -174,9 +148,76 @@ void solveMassMatrix(const Model& model, const Workspace& workspace, std::span<d
     }
 }
 
+} // namespace
+
+std::expected<void, Fault> computeMassMatrix(const Model& model, const State& state, Workspace& workspace) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return checked;
+    }
+    detail::updateTransforms<false>(model, state, workspace);
+    compositeRigidBody(model, workspace);
+    return {};
+}
+
+std::expected<void, Fault> computeBiasForces(const Model& model, const State& state, Workspace& workspace) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return checked;
+    }
+    detail::updateTransforms<true>(model, state, workspace);
+    recursiveNewtonEuler<false>(model, state, nullptr, workspace.bias.data(), workspace);
+    return {};
+}
+
+std::expected<void, Fault> inverseDynamics(const Model& model, const State& state, std::span<const double> qdd,
+                                           std::span<double> tau, Workspace& workspace) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return checked;
+    }
+    if (qdd.size() != model.dofCount() || tau.size() != model.dofCount())
+    {
+        return invalidInput("inverse dynamics needs qdd and tau of dofCount entries");
+    }
+    detail::updateTransforms<true>(model, state, workspace);
+    recursiveNewtonEuler<true>(model, state, qdd.data(), tau.data(), workspace);
+    return {};
+}
+
+std::expected<void, Fault> factorMassMatrix(const Model& model, Workspace& workspace) noexcept
+{
+    if (!workspace.isBuiltFor(model))
+    {
+        return invalidInput("workspace was not built for this model");
+    }
+    return factorUnchecked(model, workspace);
+}
+
+std::expected<void, Fault> solveMassMatrix(const Model& model, const Workspace& workspace, std::span<double> x) noexcept
+{
+    if (!workspace.isBuiltFor(model))
+    {
+        return invalidInput("workspace was not built for this model");
+    }
+    if (x.size() != model.dofCount())
+    {
+        return invalidInput("mass matrix solve needs x of dofCount entries");
+    }
+    solveUnchecked(model, workspace, x);
+    return {};
+}
+
 std::expected<void, Fault> forwardDynamics(const Model& model, const State& state, std::span<const double> tau,
                                            Workspace& workspace) noexcept
 {
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return checked;
+    }
     const std::size_t n = model.dofCount();
     if (!tau.empty() && tau.size() != n)
     {
@@ -185,7 +226,7 @@ std::expected<void, Fault> forwardDynamics(const Model& model, const State& stat
     detail::updateTransforms<true>(model, state, workspace);
     recursiveNewtonEuler<false>(model, state, nullptr, workspace.bias.data(), workspace);
     compositeRigidBody(model, workspace);
-    if (auto factored = factorMassMatrix(model, workspace); !factored)
+    if (auto factored = factorUnchecked(model, workspace); !factored)
     {
         return factored;
     }
@@ -193,7 +234,7 @@ std::expected<void, Fault> forwardDynamics(const Model& model, const State& stat
     {
         workspace.qdd[i] = (tau.empty() ? 0.0 : tau[i]) - workspace.bias[i];
     }
-    solveMassMatrix(model, workspace, workspace.qdd);
+    solveUnchecked(model, workspace, workspace.qdd);
     return {};
 }
 
@@ -204,10 +245,6 @@ std::expected<void, Fault> stepSymplecticEuler(const Model& model, sub0math::f64
     if (!std::isfinite(dt) || !(dt > 0.0))
     {
         return invalidInput("step needs a finite positive step size");
-    }
-    if (state.q.size() != model.dofCount() || state.qd.size() != model.dofCount())
-    {
-        return invalidInput("state is not sized for the model");
     }
     if (auto accelerated = forwardDynamics(model, state, tau, workspace); !accelerated)
     {

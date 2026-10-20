@@ -10,7 +10,9 @@
 
 // Rigid-body dynamics of a tree, M(q) qdd + c(q, qd) = tau (docs/MULTIBODY.md section 3), in
 // Featherstone's formulation: RNEA for c and inverse dynamics, CRBA for M, and a factorisation of M
-// that follows the tree so it creates no fill-in. None of these allocate.
+// that follows the tree so it creates no fill-in. None of these allocate. Every public entry point checks
+// that the workspace was built for the model and that the state is sized for it, and returns InvalidInput
+// if not.
 
 namespace sub0physics::multibody
 {
@@ -22,9 +24,12 @@ namespace sub0physics::multibody
  *
  * @param model The model.
  * @param state Coordinates (rates are not used).
- * @param workspace Workspace sized for the model.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or InvalidInput if the workspace was built for another model or the state is not
+ *         sized for this one.
  */
-void computeMassMatrix(const Model& model, const State& state, Workspace& workspace) noexcept;
+[[nodiscard]] std::expected<void, Fault> computeMassMatrix(const Model& model, const State& state,
+                                                           Workspace& workspace) noexcept;
 
 /**
  * Computes the bias forces c(q, qd): Coriolis, centrifugal and gravity, with the recursive Newton-Euler
@@ -34,9 +39,12 @@ void computeMassMatrix(const Model& model, const State& state, Workspace& worksp
  *
  * @param model The model.
  * @param state Coordinates and rates.
- * @param workspace Workspace sized for the model.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or InvalidInput if the workspace was built for another model or the state is not
+ *         sized for this one.
  */
-void computeBiasForces(const Model& model, const State& state, Workspace& workspace) noexcept;
+[[nodiscard]] std::expected<void, Fault> computeBiasForces(const Model& model, const State& state,
+                                                           Workspace& workspace) noexcept;
 
 /**
  * Computes the generalized forces that produce given accelerations: tau = M qdd + c.
@@ -45,8 +53,9 @@ void computeBiasForces(const Model& model, const State& state, Workspace& worksp
  * @param state Coordinates and rates.
  * @param qdd Generalized accelerations, dofCount entries.
  * @param tau Output, dofCount entries.
- * @param workspace Workspace sized for the model.
- * @return Nothing, or InvalidInput if a span has the wrong size.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or InvalidInput if a span has the wrong size, the workspace was built for another
+ *         model or the state is not sized for this one.
  */
 [[nodiscard]] std::expected<void, Fault> inverseDynamics(const Model& model, const State& state,
                                                          std::span<const double> qdd, std::span<double> tau,
@@ -61,7 +70,8 @@ void computeBiasForces(const Model& model, const State& state, Workspace& worksp
  *
  * @param model The model whose `massMatrix` is in the workspace.
  * @param workspace Workspace holding M from computeMassMatrix.
- * @return Nothing, or InvalidInput if M is not positive definite.
+ * @return Nothing, or InvalidInput if the workspace was built for another model or M is not positive
+ *         definite.
  */
 [[nodiscard]] std::expected<void, Fault> factorMassMatrix(const Model& model, Workspace& workspace) noexcept;
 
@@ -71,8 +81,10 @@ void computeBiasForces(const Model& model, const State& state, Workspace& worksp
  * @param model The model.
  * @param workspace Workspace holding the factor.
  * @param x On entry b, on exit M^-1 b; dofCount entries.
+ * @return Nothing, or InvalidInput if `x` has the wrong size or the workspace was built for another model.
  */
-void solveMassMatrix(const Model& model, const Workspace& workspace, std::span<double> x) noexcept;
+[[nodiscard]] std::expected<void, Fault> solveMassMatrix(const Model& model, const Workspace& workspace,
+                                                         std::span<double> x) noexcept;
 
 /**
  * Computes the generalized accelerations qdd = M^-1 (tau - c).
@@ -82,9 +94,9 @@ void solveMassMatrix(const Model& model, const Workspace& workspace, std::span<d
  * @param model The model.
  * @param state Coordinates and rates.
  * @param tau Applied generalized forces, dofCount entries; empty for none.
- * @param workspace Workspace sized for the model.
- * @return Nothing, or a fault: InvalidInput for a wrong-sized span or a mass matrix that is not
- *         positive definite.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or a fault: InvalidInput for a wrong-sized span or state, a workspace built for
+ *         another model, or a mass matrix that is not positive definite.
  */
 [[nodiscard]] std::expected<void, Fault> forwardDynamics(const Model& model, const State& state,
                                                          std::span<const double> tau, Workspace& workspace) noexcept;

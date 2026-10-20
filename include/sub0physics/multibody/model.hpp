@@ -36,6 +36,18 @@ inline constexpr std::size_t NoParent = std::numeric_limits<std::size_t>::max();
 class Model
 {
 public:
+    /**
+     * Identifies the topology this model was built with. Every build gets a new id; copies share it.
+     * A Workspace is bound to it so that cached structure (such as the zero entries of the mass matrix)
+     * cannot be reused with a different tree.
+     *
+     * @return The id; never zero.
+     */
+    [[nodiscard]] std::uint64_t id() const noexcept
+    {
+        return id_;
+    }
+
     /** @return The number of bodies. */
     [[nodiscard]] std::size_t bodyCount() const noexcept
     {
@@ -180,6 +192,7 @@ private:
 
     Model() = default;
 
+    std::uint64_t id_ = 0;
     std::vector<std::size_t> parent_;
     std::vector<std::size_t> coordinate_;
     std::vector<JointType> jointType_;

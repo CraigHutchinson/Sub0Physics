@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -152,7 +153,10 @@ std::expected<Model, Fault> ModelBuilder::build() const
         return invalidInput("gravity must be finite");
     }
 
+    // Ids only tell models apart (a Workspace checks it); they never influence a result.
+    static std::atomic<std::uint64_t> nextId{1};
     Model model;
+    model.id_ = nextId.fetch_add(1, std::memory_order_relaxed);
     const std::size_t n = bodies_.size();
     model.parent_.reserve(n);
     model.coordinate_.reserve(n);

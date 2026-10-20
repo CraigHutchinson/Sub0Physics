@@ -274,13 +274,13 @@ TEST_CASE("Single pendulum: exact acceleration, period and bounded energy error"
     {
         State state = State::atRest(model);
         state.q[0] = 1.0;
-        const double e0 = computeEnergy(model, state, ws).total().si();
+        const double e0 = computeEnergy(model, state, ws).value().total().si();
         CHECK(e0 == doctest::Approx(-m * G * l * std::cos(1.0)));
         double worst = 0.0;
         for (int k = 0; k < 100000; ++k)
         {
             REQUIRE(stepSymplecticEuler(model, sub0math::seconds(h), {}, state, ws));
-            worst = std::max(worst, std::abs(computeEnergy(model, state, ws).total().si() - e0));
+            worst = std::max(worst, std::abs(computeEnergy(model, state, ws).value().total().si() - e0));
         }
         CHECK(state.tick == 100000U);
         CHECK(worst / (m * G * l) < 2e-4);
@@ -294,7 +294,7 @@ TEST_CASE("Double pendulum conserves energy over long runs")
     State start = State::atRest(model);
     start.q = {1.2, -0.6};
     start.qd = {0.0, 1.5};
-    const double e0 = computeEnergy(model, start, ws).total().si();
+    const double e0 = computeEnergy(model, start, ws).value().total().si();
     const double scale = 1.0 * G * 1.0; // m g l of the upper link
 
     SUBCASE("symplectic Euler: first-order error that does not grow")
@@ -308,7 +308,7 @@ TEST_CASE("Double pendulum conserves energy over long runs")
             for (int k = 0; k < steps; ++k)
             {
                 REQUIRE(stepSymplecticEuler(model, sub0math::seconds(h), {}, s, ws));
-                const double error = std::abs(computeEnergy(model, s, ws).total().si() - e0) / scale;
+                const double error = std::abs(computeEnergy(model, s, ws).value().total().si() - e0) / scale;
                 if (k < window)
                 {
                     worst[0] = std::max(worst[0], error);
@@ -342,7 +342,7 @@ TEST_CASE("Double pendulum conserves energy over long runs")
         State s = start;
         s.q = {x[0], x[1]};
         s.qd = {x[2], x[3]};
-        const double error = std::abs(computeEnergy(model, s, ws).total().si() - e0) / scale;
+        const double error = std::abs(computeEnergy(model, s, ws).value().total().si() - e0) / scale;
         MESSAGE("double pendulum RK4: relative energy error " << error);
         CHECK(error < 1e-7);
     }
@@ -392,8 +392,8 @@ TEST_CASE("Cart with two poles matches the hand-derived equations of motion")
     {
         s.q = {q.begin(), q.end()};
         s.qd = {qd.begin(), qd.end()};
-        computeMassMatrix(model, s, ws);
-        computeBiasForces(model, s, ws);
+        REQUIRE(computeMassMatrix(model, s, ws));
+        REQUIRE(computeBiasForces(model, s, ws));
         const auto m = reference.massMatrix(s);
         const auto c = reference.bias(s);
         for (std::size_t r = 0; r < 3; ++r)
@@ -426,7 +426,7 @@ TEST_CASE("Mass matrix: symmetric, positive definite, and equal to RNEA column b
         const std::size_t n = model.dofCount();
         Workspace ws(model);
         State s = spatialState(model);
-        computeMassMatrix(model, s, ws);
+        REQUIRE(computeMassMatrix(model, s, ws));
         const std::vector<double> m = ws.massMatrix;
         for (std::size_t r = 0; r < n; ++r)
         {
@@ -442,7 +442,7 @@ TEST_CASE("Mass matrix: symmetric, positive definite, and equal to RNEA column b
         }
 
         // Column j of M is the change in RNEA's torque for a unit acceleration of coordinate j.
-        computeBiasForces(model, s, ws);
+        REQUIRE(computeBiasForces(model, s, ws));
         const std::vector<double> bias = ws.bias;
         std::vector<double> qdd(n, 0.0);
         std::vector<double> tau(n, 0.0);
@@ -501,11 +501,11 @@ TEST_CASE("Dynamics do not depend on the choice of body frames")
             CHECK(b.massMatrix[i * n + j] == doctest::Approx(a.massMatrix[i * n + j]).epsilon(1e-12).scale(1.0));
         }
     }
-    CHECK(computeEnergy(turned, s, b).total().si() == doctest::Approx(computeEnergy(plain, s, a).total().si()).epsilon(1e-12));
+    CHECK(computeEnergy(turned, s, b).value().total().si() == doctest::Approx(computeEnergy(plain, s, a).value().total().si()).epsilon(1e-12));
 
     const SiteId site = *plain.findSite("end");
-    const SiteKinematics ka = computeSiteKinematics(plain, s, site, a);
-    const SiteKinematics kb = computeSiteKinematics(turned, s, site, b);
+    const SiteKinematics ka = computeSiteKinematics(plain, s, site, a).value();
+    const SiteKinematics kb = computeSiteKinematics(turned, s, site, b).value();
     CHECK(kb.pose.translation.x.si() == doctest::Approx(ka.pose.translation.x.si()));
     CHECK(kb.pose.translation.y.si() == doctest::Approx(ka.pose.translation.y.si()));
     CHECK(kb.pose.translation.z.si() == doctest::Approx(ka.pose.translation.z.si()));
@@ -524,7 +524,7 @@ TEST_CASE("Site Jacobian maps rates to the site velocity and matches finite diff
     REQUIRE(computeSiteJacobian(model, s, site, ws, j));
     CHECK_FALSE(computeSiteJacobian(model, s, site, ws, std::span<double>(j).first(n)));
 
-    const SiteKinematics k = computeSiteKinematics(model, s, site, ws);
+    const SiteKinematics k = computeSiteKinematics(model, s, site, ws).value();
     const std::array<double, 3> velocity{k.velocity.x.si(), k.velocity.y.si(), k.velocity.z.si()};
     for (std::size_t r = 0; r < 3; ++r)
     {
@@ -543,8 +543,8 @@ TEST_CASE("Site Jacobian maps rates to the site velocity and matches finite diff
         State minus = s;
         plus.q[c] += step;
         minus.q[c] -= step;
-        const auto p = computeSiteKinematics(model, plus, site, ws).pose.translation;
-        const auto m = computeSiteKinematics(model, minus, site, ws).pose.translation;
+        const auto p = computeSiteKinematics(model, plus, site, ws).value().pose.translation;
+        const auto m = computeSiteKinematics(model, minus, site, ws).value().pose.translation;
         CHECK((p.x.si() - m.x.si()) / (2.0 * step) == doctest::Approx(j[c]).epsilon(1e-7).scale(1.0));
         CHECK((p.y.si() - m.y.si()) / (2.0 * step) == doctest::Approx(j[n + c]).epsilon(1e-7).scale(1.0));
         CHECK((p.z.si() - m.z.si()) / (2.0 * step) == doctest::Approx(j[2 * n + c]).epsilon(1e-7).scale(1.0));
@@ -647,4 +647,115 @@ TEST_CASE("Stepping is transactional and rejects bad input")
     REQUIRE_FALSE(r);
     s.qd[0] = 0.0;
     CHECK(s == before);
+}
+
+TEST_CASE("Entry points reject a workspace built for another model and a mis-sized state")
+{
+    const Model tree = planarTree();
+    // Same number of coordinates, different topology: a size check alone would let this through and
+    // leave stale ancestor entries in the mass matrix.
+    ModelBuilder chainBuilder;
+    chainBuilder.setGravity(gravityAlong(0.0, -G, 0.0));
+    BodyId parent = WorldBody;
+    for (std::size_t i = 0; i < PlanarTreeDof; ++i)
+    {
+        parent = chainBuilder.addBody(planarLink("l" + std::to_string(i), parent, offset(0.0, -0.4, 0.0), 1.0, 0.4));
+    }
+    chainBuilder.addSite({.name = "s", .body = BodyId{0}});
+    const Model chain = *chainBuilder.build();
+    REQUIRE(chain.dofCount() == tree.dofCount());
+    CHECK(chain.id() != tree.id());
+
+    Workspace treeWs(tree);
+    Workspace chainWs(chain);
+    const State s = State::atRest(tree);
+    std::vector<double> tau(tree.dofCount());
+    std::vector<double> x(tree.dofCount());
+    std::vector<double> jacobian(3 * tree.dofCount());
+
+    const auto rejected = [](const auto& result) {
+        REQUIRE_FALSE(result);
+        CHECK(result.error().kind == FaultKind::InvalidInput);
+    };
+    rejected(computeMassMatrix(tree, s, chainWs));
+    rejected(computeBiasForces(tree, s, chainWs));
+    rejected(forwardDynamics(tree, s, {}, chainWs));
+    rejected(inverseDynamics(tree, s, x, tau, chainWs));
+    rejected(updateKinematics(tree, s, chainWs));
+    rejected(computeSiteKinematics(tree, s, SiteId{0}, chainWs));
+    rejected(computeSiteJacobian(tree, s, SiteId{0}, chainWs, jacobian));
+    rejected(computeEnergy(tree, s, chainWs));
+    rejected(factorMassMatrix(tree, chainWs));
+    rejected(solveMassMatrix(tree, chainWs, x));
+    State stepped = s;
+    rejected(stepSymplecticEuler(tree, sub0math::seconds(1e-3), {}, stepped, chainWs));
+    CHECK(stepped == s);
+
+    // A different dof count is caught the same way, and a copy of the model shares its workspace.
+    const Model single = pendulum(1.0, 0.5, 0.01);
+    Workspace singleWs(single);
+    rejected(computeMassMatrix(tree, s, singleWs));
+    const Model copy = tree;
+    CHECK(computeMassMatrix(copy, s, treeWs));
+
+    // State sizes.
+    State shortQ = s;
+    shortQ.q.pop_back();
+    State shortQd = s;
+    shortQd.qd.clear();
+    for (const State* bad : {&shortQ, &shortQd})
+    {
+        rejected(computeMassMatrix(tree, *bad, treeWs));
+        rejected(computeBiasForces(tree, *bad, treeWs));
+        rejected(forwardDynamics(tree, *bad, {}, treeWs));
+        rejected(inverseDynamics(tree, *bad, x, tau, treeWs));
+        rejected(updateKinematics(tree, *bad, treeWs));
+        rejected(computeSiteKinematics(tree, *bad, SiteId{0}, treeWs));
+        rejected(computeSiteJacobian(tree, *bad, SiteId{0}, treeWs, jacobian));
+        rejected(computeEnergy(tree, *bad, treeWs));
+    }
+    State badStep = shortQ;
+    rejected(stepSymplecticEuler(tree, sub0math::seconds(1e-3), {}, badStep, treeWs));
+    CHECK(badStep == shortQ);
+
+    // Sites and span sizes.
+    rejected(computeSiteKinematics(tree, s, SiteId{1}, treeWs));
+    rejected(computeSiteJacobian(tree, s, SiteId{1}, treeWs, jacobian));
+    rejected(solveMassMatrix(tree, treeWs, std::span<double>(x).first(3)));
+    CHECK(computeSiteKinematics(tree, s, *tree.findSite("tip"), treeWs));
+}
+
+TEST_CASE("Mass matrix entries outside ancestor pairs are zero")
+{
+    const Model model = planarTree();
+    Workspace ws(model);
+    for (const double v : ws.massMatrix)
+    {
+        CHECK(v == 0.0);
+    }
+    State s = State::atRest(model);
+    for (std::size_t i = 0; i < model.dofCount(); ++i)
+    {
+        s.q[i] = 0.1 * static_cast<double>(i) - 0.3;
+    }
+    REQUIRE(computeMassMatrix(model, s, ws));
+    const auto parents = model.parents();
+    const std::size_t n = model.dofCount();
+    const auto isAncestor = [&](std::size_t a, std::size_t b) { // a is an ancestor of b, or equal
+        for (std::size_t k = b; k != NoParent; k = parents[k])
+        {
+            if (k == a) return true;
+        }
+        return false;
+    };
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        for (std::size_t j = 0; j < n; ++j)
+        {
+            if (!isAncestor(i, j) && !isAncestor(j, i))
+            {
+                CHECK(element(ws.massMatrix, n, i, j) == 0.0);
+            }
+        }
+    }
 }

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <expected>
 
 #include <sub0math/config.hpp>
 #include <sub0math/linear/mat.hpp>
@@ -11,6 +12,7 @@
 #include <sub0math/linear/spatial_motion.hpp>
 #include <sub0math/linear/vec.hpp>
 
+#include "sub0physics/fault.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/state.hpp"
 #include "sub0physics/multibody/workspace.hpp"
@@ -19,6 +21,22 @@
 
 namespace sub0physics::multibody::detail
 {
+
+// The one precondition check every public entry point makes: the workspace belongs to the model and
+// the state has one entry per coordinate. A few comparisons; no allocation.
+[[nodiscard]] SUB0MATH_FORCE_INLINE std::expected<void, Fault> checkInputs(const Model& model, const State& state,
+                                                                          const Workspace& ws) noexcept
+{
+    if (!ws.isBuiltFor(model))
+    {
+        return invalidInput("workspace was not built for this model");
+    }
+    if (!state.isSizedFor(model))
+    {
+        return invalidInput("state is not sized for the model");
+    }
+    return {};
+}
 
 // Transform from the parent's frame to the body's frame at coordinate q: X_J(q) X_T.
 // Revolute: X_J = rot(R(a, q)^T), so X_up = (E_J E_T, r_T). Prismatic: X_J = xlt(a q), so

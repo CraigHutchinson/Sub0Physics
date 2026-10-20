@@ -31,6 +31,17 @@ struct State
         return State{std::vector<double>(model.dofCount(), 0.0), std::vector<double>(model.dofCount(), 0.0), 0};
     }
 
+    /**
+     * Checks that the state has the sizes a model needs.
+     *
+     * @param model The model.
+     * @return True when `q` and `qd` each have one entry per coordinate.
+     */
+    [[nodiscard]] bool isSizedFor(const Model& model) const noexcept
+    {
+        return q.size() == model.dofCount() && qd.size() == model.dofCount();
+    }
+
     friend bool operator==(const State&, const State&) = default;
 };
 

@@ -44,9 +44,12 @@ struct MechanicalEnergy
  *
  * @param model The model.
  * @param state Coordinates and rates, sized for the model.
- * @param workspace Workspace sized for the model.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or InvalidInput if the workspace was built for another model or the state is not
+ *         sized for this one.
  */
-void updateKinematics(const Model& model, const State& state, Workspace& workspace) noexcept;
+[[nodiscard]] std::expected<void, Fault> updateKinematics(const Model& model, const State& state,
+                                                          Workspace& workspace) noexcept;
 
 /**
  * Computes a site's pose and velocity.
@@ -54,11 +57,12 @@ void updateKinematics(const Model& model, const State& state, Workspace& workspa
  * @param model The model.
  * @param state Coordinates and rates.
  * @param site A site of the model.
- * @param workspace Workspace sized for the model; its kinematics are updated.
- * @return The site's world pose and velocity.
+ * @param workspace Workspace built for the model; its kinematics are updated.
+ * @return The site's world pose and velocity, or InvalidInput for a site that is not in the model, a
+ *         workspace built for another model or a state that is not sized for this one.
  */
-[[nodiscard]] SiteKinematics computeSiteKinematics(const Model& model, const State& state, SiteId site,
-                                                   Workspace& workspace) noexcept;
+[[nodiscard]] std::expected<SiteKinematics, Fault> computeSiteKinematics(const Model& model, const State& state,
+                                                                         SiteId site, Workspace& workspace) noexcept;
 
 /**
  * Computes the translational Jacobian of a site's origin: its world velocity is `J qd`.
@@ -66,9 +70,10 @@ void updateKinematics(const Model& model, const State& state, Workspace& workspa
  * @param model The model.
  * @param state Coordinates (rates are not used).
  * @param site A site of the model.
- * @param workspace Workspace sized for the model; its kinematics are updated.
+ * @param workspace Workspace built for the model; its kinematics are updated.
  * @param jacobian Output, row-major 3 x dofCount, in m per unit coordinate.
- * @return Nothing, or InvalidInput if `jacobian` is not 3 x dofCount.
+ * @return Nothing, or InvalidInput if `jacobian` is not 3 x dofCount, the site is not in the model, the
+ *         workspace was built for another model or the state is not sized for this one.
  */
 [[nodiscard]] std::expected<void, Fault> computeSiteJacobian(const Model& model, const State& state, SiteId site,
                                                              Workspace& workspace, std::span<double> jacobian) noexcept;
@@ -78,9 +83,11 @@ void updateKinematics(const Model& model, const State& state, Workspace& workspa
  *
  * @param model The model.
  * @param state Coordinates and rates.
- * @param workspace Workspace sized for the model; its kinematics are updated.
- * @return The energies.
+ * @param workspace Workspace built for the model; its kinematics are updated.
+ * @return The energies, or InvalidInput for a workspace built for another model or a state that is not
+ *         sized for this one.
  */
-[[nodiscard]] MechanicalEnergy computeEnergy(const Model& model, const State& state, Workspace& workspace) noexcept;
+[[nodiscard]] std::expected<MechanicalEnergy, Fault> computeEnergy(const Model& model, const State& state,
+                                                                  Workspace& workspace) noexcept;
 
 } // namespace sub0physics::multibody

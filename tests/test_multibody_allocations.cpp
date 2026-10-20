@@ -60,8 +60,8 @@ TEST_CASE("Multibody dynamics and stepping never allocate")
     }
     REQUIRE(inverseDynamics(model, s, ws.qdd, out, ws));
     REQUIRE(computeSiteJacobian(model, s, tip, ws, jacobian));
-    const SiteKinematics site = computeSiteKinematics(model, s, tip, ws);
-    const MechanicalEnergy energy = computeEnergy(model, s, ws);
+    const SiteKinematics site = computeSiteKinematics(model, s, tip, ws).value();
+    const MechanicalEnergy energy = computeEnergy(model, s, ws).value();
     CHECK(allocations.load() - start == 0U);
     CHECK(std::isfinite(site.pose.translation.x.si() + energy.total().si()));
 }

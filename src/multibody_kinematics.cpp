@@ -35,9 +35,8 @@ sub0math::Vec3d plain(const sub0math::Vec3<sub0math::f64::Length>& v) noexcept
     return {v.x.si(), v.y.si(), v.z.si()};
 }
 
-} // namespace
-
-void updateKinematics(const Model& model, const State& state, Workspace& workspace) noexcept
+// Kinematics without the precondition checks, for the entry points that have made them.
+void updateUnchecked(const Model& model, const State& state, Workspace& workspace) noexcept
 {
     detail::updateTransforms<true>(model, state, workspace);
     const auto parents = model.parents();
@@ -51,9 +50,30 @@ void updateKinematics(const Model& model, const State& state, Workspace& workspa
     }
 }
 
-SiteKinematics computeSiteKinematics(const Model& model, const State& state, SiteId site, Workspace& workspace) noexcept
+} // namespace
+
+std::expected<void, Fault> updateKinematics(const Model& model, const State& state, Workspace& workspace) noexcept
 {
-    updateKinematics(model, state, workspace);
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return checked;
+    }
+    updateUnchecked(model, state, workspace);
+    return {};
+}
+
+std::expected<SiteKinematics, Fault> computeSiteKinematics(const Model& model, const State& state, SiteId site,
+                                                           Workspace& workspace) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return std::unexpected(checked.error());
+    }
+    if (site.value() >= model.siteCount())
+    {
+        return invalidInput("site is not a site of the model");
+    }
+    updateUnchecked(model, state, workspace);
     const std::size_t body = model.siteBody(site).value();
     const Pose& bodyPose = workspace.bodyPose[body];
     const Pose& frame = model.siteFrame(site);
@@ -64,7 +84,7 @@ SiteKinematics computeSiteKinematics(const Model& model, const State& state, Sit
     const sub0math::Vec3d omega = rotate(bodyPose.rotation, v.angular);
     using sub0math::f64::AngularVelocity;
     using sub0math::f64::Velocity;
-    return {bodyPose * frame,
+    return SiteKinematics{bodyPose * frame,
             {Velocity::fromSi(world.x), Velocity::fromSi(world.y), Velocity::fromSi(world.z)},
             {AngularVelocity::fromSi(omega.x), AngularVelocity::fromSi(omega.y), AngularVelocity::fromSi(omega.z)}};
 }
@@ -72,12 +92,20 @@ SiteKinematics computeSiteKinematics(const Model& model, const State& state, Sit
 std::expected<void, Fault> computeSiteJacobian(const Model& model, const State& state, SiteId site,
                                                Workspace& workspace, std::span<double> jacobian) noexcept
 {
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return checked;
+    }
     const std::size_t n = model.dofCount();
     if (jacobian.size() != 3 * n)
     {
-        return std::unexpected(Fault{FaultKind::InvalidInput, "site Jacobian must be 3 x dofCount"});
+        return invalidInput("site Jacobian must be 3 x dofCount");
     }
-    updateKinematics(model, state, workspace);
+    if (site.value() >= model.siteCount())
+    {
+        return invalidInput("site is not a site of the model");
+    }
+    updateUnchecked(model, state, workspace);
     for (double& e : jacobian)
     {
         e = 0.0;
@@ -101,9 +129,14 @@ std::expected<void, Fault> computeSiteJacobian(const Model& model, const State& 
     return {};
 }
 
-MechanicalEnergy computeEnergy(const Model& model, const State& state, Workspace& workspace) noexcept
+std::expected<MechanicalEnergy, Fault> computeEnergy(const Model& model, const State& state,
+                                                    Workspace& workspace) noexcept
 {
-    updateKinematics(model, state, workspace);
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return std::unexpected(checked.error());
+    }
+    updateUnchecked(model, state, workspace);
     const auto inertias = model.inertias();
     const sub0math::Vec3d g = model.baseAcceleration().linear * -1.0;
     double kinetic = 0.0;
@@ -116,7 +149,7 @@ MechanicalEnergy computeEnergy(const Model& model, const State& state, Workspace
         const sub0math::Vec3d centre = rotate(pose.rotation, inertias[i].centreOfMass()) + plain(pose.translation);
         potential -= inertias[i].mass * dot(g, centre);
     }
-    return {sub0math::f64::Energy::fromSi(kinetic), sub0math::f64::Energy::fromSi(potential)};
+    return MechanicalEnergy{sub0math::f64::Energy::fromSi(kinetic), sub0math::f64::Energy::fromSi(potential)};
 }
 
 } // namespace sub0physics::multibody
