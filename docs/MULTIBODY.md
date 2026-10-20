@@ -195,7 +195,7 @@ are in `tests/test_multibody*.cpp` and `tests/bench_multibody.cpp`.
   `std::expected`. The mass matrix is zero outside ancestor pairs from construction and only ancestor entries
   are ever written.
 - `ModelBuilder` also rejects inertias whose principal moments break the triangle inequality, as MuJoCo does.
-- The multibody sources build with `-ffp-contract=off` (`/fp:precise` on MSVC), per section 8.
+- The whole library builds with `-ffp-contract=off` (`/fp:precise` on MSVC), per section 8, and the option is PUBLIC so consumers compile the inline headers the same way (Sub0Math `sub0math_target_deterministic_fp`, 2026-10-20). A CI leg builds with FMA hardware enabled (`-march=x86-64-v3`) to prove it; without the option, bit-exact tests failed there and on Apple Silicon.
 - Gaps against hand-written planar code (CRBA 2.9x, forward dynamics 2.8x) are recorded in
   `docs/PERFORMANCE.md` with an M1d follow-up.
 

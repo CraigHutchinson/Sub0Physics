@@ -24,12 +24,14 @@ jobs:
         include:
           - { compiler: gcc, cc: gcc-14, cxx: g++-14 }
           - { compiler: clang, cc: clang-19, cxx: clang++-19 }
+          # FMA hardware: bit-exact parity must hold with contraction possible (fp-contract is off by design).
+          - { compiler: 'clang, x86-64-v3 FMA', cc: clang-19, cxx: clang++-19, flags: -march=x86-64-v3 }
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y g++-14 clang-19 ninja-build
       - name: Configure
-        run: cmake --preset ci-unix -G Ninja
+        run: cmake --preset ci-unix -G Ninja "-DCMAKE_CXX_FLAGS=${{ matrix.flags }}"
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}

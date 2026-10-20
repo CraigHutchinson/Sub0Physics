@@ -32,10 +32,10 @@ add_library(Sub0Physics STATIC
     src/polyline_profile.cpp
 )
 
-# Determinism (docs/MULTIBODY.md section 8): no floating-point contraction in the multibody core.
-set_source_files_properties(src/model_builder.cpp src/multibody_dynamics.cpp src/multibody_kinematics.cpp
-    PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/fp:precise,-ffp-contract=off>")
 add_library(Sub0Physics::Sub0Physics ALIAS Sub0Physics)
+# Determinism (docs/MULTIBODY.md section 8): no floating-point contraction anywhere in the library, and
+# PUBLIC so consumers' translation units compile the inline headers (integrators, laws, heightAt) the same way.
+sub0math_target_deterministic_fp(Sub0Physics PUBLIC)
 
 target_compile_features(Sub0Physics PUBLIC cxx_std_23)
 target_link_libraries(Sub0Physics PUBLIC Sub0Math::Sub0Math)

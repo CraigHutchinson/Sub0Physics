@@ -13,7 +13,7 @@ using namespace sub0math::f64::literals;
 namespace
 {
 
-constexpr AxialSpringDamper makeAxial()
+AxialSpringDamper makeAxial()
 {
     return *AxialSpringDamper::create({
         .preload = newtons(50.0),
@@ -23,7 +23,7 @@ constexpr AxialSpringDamper makeAxial()
     });
 }
 
-constexpr UnilateralSpringDamper makeContact()
+UnilateralSpringDamper makeContact()
 {
     return *UnilateralSpringDamper::create({.stiffness = newtonsPerMetre(90000.0), .damping = newtonSecondsPerMetre(400.0)});
 }
@@ -32,9 +32,9 @@ constexpr UnilateralSpringDamper makeContact()
 
 TEST_CASE("Axial element uses direction-dependent damping")
 {
-    constexpr AxialSpringDamper element = makeAxial();
-    constexpr AxialResponse compressing = element.respond(100_mm, metresPerSecond(0.2));
-    static_assert(compressing.springForce == newtons(50.0) + newtons(900.0));
+    const AxialSpringDamper element = makeAxial();
+    const AxialResponse compressing = element.respond(100_mm, metresPerSecond(0.2));
+    CHECK(compressing.springForce == newtons(50.0) + newtons(900.0));
     CHECK(compressing.damperForce.in(newtons) == doctest::Approx(70.0));
     // The generalized force on the compression coordinate opposes compression.
     CHECK(compressing.force.in(newtons) == doctest::Approx(-1020.0));
@@ -54,13 +54,13 @@ TEST_CASE("Axial element uses direction-dependent damping")
 
 TEST_CASE("Unilateral contact pushes but never pulls")
 {
-    constexpr UnilateralSpringDamper contact = makeContact();
+    const UnilateralSpringDamper contact = makeContact();
 
     SUBCASE("separated")
     {
-        constexpr ContactResponse r = contact.respond(-10_mm, metresPerSecond(5.0));
-        static_assert(r.force == f64::Force{} && r.compression == f64::Length{} && r.potential == f64::Energy{});
-        static_assert(r.dForceDPosition == f64::Stiffness{} && r.dForceDVelocity == f64::Damping{});
+        const ContactResponse r = contact.respond(-10_mm, metresPerSecond(5.0));
+        CHECK((r.force == f64::Force{} && r.compression == f64::Length{} && r.potential == f64::Energy{}));
+        CHECK((r.dForceDPosition == f64::Stiffness{} && r.dForceDVelocity == f64::Damping{}));
     }
     SUBCASE("loading")
     {
