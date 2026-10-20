@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: CraigHutchinson/Sub0Math
-          ref: SUB0MATH_REF_TODO  # SUB0MATH_REF_TODO: pin to the merged Sub0Math commit sha
+          ref: fae1f18bb316ba47cc7154be88636bb67a2cfaae  # fae1f18bb316ba47cc7154be88636bb67a2cfaae: pin to the merged Sub0Math commit sha
           path: .sub0math
           sparse-checkout: tools/provenance
       - name: Check ported commit and blobs

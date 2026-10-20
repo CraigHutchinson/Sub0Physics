@@ -22,10 +22,10 @@ concurrency:
 
 jobs:
   drift:
-    # SUB0MATH_REF_TODO: pin both refs to the merged Sub0Math commit sha (keep them equal).
-    uses: CraigHutchinson/Sub0Math/.github/workflows/upstream-drift-reusable.yml@SUB0MATH_REF_TODO
+    # fae1f18bb316ba47cc7154be88636bb67a2cfaae: pin both refs to the merged Sub0Math commit sha (keep them equal).
+    uses: CraigHutchinson/Sub0Math/.github/workflows/upstream-drift-reusable.yml@fae1f18bb316ba47cc7154be88636bb67a2cfaae
     with:
-      sub0math-ref: SUB0MATH_REF_TODO
+      sub0math-ref: fae1f18bb316ba47cc7154be88636bb67a2cfaae
       manifest: upstream/bikelab.json
     permissions:
       contents: read
