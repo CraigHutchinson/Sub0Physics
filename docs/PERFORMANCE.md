@@ -21,19 +21,32 @@ These are deterministic, so they block in CI:
 
 Replacement `operator new` lives in its own test executable so it cannot affect the others.
 
-## Timing budgets (per host)
+## Timing budgets and the gate
 
-```bash
-cmake --preset profile
-cmake --build --preset profile --target Sub0Physics_Bench_check      # fails if >10% slower than baseline
-cmake --build --preset profile --target Sub0Physics_Bench_baseline   # record this host's baseline
-```
+The per-host baselines, the interleaved-round measurement, the pre-push gate and its verdicts are
+Sub0Math's, and are documented once in its
+[Timing budgets](https://github.com/CraigHutchinson/Sub0Math/blob/main/docs/PERFORMANCE.md#timing-budgets-per-host)
+section. Sub0Physics uses them unchanged (`Sub0Physics_Bench_check` and `Sub0Physics_Bench_baseline`,
+baselines in `perf/baselines/<host>.json`). What is specific here:
 
-Baselines live in `perf/baselines/<host>.json` (median ns/op from nanobench). Timings from one machine
-say nothing about another, so each host has its own file; a host without one passes and is told how
-to adopt the gate. Regenerate a baseline deliberately and say why in the commit. CI records
-`github-ubuntu` with a 25% tolerance and reports drift in the job summary without blocking, because
-shared runners are noisy.
+**Controls.** The hand-written references in `tests/bench_physics.cpp` and `tests/bench_multibody.cpp` do
+not use the library, so whatever moves them is the environment. They are the controls that the gate
+factors out, and each is the twin of one library call:
+
+| Control (hand-written) | Library call it is paired with |
+|---|---|
+| `page height x1024, hand-written raw arrays` | `HeightPage::heightAt` |
+| `travel buffer x1024, hand-written scalars` | `TravelBuffer::respond` |
+| `planar tree 10-DOF mass matrix, hand-written planar` | `computeMassMatrix` |
+| `planar tree 10-DOF LTDL factor and solve, hand-written` | `factorMassMatrix` + `solveMassMatrix` |
+| `planar tree 10-DOF forward dynamics, hand-written planar` | `forwardDynamics` |
+
+**Pairs judged by ratio.** Each row above is a pair. The ratio of library to reference is what the gate
+and the Open gaps table track, because it does not depend on the host. A reference weakened to look
+better is a defect: iterate, reshape the API, or record the gap under Open gaps (Sub0Math's rule).
+
+The remaining benchmarks (`Rk4` and `Midpoint` steps, circle clearance, surface height, the closed form)
+have no hand-written twin, so they are judged against the host's baseline only.
 
 ## Profiling
 
@@ -90,7 +103,7 @@ Rules that keep hot code fast and analysable:
 | 2026-10-15 | Clearance queries scanned every segment twice: 14 µs at 2048 points | nanobench | Horizontal pruning from the sorted x; 0.8 µs, brute-force agreement test |
 | 2026-10-15 | Accumulated step times missed the endpoint-derivative cache on 31% of 0.5 ms steps | counting test | `stepTick`; exactly 4 evaluations per RK4 step |
 | 2026-10-15 | GCC keeps `evaluate` out of line in the RK4 stages ("statement clobbers memory") | VTune hotspots, vectorization report | Forcing inlining measured no change (39.5 vs 39.8 ns/step); not applied |
-| 2026-10-15 | `std::hypot` dominated dense clearance queries (11.7 µs on a 1024-segment arc in BikeDynamics) | BikeDynamics bench | Squared distances, `sqrt` only on improvement, coordinates bounded at 1e100 m; 3.9 µs |
+| 2026-10-15 | `std::hypot` dominated dense clearance queries (11.7 µs on a 1024-segment arc in a loaded-wheel consumer) | Consumer bench | Squared distances, `sqrt` only on improvement, coordinates bounded at 1e100 m; 3.9 µs |
 | 2026-10-15 | Moving the geometry interface to Sub0Math quantities regressed clearance by 52% (395 to 601 ns, best of 7) | Budget gate, then a scalar rewrite of the kernel to locate it | Fixed in Sub0Math (compile-time component expansion, no zero-initialised sums); 394 vs 402 ns, within noise |
 | 2026-10-16 | Terrain page height lookup started 2.5x slower than the hand-written kernel (raw arrays, bit mask, fixed diagonal) | Paired benchmark `page height x1024` | Inline definition with reciprocal spacing (7.1 to 5.4 µs); a plain `HeightSample` return instead of `std::optional` (5.6 to 3.5 µs; `std::optional<float>` was equally slow, so the optional, not the quantity, kept the result in memory on GCC 16); two plain branches instead of a merged triangle select (3.5 to 3.0 µs). Force-inlining alone: no gain. Now 1.07x |
 | 2026-10-19 | Travel buffer (`TravelBuffer::respond`, 7 outputs incl. both Jacobian entries) first measured 1.2x slower than the hand-written scalars | Paired benchmark `travel buffer x1024`; the benchmark itself fed `f32` `sub0math::Length` (float round trip), so the gap was a harness error, not the element | Fixed the benchmark to `f64` quantities: 1.00x to 1.05x over six runs (3.3 to 3.7 µs per 1024) against a constexpr-parameter reference. `std::fmax` vs compare-select: no difference; branch-free ternaries for the closing side |
@@ -104,3 +117,4 @@ Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANC
 |---|---|---|---|---|
 | 2026-10-16 | `page height x1024`, `HeightPage::heightAt` | about 1.07x in one process, 1.10x interleaved (pair ratio) | Per-call conversion and bounds work around an otherwise identical kernel | Terrain step G3: the batch extraction API (many samples per call, SoA out) is the real consumer; close it there or accept it with its numbers |
 | 2026-10-19 | `planar tree 10-DOF`: `computeMassMatrix`, `forwardDynamics` | 2.9x and 2.8x interleaved (276 vs 92 ns; 585 vs 216 ns); the tree-sparse LTDL factor and solve is at parity (0.92x, 69 ns) | The reference uses three-component planar algebra and a compile-time tree; the core runs the general 3D formulation, by design (docs/MULTIBODY.md section 3) | M1d, with the bike rig as the consumer: a planar joint type or a compact transform for axis-aligned revolute joints (rotation about one coordinate axis), judged on the rig's whole step. About 0.6 us per evaluation is already far inside a 0.5 ms step |
+| 2026-10-20 | `travel buffer x1024`, `TravelBuffer::respond` | 1.5x to 1.7x (about 5.0 vs 3.0 µs per 1024), the same at 1f60d01, so not caused by wave 1c | Measured with GCC 16.2.0 (WinLibs), -O3, on the development host; the 2026-10-19 finding recorded 1.00x to 1.05x. The cause is not yet known: the code and the harness are unchanged, so suspect the host state or a Sub0Math change since | Re-measure at the wave 2a re-baseline (`-ffp-contract=off` and the deterministic-FP helper change both sides' code generation); if it persists, bisect Sub0Math and the fmax/compare-select choice |

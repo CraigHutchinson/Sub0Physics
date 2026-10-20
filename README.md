@@ -14,10 +14,12 @@ primitives. Sub0Physics knows nothing of them.
 | Area | Header | Provides |
 |---|---|---|
 | Integrators | `sub0physics/integrators.hpp` | `OdeSystem` concept; transactional fixed-step `Rk4` and `Midpoint` that reuse the endpoint derivative and never commit a refused or non-finite state |
-| Elements | `sub0physics/elements.hpp` | `AxialSpringDamper` (preload, compression/rebound damping) and `UnilateralSpringDamper` (push-only penalty contact), with stored energy and dissipated power |
+| Elements | `sub0physics/elements.hpp` | `AxialSpringDamper` (preload, compression/rebound damping), `UnilateralSpringDamper` (push-only penalty contact) and `TravelBuffer` (progressive end-stops inside a finite stroke, built by the validating `TravelBuffer::create`, with exact Jacobians), with stored energy and dissipated power |
 | References | `sub0physics/references.hpp` | Closed-form damped linear oscillator for all damping regimes, numerically guarded |
 | Verification | `sub0physics/verification.hpp` | `EnergyLedger` (work/energy balance residual), `ErrorStatistics` (peak/RMS against a limit), `observedOrder` (convergence), `ChannelTable` (preallocated column recording) |
 | Geometry | `sub0physics/geometry.hpp` | `PolylineProfile` of `ProfilePoint` (`sub0math::Point2<f64::Length>`; a validated height field, searched with `sub0math::closestPoint` with vertical faces) and `sub0math::Circle` clearance with vertex/segment witnesses and approach normals |
+| Multibody | `sub0physics/multibody.hpp` | Articulated rigid-body trees in reduced coordinates: a typed description compiled by `ModelBuilder` into an immutable `Model`; `State` and a per-model `Workspace`; kinematics, site poses and Jacobians, energy; CRBA mass matrix, RNEA bias and inverse dynamics, tree-sparse LTDL factorisation; forward dynamics and a semi-implicit Euler step. No allocation once the workspace exists. Design: [docs/MULTIBODY.md](docs/MULTIBODY.md) |
+| Terrain | `sub0physics/terrain.hpp` | `GridSpec` (paging of the plane into levels of pages, built by the validating `GridSpec::create`), `TileKey` and `PageFrame` (double-precision terrain frame, float page-local frame), and `HeightPage`: a quantised 257 x 257 height page with an authored-node mask, a min/max pyramid and a fixed-triangulation `heightAt` |
 | Profiling | `sub0physics/profiling.hpp` | `ProfileTask`: ITT task markers for VTune, compiled out unless `SUB0PHYSICS_ENABLE_ITT` |
 | Level of detail | `sub0physics/lod.hpp` | `ModelDescriptor` and `FidelitySelector`: choose between models of one mechanism from a physical demand, with hysteresis, dwell and commit-after-transfer. See [docs/LOD.md](docs/LOD.md) |
 

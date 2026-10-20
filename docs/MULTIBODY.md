@@ -27,7 +27,7 @@ the core.
 
 A `ModelBuilder` takes typed descriptions (Sub0Math quantities and roles) and compiles them into an
 immutable `Model` of flat arrays in topological order. The description is the asset that must not be
-locked in: BikeDynamics builds bike models with it, and the test-only MuJoCo adapter compiles the
+locked in: a bicycle-rig consumer builds its models with it, and the test-only MuJoCo adapter compiles the
 same description to `mjSpec`.
 
 | Item | Contents |
@@ -50,7 +50,8 @@ and no runtime parsing.
   is what replay and restart need.
 - **Equations:** `M(q) qdd + c(q, qd) = tau(q, qd, t) + J(q)^T lambda`.
   - `M` comes from CRBA (dense, n ≤ ~40), and `c` (Coriolis, centrifugal, gravity) from RNEA.
-  - `M` is factorised by `LDLᵀ` in the topological order, with sparsity from the tree.
+  - `M` is factorised by Featherstone's LTDL (`M = LᵀDL`, eliminating from the leaves): the ordering of
+    `LDLᵀ` that creates no fill-in on a tree, so the cost follows the tree's depth. Landed in M1a.
   - ABA only if measurement ever asks for it.
 - **Spatial algebra:** spatial vectors, spatial inertias and Plücker transforms, in double, through a
   6D vocabulary added to Sub0Math when M1a first needs it, following ADR 0002's "grow by use".
@@ -85,7 +86,7 @@ Jacobians.
 | Kind | Notes |
 |---|---|
 | Coordinate spring-damper | On one joint coordinate; linear, with a reference |
-| `TravelBuffer` | Progressive buffer on a coordinate; ported from BikeLab with exact analytic Jacobians (in progress) |
+| `TravelBuffer` | Progressive buffer on a coordinate; ported from BikeLab with exact analytic Jacobians. **Landed** as a stand-alone law (`element/travel_buffer.hpp`: force, potential, loss power and both Jacobian entries, built by the validating `TravelBuffer::create`); binding it to a coordinate as a `ForceElement` is M1b |
 | Spatial tendon spring-damper | Two-site length, like BikeLab's shock: force along the line, Jacobian through the site Jacobians |
 | External wrench | Prescribed or scripted, at a site |
 | Tyre and contact (M2) | Over terrain extracts, with Jacobians from the contact law |
@@ -154,10 +155,10 @@ Constraints here are few by design:
 
 | Step | Delivers | Gate |
 |---|---|---|
-| M1a | Spatial algebra (Sub0Math); `ModelBuilder`, `Model`, `State`, prismatic and revolute joints; CRBA, RNEA, `LDLᵀ`; explicit stepping | Pendulum, double pendulum and slider analytic checks; energy conservation with no dissipation; allocation gate; benchmarks |
+| M1a | Spatial algebra (Sub0Math); `ModelBuilder`, `Model`, `State`, prismatic and revolute joints; CRBA, RNEA, LTDL factorisation; explicit stepping | Pendulum, double pendulum and slider analytic checks; energy conservation with no dissipation; allocation gate; benchmarks |
 | M1b | `ForceElement` concept; coordinate spring-damper, tendon spring-damper, `TravelBuffer`; linearly implicit integrator with element Jacobians | Stiff spring-damper stable at large `h`, with energy and dissipation accounted; Jacobians checked against finite differences; convergence order measured |
 | M1c | Loop closures, strict limits (LCP), event location, post-solve reactions, energy ledger | Slider-crank closure residuals; a limit never overshot; reactions match independent statics; the energy ledger closes |
-| M1d | BikeDynamics bike-rig description (hardtail and full suspension, buffers, rider guide) on the core | Parity against the M0 MuJoCo reference and BikeLab goldens within the declared tolerances; timestep advantage measured |
+| M1d | The consumer's bike-rig description (hardtail and full suspension, buffers, rider guide) on the core | Parity against the M0 MuJoCo reference and BikeLab goldens within the declared tolerances; timestep advantage measured |
 
 Each step ships through the pre-push gate, with goldens and provenance as usual.
 
@@ -170,7 +171,7 @@ Each step ships through the pre-push gate, with goldens and provenance as usual.
 `std::expected<Model, Fault>`, `Model`, `State`, `Workspace`; kinematics (`updateKinematics`, site pose,
 velocity and translational Jacobian, `computeEnergy`); `computeMassMatrix` (CRBA),
 `computeBiasForces` and `inverseDynamics` (RNEA), `factorMassMatrix` / `solveMassMatrix`,
-`forwardDynamics`; `stepSymplecticEuler`. The analytic gates, allocation gate and paired benchmarks
+`forwardDynamics`; `stepSymplecticEuler` (a semi-implicit Euler step). The analytic gates, allocation gate and paired benchmarks
 are in `tests/test_multibody*.cpp` and `tests/bench_multibody.cpp`.
 
 **Deviations and decisions:**
@@ -186,7 +187,13 @@ are in `tests/test_multibody*.cpp` and `tests/bench_multibody.cpp`.
   `h` = 0.1 ms on the double pendulum, halving with `h`. Conservation to round-off is shown with the
   existing `Rk4` through an `OdeSystem` adapter in the tests (9e-11 over 20 s at 1 ms).
 - `Workspace` exposes its arrays as fields, sized once (the Pinocchio `Data` pattern); the site and
-  energy queries recompute kinematics per call (O(n)).
+  energy queries recompute kinematics per call (O(n)). A workspace is bound to the model it was built for
+  (`Model::id`): every public entry point returns `InvalidInput` for another model's workspace or a state
+  that is not sized for the model, and the queries that used to return plain values (`computeMassMatrix`,
+  `computeBiasForces`, `updateKinematics`, `computeSiteKinematics`, `computeEnergy`, `solveMassMatrix`) return
+  `std::expected`. The mass matrix is zero outside ancestor pairs from construction and only ancestor entries
+  are ever written.
+- `ModelBuilder` also rejects inertias whose principal moments break the triangle inequality, as MuJoCo does.
 - The multibody sources build with `-ffp-contract=off` (`/fp:precise` on MSVC), per section 8.
 - Gaps against hand-written planar code (CRBA 2.9x, forward dynamics 2.8x) are recorded in
   `docs/PERFORMANCE.md` with an M1d follow-up.

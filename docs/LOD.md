@@ -28,7 +28,7 @@ where they are needed, without losing correctness or replayability. The design f
 |---|---|---|---|
 | Time integration | `Rk4` (order 4, 4 evaluations per step) | `Midpoint` (order 2, 2 evaluations) | Exact while acceleration is constant, e.g. ballistic flight between contacts |
 
-The first consumer is BikeDynamics' loaded wheel: midpoint while airborne, RK4 from just before
+The first consumer is a loaded wheel: midpoint while airborne, RK4 from just before
 contact. That halves the cost of flight phases with no loss of accuracy there.
 
 ## Verification of a switch
