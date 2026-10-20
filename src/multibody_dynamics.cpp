@@ -300,7 +300,7 @@ std::expected<void, Fault> prepareStep(const Model& model, const State& state, W
 // re-evaluates the elements, so it needs the start's transforms (`allowFallback`).
 std::expected<bool, Fault> formStepSystem(const Model& model, const State& state, const Forcing& applied,
                                           const double* elementForce, Workspace& ws, double dt, bool implicit,
-                                          ImplicitTerms terms, bool allowFallback) noexcept
+                                          ImplicitTerms terms, bool allowFallback, double theta = 1.0) noexcept
 {
     const std::size_t n = model.dofCount();
     const double* qd = state.values.data() + n;
@@ -313,9 +313,11 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
     double* a = ws.implicitMatrix.data();
     double* b = ws.implicitRhs.data();
     const bool hasElements = model.elementCount() > 0;
-    const double hd = implicit ? dt : 0.0;
+    // theta = 1: backward Euler linearised; theta = 1/2: the linearised trapezoid (implicit midpoint).
+    const double thetaStep = theta * dt;
+    const double hd = implicit ? thetaStep : 0.0;
     const auto assemble = [&](bool withStiffness) {
-        const double h2 = withStiffness ? dt * dt : 0.0;
+        const double h2 = withStiffness ? thetaStep * thetaStep : 0.0;
         for (std::size_t i = 0; i < n; ++i)
         {
             double stiffnessRate = 0.0;
@@ -347,7 +349,7 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
             }
             const double force = tau.empty() ? 0.0 : tau[i];
             const double element = elementForce == nullptr ? 0.0 : elementForce[i];
-            b[i] = dt * (force + element - ws.bias[i] + dt * stiffnessRate);
+            b[i] = dt * (force + element - ws.bias[i] + thetaStep * stiffnessRate);
         }
     };
     // Forcing Jacobians may couple any coordinates: they take the dense factorisation.
@@ -644,11 +646,12 @@ std::expected<void, Fault> stepSemiImplicitEuler(const Model& model, const Forci
     return {};
 }
 
-std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const Forcing& forcing, std::uint64_t tick,
-                                                     sub0math::f64::Time h, State& state, Workspace& ws,
-                                                     ImplicitTerms terms) noexcept
+// The linearly implicit theta step: (M - theta h D - theta^2 h^2 K~) dqd = h (tau + tau_e - c + theta h K~ qd), then
+// q += h (qd + theta dqd), qd += dqd. theta = 1 is linearly implicit Euler (bit for bit its earlier form).
+std::expected<void, Fault> stepLinearlyImplicit(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                double dt, State& state, Workspace& ws, ImplicitTerms terms,
+                                                double theta) noexcept
 {
-    const double dt = h.si();
     if (auto checked = checkStep(model, forcing, tick, dt, state, ws); !checked)
     {
         return checked;
@@ -656,6 +659,10 @@ std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const F
     const Forcing applied = detail::applyForcing(model, state, forcing, ws);
     if (model.constraintCount() > 0)
     {
+        if (theta != 1.0)
+        {
+            return invalidInput("the linearly implicit midpoint step does not support constraints yet");
+        }
         return detail::stepConstrained(model, applied, dt, state, ws, true, terms);
     }
     const std::size_t n = model.dofCount();
@@ -665,7 +672,7 @@ std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const F
     }
     const bool hasElements = model.elementCount() > 0;
     const auto dense = formStepSystem(model, state, applied, hasElements ? ws.elementForce.data() : nullptr, ws, dt,
-                                      true, terms, true);
+                                      true, terms, true, theta);
     if (!dense)
     {
         return std::unexpected(dense.error());
@@ -679,7 +686,7 @@ std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const F
     for (std::size_t i = 0; i < n; ++i)
     {
         const double rate = qd[i] + b[i];
-        if (!std::isfinite(rate) || !std::isfinite(q[i] + dt * rate))
+        if (!std::isfinite(rate) || !std::isfinite(q[i] + dt * (qd[i] + theta * b[i])))
         {
             return std::unexpected(Fault{FaultKind::NonFiniteState, "nonfinite physical state"});
         }
@@ -691,8 +698,8 @@ std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const F
     for (std::size_t i = 0; i < n; ++i)
     {
         ws.qdd[i] = b[i] * inverseStep;
+        const double step = dt * (qdOut[i] + theta * b[i]);
         qdOut[i] += b[i];
-        const double step = dt * qdOut[i];
         qOut[i] += step;
         work += (applied.tau.empty() ? 0.0 : applied.tau[i]) * step;
     }
@@ -703,6 +710,20 @@ std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const F
     state.externalWork += sub0math::f64::Energy::fromSi(work);
     state.tick = tick + 1U;
     return {};
+}
+
+std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                     sub0math::f64::Time h, State& state, Workspace& ws,
+                                                     ImplicitTerms terms) noexcept
+{
+    return stepLinearlyImplicit(model, forcing, tick, h.si(), state, ws, terms, 1.0);
+}
+
+std::expected<void, Fault> stepLinearlyImplicitMidpoint(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                        sub0math::f64::Time h, State& state, Workspace& ws,
+                                                        ImplicitTerms terms) noexcept
+{
+    return stepLinearlyImplicit(model, forcing, tick, h.si(), state, ws, terms, 0.5);
 }
 
 namespace detail

@@ -103,4 +103,62 @@ struct LinearlyImplicitEuler
 
 static_assert(Stepper<LinearlyImplicitEuler>);
 
+/**
+ * Advances a state by one linearly implicit midpoint step: the energy-better model beside linearly implicit Euler
+ * (docs/MULTIBODY.md, M1d status; docs/LOD.md, reference and improved models).
+ *
+ * The same linearisation with weight 1/2, the trapezoid rule on velocities:
+ *
+ *     (M - h/2 D - h^2/4 K~) dqd = h (tau + tau_e - c + h/2 K~ qd),   q += h (qd + dqd / 2),   qd += dqd
+ *
+ * It is A-stable like the Euler form but adds no numerical damping to a linear oscillator (backward Euler damps a
+ * mode of frequency w at about w^2 h / 2 per second), and it is second order for constant M. `M` and `c` are taken
+ * at the start of the step, so a configuration-dependent mass matrix keeps first-order terms of size h times the
+ * rate of change of M. Loop closures and limits are not supported yet (InvalidInput): its constrained form is a
+ * RATTLE-type scheme, still open. Energy bookkeeping, transactional behaviour and allocation are as
+ * stepLinearlyImplicitEuler.
+ *
+ * @param model The model; without constraints.
+ * @param forcing Applied generalized forces and site forces, constant over the step.
+ * @param tick The tick the state is at; must equal `state.tick`.
+ * @param h Step size; finite and positive.
+ * @param state State at tick; replaced by the state at tick + 1 only on success.
+ * @param workspace Workspace built for the model.
+ * @param terms Which Jacobians are implicit.
+ * @return Nothing, or the fault, as stepLinearlyImplicitEuler; InvalidInput for a model with constraints.
+ */
+[[nodiscard]] std::expected<void, Fault> stepLinearlyImplicitMidpoint(const Model& model, const Forcing& forcing,
+                                                                      std::uint64_t tick, sub0math::f64::Time h,
+                                                                      State& state, Workspace& workspace,
+                                                                      ImplicitTerms terms = ImplicitTerms::Full) noexcept;
+
+/** The linearly implicit midpoint step as a Stepper. */
+struct LinearlyImplicitMidpoint
+{
+    /** Integrator order (for constant M). */
+    static constexpr int Order = 2;
+
+    ImplicitTerms terms = ImplicitTerms::Full; ///< Which Jacobians are implicit.
+
+    /**
+     * Advances one tick; see stepLinearlyImplicitMidpoint.
+     *
+     * @param model The model.
+     * @param forcing Applied forces.
+     * @param tick The tick the state is at; must equal `state.tick`.
+     * @param h Step size; finite and positive.
+     * @param state State at tick; replaced by the state at tick + 1 only on success.
+     * @param workspace Workspace built for the model.
+     * @return Nothing, or the fault.
+     */
+    [[nodiscard]] std::expected<void, Fault> step(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                  sub0math::f64::Time h, State& state,
+                                                  Workspace& workspace) const noexcept
+    {
+        return stepLinearlyImplicitMidpoint(model, forcing, tick, h, state, workspace, terms);
+    }
+};
+
+static_assert(Stepper<LinearlyImplicitMidpoint>);
+
 } // namespace sub0physics::multibody

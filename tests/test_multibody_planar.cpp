@@ -550,3 +550,65 @@ TEST_CASE("massless bodies: two joints on one body; a massless leaf is refused")
     CHECK(std::string_view(refused.error().detail) ==
           "a massless body leaves a joint that moves no mass: the mass matrix is singular");
 }
+
+TEST_CASE("linearly implicit midpoint: conserves an oscillator's energy, second order, refuses constraints")
+{
+    // A slider on a spring (no damping): the linearised trapezoid is the trapezoid rule here, which keeps the
+    // quadratic energy exactly (to rounding) at any step, where backward Euler loses it at about w^2 h / 2 per second.
+    ModelBuilder b;
+    b.addBody({.name = "slider",
+               .mass = sub0math::kilograms(2.0),
+               .centreOfMass = {metres(0.0), metres(0.0), metres(0.0)},
+               .inertia = inertia(0.1, 0.1, 0.1),
+               .joint = {.type = JointType::Prismatic, .axis = {1.0, 0.0, 0.0}}});
+    b.setGravity(gravityAlong(0.0, 0.0, 0.0));
+    constexpr double K = 8000.0;
+    b.addElement(CoordinateElementDescription<LinearSpringDamper<f64::Length>>{
+        .name = "spring",
+        .body = BodyId{0},
+        .law = *LinearSpringDamper<f64::Length>::create(
+            {.stiffness = f64::Stiffness::fromSi(K), .damping = f64::Damping::fromSi(0.0)})});
+    const Model model = *b.build();
+    Workspace ws(model);
+    const auto energyOf = [&](const State& s) {
+        return 0.5 * 2.0 * s.qd()[0] * s.qd()[0] + 0.5 * K * s.q()[0] * s.q()[0];
+    };
+    const double omega = std::sqrt(K / 2.0);
+    const auto runTo = [&](double h, double time, auto&& stepper) {
+        State s = State::fromCoordinates({0.01}, {0.0});
+        const auto steps = static_cast<std::uint64_t>(std::llround(time / h));
+        for (std::uint64_t k = 0; k < steps; ++k)
+        {
+            REQUIRE(stepper.step(model, Forcing{}, k, f64::Time::fromSi(h), s, ws));
+        }
+        return s;
+    };
+    const double e0 = 0.5 * K * 0.01 * 0.01;
+    const State midpoint = runTo(5e-3, 2.0, LinearlyImplicitMidpoint{});
+    const State euler = runTo(5e-3, 2.0, LinearlyImplicitEuler{});
+    CHECK(std::abs(energyOf(midpoint) - e0) < 1e-12 * e0);
+    CHECK(energyOf(euler) < 0.01 * e0); // backward Euler at h w = 0.32 has damped it away
+    // Order: the largest error over 0.5 s against the closed form quarters per halving of h.
+    double previous = 0.0;
+    for (const double h : {4e-3, 2e-3, 1e-3, 5e-4})
+    {
+        State s = State::fromCoordinates({0.01}, {0.0});
+        double error = 0.0;
+        const auto steps = static_cast<std::uint64_t>(std::llround(0.5 / h));
+        for (std::uint64_t k = 0; k < steps; ++k)
+        {
+            REQUIRE(stepLinearlyImplicitMidpoint(model, Forcing{}, k, f64::Time::fromSi(h), s, ws));
+            const double t = static_cast<double>(k + 1) * h;
+            error = std::max(error, std::abs(s.q()[0] - 0.01 * std::cos(omega * t)));
+        }
+        if (previous > 0.0)
+        {
+            CHECK(std::log2(previous / error) == doctest::Approx(2.0).epsilon(0.05));
+        }
+        previous = error;
+    }
+    const Model crank = *sliderCrankBuilder().build();
+    Workspace wc(crank);
+    State sc = sliderCrankState({}, 0.3, 1.0);
+    CHECK_FALSE(stepLinearlyImplicitMidpoint(crank, Forcing{}, 0, f64::Time::fromSi(1e-3), sc, wc));
+}
