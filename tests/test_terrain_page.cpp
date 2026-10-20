@@ -50,15 +50,18 @@ static_assert(!ConvertsTo<sub0math::Point3<f64::Length>, TerrainPoint>);
 
 TEST_CASE("Grid spec: spacing per level, page lookup and corners")
 {
+    // The default grid is centred on the terrain origin: page 32768 starts at 0.
+    constexpr std::int32_t Mid = 32768;
     CHECK(Grid.spacing(0).si() == doctest::Approx(0.01));
     CHECK(Grid.spacing(3).si() == doctest::Approx(0.08));
     CHECK(Grid.pageSide(0).si() == doctest::Approx(2.56));
     const TerrainPoint p{{f64::Length::fromSi(-0.1), f64::Length::fromSi(5.2), f64::Length{}}};
     REQUIRE(Grid.pageOf(p, 0));
-    CHECK(Grid.pageOf(p, 0).key == TileKey{-1, 2, 0});
+    CHECK(Grid.pageOf(p, 0).key == TileKey{Mid - 1, Mid + 2, 0});
     REQUIRE(Grid.pageOf(p, 2));
-    CHECK(Grid.pageOf(p, 2).key == TileKey{-1, 0, 2});
-    CHECK(Grid.pageCorner({-1, 2, 0}).x.si() == doctest::Approx(-2.56));
+    CHECK(Grid.pageOf(p, 2).key == TileKey{Mid / 4 - 1, Mid / 4, 2});
+    CHECK(Grid.pageCorner({Mid - 1, Mid + 2, 0}).x.si() == doctest::Approx(-2.56));
+    CHECK(Grid.pageCorner({Mid, Mid, 0}).x.si() == 0.0);
 }
 
 TEST_CASE("Grid spec: create validates levels and spacing")
@@ -102,20 +105,26 @@ TEST_CASE("Grid spec: page lookup refuses what it cannot index")
     CHECK_FALSE(Grid.pageOf(at(1.0, nan), 0));
     CHECK_FALSE(Grid.pageOf(at(HUGE_VAL, 1.0), 0));
     CHECK_FALSE(Grid.pageOf(at(1.0, -HUGE_VAL), 0));
-    CHECK_FALSE(Grid.pageOf(at(1e300, 1.0), 0));  // index beyond 32 bits
+    CHECK_FALSE(Grid.pageOf(at(1e300, 1.0), 0));
     CHECK_FALSE(Grid.pageOf(at(-1e300, 1.0), 0));
+    // The grid is a finite rectangle: the page before the first and the page after the last do not exist,
+    // and the far edge belongs to the last page.
+    const double lo = Grid.anchor().x.si();
     const double side = Grid.pageSide(0).si();
-    CHECK_FALSE(Grid.pageOf(at(side * 2147483648.5, 0.0), 0)); // one past INT32_MAX
-    CHECK(Grid.pageOf(at(side * 2147483647.5, 0.0), 0).key.i == 2147483647);
-    CHECK(Grid.pageOf(at(side * -2147483647.5, 0.0), 0).key.i == -2147483647 - 1);
-    CHECK_FALSE(Grid.pageOf(at(side * -2147483648.5, 0.0), 0));
+    CHECK_FALSE(Grid.pageOf(at(lo - 0.001, 0.0), 0));
+    CHECK(Grid.pageOf(at(lo, 0.0), 0).key.i == 0);
+    CHECK(Grid.pageOf(at(-lo, 0.0), 0).key.i == 65535);
+    CHECK_FALSE(Grid.pageOf(at(-lo + side * 0.001, 0.0), 0));
 }
 
 TEST_CASE("Page frames keep positions exact far from the terrain origin")
 {
     // 1000 km out: float alone would round to 6 cm; the frame keeps micrometres.
-    const TileKey key{390625, -390625, 0};
-    const auto corner = Grid.pageCorner(key);
+    const auto far = *GridSpec::create({.finestSpacing = f64::Length::fromSi(0.01),
+                                        .anchor = {f64::Length::fromSi(-1e6), f64::Length::fromSi(-1e6)},
+                                        .pages = {781250, 781250}});
+    const TileKey key{781249, 0, 0}; // x about +1000 km, y about -1000 km
+    const auto corner = far.pageCorner(key);
     const PageFrame frame{key, {corner.x, corner.y, f64::Length::fromSi(812.0)}};
     const TerrainPoint p{{corner.x + f64::Length::fromSi(1.234567), corner.y + f64::Length::fromSi(0.000321),
                           f64::Length::fromSi(812.0345)}};
@@ -130,7 +139,7 @@ TEST_CASE("Page frames keep positions exact far from the terrain origin")
 
 TEST_CASE("Height pages reproduce a plane exactly and quantise to 0.1 mm")
 {
-    const TileKey key{3, -2, 0};
+    const TileKey key{32771, 32766, 0};
     const auto plane = [](double x, double y) { return 100.0 + 0.2 * x - 0.1 * y; };
     const Samples s = sample(Grid, key, plane);
     const auto page = buildHeightPage(Grid, key, SourceRevision{7}, s.heights, s.known);

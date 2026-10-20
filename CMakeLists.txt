@@ -22,6 +22,7 @@ include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")
 
 add_library(Sub0Physics STATIC
     src/circle_clearance.cpp
+    src/corridor_builder.cpp
     src/damped_oscillator.cpp
     src/fidelity_selector.cpp
     src/height_page.cpp

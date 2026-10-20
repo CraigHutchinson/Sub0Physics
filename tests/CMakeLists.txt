@@ -6,15 +6,19 @@ add_executable(Sub0Physics_Tests
     test_main.cpp
     test_channel_table.cpp
     test_circle_clearance.cpp
+    test_corridor_builder.cpp
     test_damped_oscillator.cpp
     test_elements.cpp
     test_energy_ledger.cpp
     test_error_statistics.cpp
     test_fidelity_selector.cpp
+    test_id.cpp
     test_integrators.cpp
     test_multibody.cpp
     test_polyline_profile.cpp
+    test_terrain_grid.cpp
     test_terrain_page.cpp
+    test_terrain_surfaces.cpp
     test_travel_buffer.cpp
 )
 

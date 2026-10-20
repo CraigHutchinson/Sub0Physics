@@ -10,6 +10,7 @@
 #include <sub0math/units/quantities.hpp>
 #include <vector>
 
+#include "sub0physics/core/id.hpp"
 #include "sub0physics/fault.hpp"
 #include "sub0physics/terrain/grid_spec.hpp"
 
@@ -19,7 +20,7 @@ namespace sub0physics::terrain
 struct SourceRevisionTag;
 
 /** The immutable content generation of a page; changes whenever its authored data changes. */
-using SourceRevision = sub0math::Role<SourceRevisionTag, std::uint32_t>;
+using SourceRevision = Id<SourceRevisionTag>;
 
 /**
  * Conservative height bounds of a block of cells, in the page's 0.1 mm steps.
@@ -59,6 +60,11 @@ struct HeightSample
  * (256 x 256 cells), quantised to 0.1 mm above the page's height origin, with a mask of authored nodes
  * and a min/max pyramid for clearance proofs and query pruning.
  *
+ * The page size is fixed at compile time (256 cells), so the lookup has constant strides and bounds and no
+ * runtime page size to load. A grid of another cell count or of cell-centre registration describes a
+ * different kind of source and is refused by `buildHeightPage`; see docs/TERRAIN.md for the measurement
+ * behind that choice.
+ *
  * Each page holds its own edge nodes; a neighbour's matching nodes are equal by construction (stitched
  * at import), while each cell, and so its state, belongs to exactly one page.
  *
@@ -68,7 +74,7 @@ struct HeightSample
 class HeightPage
 {
 public:
-    static constexpr std::int32_t Cells = GridSpec::CellsPerSide;       ///< Cells per side.
+    static constexpr std::int32_t Cells = GridSpec::DefaultCellsPerSide; ///< Cells per side: the 256 fast path.
     static constexpr std::int32_t Nodes = Cells + 1;                    ///< Nodes per side.
     static constexpr std::int32_t BlockCells = 8;                       ///< Cells per side of a pyramid level-0 block.
     static constexpr std::int32_t PyramidLevels = 6;                    ///< 32, 16, 8, 4, 2 and 1 blocks per side.
@@ -215,13 +221,13 @@ SUB0MATH_FORCE_INLINE HeightSample HeightPage::heightAt(sub0math::Length x, sub0
  *
  * The page's height origin is its lowest authored height, so stored heights are non-negative.
  *
- * @param grid The grid the page belongs to.
+ * @param grid The grid the page belongs to: 256 cells per page and node registration.
  * @param key The page.
  * @param revision Its content generation.
  * @param heights Nodes x Nodes heights in the terrain frame, row-major in j (row j holds i = 0..Nodes-1).
  * @param known Nodes x Nodes flags: nonzero where the height is authored. Unauthored heights are ignored.
- * @return The page, or an InvalidInput fault: wrong sample count, a non-finite authored height, a level
- *         outside the grid, or an authored height range over 6.5535 m (a page needs 32-bit heights).
+ * @return The page, or an InvalidInput fault: a grid that is not 256-cell node-registered, wrong sample
+ *         count, a non-finite authored height, a key outside the grid, or an authored height range over 6.5535 m (a page needs 32-bit heights).
  */
 [[nodiscard]] std::expected<HeightPage, Fault> buildHeightPage(const GridSpec& grid, const TileKey& key, SourceRevision revision,
                                                               std::span<const sub0math::f64::Length> heights,

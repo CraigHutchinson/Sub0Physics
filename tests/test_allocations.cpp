@@ -1,4 +1,5 @@
 // Counts every heap allocation in this executable, to pin the "no allocation while stepping" contract.
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -6,6 +7,7 @@
 #include <doctest.h>
 #include <expected>
 #include <new>
+#include <span>
 #include <vector>
 
 #include "sub0physics/sub0physics.hpp"
@@ -103,17 +105,53 @@ TEST_CASE("Recording, ledgers, statistics and selection never allocate after con
     CHECK(count.since() == 0U);
 }
 
-TEST_CASE("A clearance query allocates only its witness list")
+TEST_CASE("A clearance query never allocates, whatever the witness buffer holds")
 {
     auto profile = PolylineProfile::create(test_profiles::metresPoints({{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.1}, {0.2, 0.1}, {0.2, 0.0}, {1.0, 0.0}}));
     REQUIRE(profile);
+    const auto valley = PolylineProfile::create(test_profiles::metresPoints({{-1.0, 1.0}, {0.0, 0.0}, {1.0, 1.0}}));
+    REQUIRE(valley);
+    std::array<Witness2, DefaultWitnessCapacity> buffer{};
     const AllocationCount count;
-    const CircleClearance c = measureCircleClearance(*profile, {{test_profiles::at(-0.1, 0.25), sub0math::metres(0.1)}, sub0math::metres(1e-10)});
-    CHECK(c.witnesses.size() == 1U);
-    CHECK(count.since() <= 1U);
-    const AllocationCount refused;
-    CHECK(measureCircleClearance(*profile, {{test_profiles::at(0.9, 1.0), sub0math::metres(0.2)}, sub0math::metres(1e-10)}).status == ClearanceStatus::OutsideDomain);
-    CHECK(refused.since() == 0U);
+    const CircleClearance c = measureCircleClearance(*profile, {{test_profiles::at(-0.1, 0.25), sub0math::metres(0.1)}, sub0math::metres(1e-10)}, buffer);
+    CHECK(c.witnessCount == 1U);
+    // Two ties into a buffer of one: overflow is a flag, not a reallocation.
+    const CircleClearance tied = measureCircleClearance(*valley, {{test_profiles::at(0.0, 0.5), sub0math::metres(0.1)}, sub0math::metres(1e-10)},
+                                                       std::span<Witness2>(buffer).first(1));
+    CHECK(tied.overflowed);
+    CHECK(measureCircleClearance(*profile, {{test_profiles::at(0.9, 1.0), sub0math::metres(0.2)}, sub0math::metres(1e-10)}, buffer).status == ClearanceStatus::OutsideDomain);
+    CHECK(count.since() == 0U);
+}
+
+TEST_CASE("Corridor rasterising and grid lookups never allocate")
+{
+    using namespace sub0physics::terrain;
+    const auto grid = GridSpec::create({.finestSpacing = sub0math::f64::Length::fromSi(0.02),
+                                        .cellsPerSide = 40,
+                                        .registration = Registration::CellCentre,
+                                        .anchor = {sub0math::f64::Length{}, sub0math::f64::Length::fromSi(-1.6)},
+                                        .pages = {10, 4}});
+    REQUIRE(grid);
+    std::array<std::uint64_t, 512> words{};
+    std::size_t cells = 0;
+    const AllocationCount count;
+    for (int k = 0; k < 100; ++k)
+    {
+        const double x = 1.0 + 0.01 * k;
+        const auto corridor = CorridorBuilder::create({.from = {sub0math::f64::Length::fromSi(x), sub0math::f64::Length::fromSi(0.1), {}},
+                                                       .to = {sub0math::f64::Length::fromSi(x + 0.2), sub0math::f64::Length::fromSi(0.3),
+                                                              sub0math::f64::Angle::fromSi(0.2)},
+                                                       .footprint = {sub0math::f64::Length::fromSi(0.38), sub0math::f64::Length::fromSi(0.05),
+                                                                     sub0math::f64::Length::fromSi(0.1)}});
+        REQUIRE(corridor);
+        const Raster r = corridor->rasterise(grid->cellGrid(0), words);
+        REQUIRE(r.status == RasterStatus::Complete);
+        cells += r.cells;
+        const TerrainPoint p{{sub0math::f64::Length::fromSi(x), sub0math::f64::Length::fromSi(0.1), sub0math::f64::Length{}}};
+        cells += grid->cellOf(p, 0).known ? 1U : 0U;
+    }
+    CHECK(cells > 0U);
+    CHECK(count.since() == 0U);
 }
 
 TEST_CASE("Terrain page lookups never allocate")

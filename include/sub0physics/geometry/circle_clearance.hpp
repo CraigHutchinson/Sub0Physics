@@ -5,9 +5,10 @@
 #include <sub0math/geometry/sphere.hpp>
 #include <sub0math/linear/vec.hpp>
 #include <sub0math/units/quantities.hpp>
-#include <vector>
+#include <span>
 
 #include "sub0physics/geometry/polyline_profile.hpp"
+#include "sub0physics/geometry/witness.hpp"
 
 namespace sub0physics
 {
@@ -22,30 +23,21 @@ enum class ClearanceStatus : std::uint8_t
     CentreInside   ///< The centre is inside the solid; buried contact is unsupported.
 };
 
-/** Which profile feature a witness point lies on. */
-enum class FeatureKind : std::uint8_t
-{
-    Vertex,  ///< A polyline vertex; `index` is the vertex index.
-    Segment  ///< The interior of a segment; `index` is its first vertex.
-};
-
-/** A nearest surface point and its approach direction. */
-struct ClearanceWitness
-{
-    ProfilePoint point;    ///< Nearest point on the surface.
-    sub0math::Vec2d normal; ///< Unit direction from that point towards the centre.
-    FeatureKind kind; ///< Feature the point lies on.
-    std::size_t index; ///< Vertex or segment index.
-};
-
-/** Result of a clearance query. Fields other than `status` are meaningful only when Available. */
+/**
+ * Result of a clearance query. Fields other than `status` are meaningful only when Available. The
+ * witnesses themselves are written to the caller's buffer, so a query never allocates.
+ */
 struct CircleClearance
 {
-    ClearanceStatus status;                ///< Whether the remaining fields are valid.
-    sub0math::f64::Length distance;          ///< Centre to nearest surface point.
-    sub0math::f64::Length gap;               ///< distance - radius; negative means overlap.
-    std::vector<ClearanceWitness> witnesses; ///< Every feature within the tie tolerance of the nearest.
+    ClearanceStatus status;         ///< Whether the remaining fields are valid.
+    sub0math::f64::Length distance; ///< Centre to nearest surface point.
+    sub0math::f64::Length gap;      ///< distance - radius; negative means overlap.
+    std::size_t witnessCount;       ///< Witnesses written to the buffer: the first ties, in profile order.
+    bool overflowed;                ///< More features tied than the buffer holds; the rest were dropped.
 };
+
+/** Witnesses a typical query needs: one, or a few where a corner or valley ties. */
+inline constexpr std::size_t DefaultWitnessCapacity = 8;
 
 /** Query of a circle against a profile. */
 struct CircleQuery
@@ -58,12 +50,16 @@ struct CircleQuery
  * Measures how far a circle is from a rigid profile and which features are nearest.
  *
  * Square edges produce vertex witnesses with the true approach normal, not the face normal, which is
- * what distinguishes square-edge from rounded contact. Equidistant features are all reported.
+ * what distinguishes square-edge from rounded contact. Equidistant features are all reported, each once,
+ * in profile order, until the buffer is full; then `overflowed` is set and the remaining ties are dropped.
  *
  * @param profile The ground profile.
  * @param query The circle and tie tolerance.
+ * @param witnesses The caller's buffer for the witnesses; may be empty when only the distance is wanted
+ *        (`overflowed` is then set whenever a tie exists). Its contents past `witnessCount` are unchanged.
  * @return The measured clearance, or the reason none is defined.
  */
-[[nodiscard]] CircleClearance measureCircleClearance(const PolylineProfile& profile, const CircleQuery& query);
+[[nodiscard]] CircleClearance measureCircleClearance(const PolylineProfile& profile, const CircleQuery& query,
+                                                    std::span<Witness2> witnesses) noexcept;
 
 } // namespace sub0physics

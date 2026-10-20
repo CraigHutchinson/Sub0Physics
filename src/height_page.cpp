@@ -13,6 +13,10 @@ std::expected<HeightPage, Fault> buildHeightPage(const GridSpec& grid, const Til
                                                  std::span<const sub0math::f64::Length> heights,
                                                  std::span<const std::uint8_t> known)
 {
+    if (grid.cellsPerSide() != HeightPage::Cells || grid.registration() != Registration::NodeIsPoint)
+    {
+        return std::unexpected(Fault{FaultKind::InvalidInput, "a height page needs a grid of 256 cells per page, node-registered"});
+    }
     constexpr auto count = static_cast<std::size_t>(HeightPage::Nodes) * static_cast<std::size_t>(HeightPage::Nodes);
     if (heights.size() != count || known.size() != count)
     {
@@ -22,6 +26,10 @@ std::expected<HeightPage, Fault> buildHeightPage(const GridSpec& grid, const Til
     if (key.level >= grid.levels())
     {
         return std::unexpected(Fault{FaultKind::InvalidInput, "page level is outside the grid"});
+    }
+    if (key.i < 0 || key.j < 0 || key.i >= grid.pageCount(key.level, 0) || key.j >= grid.pageCount(key.level, 1))
+    {
+        return std::unexpected(Fault{FaultKind::InvalidInput, "page is outside the grid's extent"});
     }
 
     double lo = std::numeric_limits<double>::infinity();

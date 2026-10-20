@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sub0physics/constants.hpp"
+#include "sub0physics/core.hpp"
 #include "sub0physics/elements.hpp"
 #include "sub0physics/fault.hpp"
 #include "sub0physics/geometry.hpp"

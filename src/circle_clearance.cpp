@@ -42,11 +42,12 @@ std::size_t segmentAt(std::span<const ProfilePoint> points, Length x) noexcept
 
 } // namespace
 
-CircleClearance measureCircleClearance(const PolylineProfile& profile, const CircleQuery& query)
+CircleClearance measureCircleClearance(const PolylineProfile& profile, const CircleQuery& query,
+                                       std::span<Witness2> witnesses) noexcept
 {
     const ProfilePoint c = query.circle.centre;
     const Length r = query.circle.radius;
-    CircleClearance result{ClearanceStatus::Available, Length{}, Length{}, {}};
+    CircleClearance result{ClearanceStatus::Available, Length{}, Length{}, 0U, false};
     // Negated comparisons so that NaN fails every test; the limits also exclude infinities.
     const Length limit = PolylineProfile::CoordinateLimit;
     if (!(sub0math::abs(c.x) <= limit) || !(sub0math::abs(c.y) <= limit) || !(r > Length{}) || !(r <= limit)
@@ -101,6 +102,9 @@ CircleClearance measureCircleClearance(const PolylineProfile& profile, const Cir
     {
         --first;
     }
+    bool havePrevious = false;
+    WitnessKind previousKind = WitnessKind::Vertex;
+    std::size_t previousIndex = 0U;
     for (std::size_t i = first; i < segments && points[i].x - c.x <= reach; ++i)
     {
         const Nearest n = nearestOnSegment(points[i], points[i + 1U], c);
@@ -110,19 +114,27 @@ CircleClearance measureCircleClearance(const PolylineProfile& profile, const Cir
         }
         const bool atStart = n.t == 0.0;
         const bool atEnd = n.t == 1.0;
-        const FeatureKind kind = atStart || atEnd ? FeatureKind::Vertex : FeatureKind::Segment;
+        const WitnessKind kind = atStart || atEnd ? WitnessKind::Vertex : WitnessKind::Edge;
         const std::size_t index = atEnd ? i + 1U : i;
-        if (!result.witnesses.empty() && result.witnesses.back().kind == kind && result.witnesses.back().index == index)
+        if (havePrevious && previousKind == kind && previousIndex == index)
         {
             continue;
         }
+        havePrevious = true;
+        previousKind = kind;
+        previousIndex = index;
+        if (result.witnessCount == witnesses.size())
+        {
+            result.overflowed = true;
+            continue;
+        }
         const Length d = sqrt(n.distanceSquared);
-        result.witnesses.push_back(ClearanceWitness{
+        witnesses[result.witnessCount++] = Witness2{
             n.point,
             sub0math::Vec2d{(c.x - n.point.x) / d, (c.y - n.point.y) / d},
             kind,
             index,
-        });
+        };
     }
     result.distance = distance;
     result.gap = distance - r;
