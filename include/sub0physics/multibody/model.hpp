@@ -17,6 +17,7 @@
 #include <sub0math/units/quantities.hpp>
 
 #include "sub0physics/multibody/description.hpp"
+#include "sub0physics/multibody/force_element.hpp"
 
 namespace sub0physics::multibody
 {
@@ -168,11 +169,18 @@ public:
      * Gives the body a site is fixed to.
      *
      * @param site A site of this model.
-     * @return Its body.
+     * @return Its body, or WorldBody for a site fixed in the world.
      */
     [[nodiscard]] BodyId siteBody(SiteId site) const noexcept
     {
-        return BodyId{static_cast<std::uint32_t>(siteBody_[site.value()])};
+        const std::size_t body = siteBody_[site.value()];
+        return body == NoParent ? WorldBody : BodyId{static_cast<std::uint32_t>(body)};
+    }
+
+    /** @return Body index of each site, NoParent for a site fixed in the world. */
+    [[nodiscard]] std::span<const std::size_t> siteBodies() const noexcept
+    {
+        return siteBody_;
     }
 
     /**
@@ -184,6 +192,49 @@ public:
     [[nodiscard]] const sub0math::RigidTransform<double, sub0math::f64::Length>& siteFrame(SiteId site) const noexcept
     {
         return siteFrame_[site.value()];
+    }
+
+    /** @return The number of force elements, of every kind. */
+    [[nodiscard]] std::size_t elementCount() const noexcept
+    {
+        return elementName_.size();
+    }
+
+    /** @return The number of tendon elements; each reports a wrench at its two sites. */
+    [[nodiscard]] std::size_t tendonCount() const noexcept
+    {
+        return tendonCount_;
+    }
+
+    /**
+     * Whether the elements' Jacobians stay within the tree's ancestor pairs, so `M - h D - h^2 K` keeps the
+     * mass matrix's sparsity and factorises without fill-in. True unless a tendon joins two branches.
+     *
+     * @return True when every tendon's ends lie on one chain from the root.
+     */
+    [[nodiscard]] bool elementsFollowTree() const noexcept
+    {
+        return elementsFollowTree_;
+    }
+
+    /**
+     * Finds a force element by name.
+     *
+     * @param name The name given to the builder.
+     * @return The element, or nothing if no element has that name.
+     */
+    [[nodiscard]] std::optional<ElementId> findElement(std::string_view name) const noexcept;
+
+    /** @return The compiled coordinate elements, one list per law, in evaluation order. */
+    [[nodiscard]] const CoordinateElementLists& coordinateElements() const noexcept
+    {
+        return coordinateElements_;
+    }
+
+    /** @return The compiled tendon elements, one list per law, in evaluation order. */
+    [[nodiscard]] const TendonElementLists& tendonElements() const noexcept
+    {
+        return tendonElements_;
     }
 
 private:
@@ -205,6 +256,11 @@ private:
     std::vector<std::size_t> siteBody_;
     std::vector<sub0math::RigidTransform<double, sub0math::f64::Length>> siteFrame_;
     std::vector<std::string> siteName_;
+    CoordinateElementLists coordinateElements_;
+    TendonElementLists tendonElements_;
+    std::vector<std::string> elementName_;
+    std::size_t tendonCount_ = 0;
+    bool elementsFollowTree_ = true;
     sub0math::Vec3<sub0math::f64::Acceleration> gravity_{};
     sub0math::SpatialMotiond baseAcceleration_{};
 };

@@ -608,7 +608,7 @@ TEST_CASE("Model builder validates the description")
         ModelBuilder b;
         b.addBody(body("a"));
         b.addSite({.name = "s", .body = BodyId{3}});
-        CHECK(faultOf(b) == "site body is not a body of this model");
+        CHECK(faultOf(b) == "site body is not a body of this model, nor the world");
     }
     {
         ModelBuilder b;

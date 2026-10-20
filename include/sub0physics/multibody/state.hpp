@@ -7,6 +7,8 @@
 #include <span>
 #include <vector>
 
+#include <sub0math/units/quantities.hpp>
+
 #include "sub0physics/multibody/model.hpp"
 
 namespace sub0physics::multibody
@@ -19,11 +21,17 @@ namespace sub0physics::multibody
  * the whole state as one vector, and `q()` and `qd()` are its two halves. Entries are plain SI doubles
  * in the model's coordinate order: radians for revolute joints, metres for prismatic ones, and their
  * rates. Stepping updates the buffer in place and never resizes it.
+ *
+ * The run's energy flows are part of the state, so a snapshot restores them with the rest: every stepper
+ * adds the energy its force elements dissipated and the work its applied forces did over each step, and
+ * computeEnergy reports them in the EnergyAccount.
  */
 struct State
 {
-    std::vector<double> values; ///< `[q; qd]`: dofCount coordinates, then dofCount rates.
-    std::uint64_t tick = 0;     ///< Index of the fixed step the state is at.
+    std::vector<double> values;           ///< `[q; qd]`: dofCount coordinates, then dofCount rates.
+    std::uint64_t tick = 0;               ///< Index of the fixed step the state is at.
+    sub0math::f64::Energy dissipated{};   ///< Energy the force elements dissipated since the run began.
+    sub0math::f64::Energy externalWork{}; ///< Work the applied forces (Forcing) did since the run began.
 
     /**
      * Makes the rest state of a model: every coordinate and rate zero, at tick zero.
@@ -33,7 +41,7 @@ struct State
      */
     [[nodiscard]] static State atRest(const Model& model)
     {
-        return State{std::vector<double>(2 * model.dofCount(), 0.0), 0};
+        return State{.values = std::vector<double>(2 * model.dofCount(), 0.0), .tick = 0};
     }
 
     /**
@@ -48,7 +56,7 @@ struct State
     [[nodiscard]] static State fromCoordinates(std::span<const double> q, std::span<const double> qd,
                                                std::uint64_t tick = 0)
     {
-        State s{std::vector<double>(2 * q.size(), 0.0), tick};
+        State s{.values = std::vector<double>(2 * q.size(), 0.0), .tick = tick};
         std::copy(q.begin(), q.end(), s.values.begin());
         std::copy_n(qd.begin(), std::min(qd.size(), q.size()), s.values.begin() + static_cast<std::ptrdiff_t>(q.size()));
         return s;

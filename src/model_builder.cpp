@@ -9,7 +9,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <sub0math/linear/mat.hpp>
@@ -166,6 +168,30 @@ std::optional<Fault> checkBody(const BodyDescription& body, std::uint32_t index,
     return std::nullopt;
 }
 
+// Bodies whose joints move a point on `body`: itself and its ancestors.
+std::vector<std::size_t> chainOf(const std::vector<std::size_t>& parents, std::size_t body)
+{
+    std::vector<std::size_t> chain;
+    for (std::size_t j = body; j != NoParent; j = parents[j])
+    {
+        chain.push_back(j);
+    }
+    return chain;
+}
+
+template<typename Lists, typename F, std::size_t... I>
+void forEachListImpl(Lists& lists, F& f, std::index_sequence<I...>)
+{
+    (f(std::get<I>(lists), std::integral_constant<std::size_t, I>{}), ...);
+}
+
+// Calls f(list, index) for each list of a tuple of lists, in order.
+template<typename Lists, typename F>
+void forEachList(Lists& lists, F&& f)
+{
+    forEachListImpl(lists, f, std::make_index_sequence<std::tuple_size_v<std::remove_cvref_t<Lists>>>{});
+}
+
 } // namespace
 
 BodyId ModelBuilder::addBody(const BodyDescription& body)
@@ -257,9 +283,9 @@ std::expected<Model, Fault> ModelBuilder::build() const
                 return invalidInput("site name is not unique");
             }
         }
-        if (site.body.value() >= n)
+        if (site.body != WorldBody && site.body.value() >= n)
         {
-            return invalidInput("site body is not a body of this model");
+            return invalidInput("site body is not a body of this model, nor the world");
         }
         if (!isFinite(site.frame) || !isUnit(site.frame.rotation))
         {
@@ -267,14 +293,163 @@ std::expected<Model, Fault> ModelBuilder::build() const
         }
         auto frame = site.frame;
         frame.rotation = sub0math::normalized(frame.rotation);
-        model.siteBody_.push_back(site.body.value());
+        model.siteBody_.push_back(site.body == WorldBody ? NoParent : site.body.value());
         model.siteFrame_.push_back(frame);
         model.siteName_.push_back(stored.name);
+    }
+
+    if (auto compiled = compileElements(model); !compiled)
+    {
+        return std::unexpected(compiled.error());
     }
 
     model.gravity_ = gravity_;
     model.baseAcceleration_ = {{}, {-gravity_.x.si(), -gravity_.y.si(), -gravity_.z.si()}};
     return model;
+}
+
+std::expected<void, Fault> ModelBuilder::compileElements(Model& model) const
+{
+    for (std::size_t i = 0; i < elementNames_.size(); ++i)
+    {
+        if (elementNames_[i].empty())
+        {
+            return invalidInput("element name is empty");
+        }
+        for (std::size_t j = 0; j < i; ++j)
+        {
+            if (elementNames_[j] == elementNames_[i])
+            {
+                return invalidInput("element name is not unique");
+            }
+        }
+    }
+    model.elementName_ = elementNames_;
+
+    const std::size_t n = model.parent_.size();
+    std::optional<Fault> fault;
+    forEachList(coordinateElements_, [&](const auto& stored, auto index) {
+        auto& compiled = std::get<decltype(index)::value>(model.coordinateElements_);
+        using Element = typename std::remove_cvref_t<decltype(compiled)>::value_type;
+        using L = decltype(Element::law);
+        compiled.reserve(stored.size());
+        for (const auto& [id, element] : stored)
+        {
+            if (fault)
+            {
+                return;
+            }
+            if (element.body == WorldBody || element.body.value() >= n)
+            {
+                fault = Fault{FaultKind::InvalidInput, "coordinate element body is not a body of this model"};
+                return;
+            }
+            const std::size_t body = element.body.value();
+            constexpr bool linear = std::same_as<LawCoordinate<L>, sub0math::f64::Length>;
+            if ((model.jointType_[body] == JointType::Prismatic) != linear)
+            {
+                fault = Fault{FaultKind::InvalidInput, "coordinate element law does not suit the joint: a law on a "
+                                                       "length needs a prismatic joint, a law on an angle a revolute one"};
+                return;
+            }
+            const double reference = element.reference.value_or(model.springReference_[body]);
+            if (!std::isfinite(reference))
+            {
+                fault = Fault{FaultKind::InvalidInput, "coordinate element reference must be finite"};
+                return;
+            }
+            compiled.push_back(Element{.id = id,
+                                       .law = element.law,
+                                       .coordinate = model.coordinate_[body],
+                                       .sign = element.sense == LawSense::Increasing ? 1.0 : -1.0,
+                                       .reference = reference});
+        }
+    });
+    if (fault)
+    {
+        return std::unexpected(*fault);
+    }
+
+    std::size_t tendons = 0;
+    forEachList(tendonElements_, [&](const auto& stored, auto index) {
+        auto& compiled = std::get<decltype(index)::value>(model.tendonElements_);
+        using Element = typename std::remove_cvref_t<decltype(compiled)>::value_type;
+        compiled.reserve(stored.size());
+        for (const auto& [id, element] : stored)
+        {
+            if (fault)
+            {
+                return;
+            }
+            const std::size_t sites = model.siteBody_.size();
+            if (element.first.value() >= sites || element.second.value() >= sites)
+            {
+                fault = Fault{FaultKind::InvalidInput, "tendon site is not a site of this model"};
+                return;
+            }
+            const std::size_t firstBody = model.siteBody_[element.first.value()];
+            const std::size_t secondBody = model.siteBody_[element.second.value()];
+            if (firstBody == secondBody)
+            {
+                fault = Fault{FaultKind::InvalidInput, "tendon sites must be on different bodies (or one on the world)"};
+                return;
+            }
+            const double reference = element.reference.si();
+            if (!std::isfinite(reference) || reference < 0.0)
+            {
+                fault = Fault{FaultKind::InvalidInput, "tendon reference length must be finite and not negative"};
+                return;
+            }
+            const std::vector<std::size_t> first =
+                firstBody == NoParent ? std::vector<std::size_t>{} : chainOf(model.parent_, firstBody);
+            const std::vector<std::size_t> second =
+                secondBody == NoParent ? std::vector<std::size_t>{} : chainOf(model.parent_, secondBody);
+            Element compiledElement{.id = id,
+                                    .law = element.law,
+                                    .first = element.first,
+                                    .second = element.second,
+                                    .sign = element.sense == LawSense::Increasing ? 1.0 : -1.0,
+                                    .reference = reference,
+                                    .wrenchSlot = 2 * tendons,
+                                    .support = {},
+                                    .onFirst = {},
+                                    .onSecond = {}};
+            for (std::size_t body = 0; body < n; ++body)
+            {
+                const bool onFirst = std::ranges::find(first, body) != first.end();
+                const bool onSecond = std::ranges::find(second, body) != second.end();
+                if (onFirst || onSecond)
+                {
+                    compiledElement.support.push_back(body);
+                    compiledElement.onFirst.push_back(onFirst ? 1U : 0U);
+                    compiledElement.onSecond.push_back(onSecond ? 1U : 0U);
+                }
+            }
+            const bool oneChain = std::ranges::all_of(compiledElement.onFirst, [](std::uint8_t on) { return on != 0U; }) ||
+                                  std::ranges::all_of(compiledElement.onSecond, [](std::uint8_t on) { return on != 0U; });
+            model.elementsFollowTree_ = model.elementsFollowTree_ && oneChain;
+            compiled.push_back(std::move(compiledElement));
+            ++tendons;
+        }
+    });
+    if (fault)
+    {
+        return std::unexpected(*fault);
+    }
+    model.tendonCount_ = tendons;
+    return {};
+}
+
+std::optional<ElementId> Model::findElement(std::string_view name) const noexcept
+{
+    for (std::size_t i = 0; i < elementName_.size(); ++i)
+    {
+        if (elementName_[i] == name)
+        {
+            return ElementId{static_cast<std::uint32_t>(i)};
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<BodyId> Model::findBody(std::string_view name) const noexcept

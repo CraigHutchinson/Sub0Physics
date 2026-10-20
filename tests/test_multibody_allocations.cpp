@@ -72,3 +72,48 @@ TEST_CASE("Multibody dynamics and stepping (semi-implicit Euler, RK4) never allo
     CHECK(allocations.load() - start == 0U);
     CHECK(std::isfinite(site.pose.translation.x.si() + energy.mechanical().si()));
 }
+
+TEST_CASE("Stepping with force elements (implicit Euler, semi-implicit Euler, RK4) never allocates")
+{
+    // Dense path: a tendon couples two branches.
+    const Model model = testmodels::planarTreeWithElements();
+    Workspace ws(model);
+    State s = State::atRest(model);
+    s.q()[2] = 0.4;
+    s.q()[8] = -0.3;
+    std::vector<double> tau(model.dofCount(), 0.1);
+    Rk4Stepper rk4(model, ws);
+    // Tree path: a tendon to a world anchor along one chain.
+    const Model chain = [] {
+        sub0physics::multibody::ModelBuilder b = testmodels::planarTreeBuilder();
+        const SiteId anchor = b.addSite({.name = "anchor", .body = WorldBody, .frame = testmodels::offset(0.3, -1.5, 0.0)});
+        b.addElement(TendonElementDescription<sub0physics::LinearSpringDamper<sub0math::f64::Length>>{
+            .name = "cable",
+            .first = SiteId{0},
+            .second = anchor,
+            .law = *sub0physics::LinearSpringDamper<sub0math::f64::Length>::create(
+                {.stiffness = sub0math::f64::Stiffness::fromSi(5.0e4), .damping = sub0math::f64::Damping::fromSi(30.0)}),
+            .reference = testmodels::metres(0.2)});
+        return *b.build();
+    }();
+    REQUIRE(chain.elementsFollowTree());
+    Workspace chainWs(chain);
+    State c = State::atRest(chain);
+    c.q()[8] = 0.2;
+
+    const std::size_t start = allocations.load();
+    for (int k = 0; k < 1000; ++k)
+    {
+        REQUIRE(stepLinearlyImplicitEuler(model, {tau}, s.tick, sub0math::seconds(1e-3), s, ws));
+        REQUIRE(stepLinearlyImplicitEuler(chain, {}, c.tick, sub0math::seconds(1e-3), c, chainWs));
+    }
+    for (int k = 0; k < 200; ++k)
+    {
+        REQUIRE(stepSemiImplicitEuler(model, {tau}, s.tick, sub0math::seconds(1e-4), s, ws));
+        REQUIRE(rk4.step(model, {tau}, s.tick, sub0math::seconds(1e-4), s, ws));
+    }
+    REQUIRE(evaluateElements(model, s, ws));
+    const sub0physics::EnergyAccount energy = computeEnergy(model, s, ws).value();
+    CHECK(allocations.load() - start == 0U);
+    CHECK(std::isfinite(energy.balance().si()));
+}

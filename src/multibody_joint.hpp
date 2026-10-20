@@ -133,4 +133,23 @@ SUB0MATH_FORCE_INLINE void updateTransforms(const Model& model, const State& sta
     }
 }
 
+// Composes each body's world transform from the parent-to-body transforms already in the workspace.
+SUB0MATH_FORCE_INLINE void composeWorldTransforms(const Model& model, Workspace& ws) noexcept
+{
+    const auto parents = model.parents();
+    for (std::size_t i = 0; i < parents.size(); ++i)
+    {
+        const std::size_t p = parents[i];
+        ws.worldToBody[i] = p == NoParent ? ws.parentToBody[i] : ws.parentToBody[i] * ws.worldToBody[p];
+    }
+}
+
+// Sums the model's force elements at a state into the workspace (elementForce, the energy terms, the site
+// wrenches and, when asked, elementStiffness and elementDamping, with or without the tendons' geometric
+// terms). Needs worldToBody at the state when the model has tendons. OutsideDomain when a tendon's sites
+// coincide.
+[[nodiscard]] std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const State& state,
+                                                                   Workspace& ws, bool jacobians,
+                                                                   bool geometricStiffness = true) noexcept;
+
 } // namespace sub0physics::multibody::detail

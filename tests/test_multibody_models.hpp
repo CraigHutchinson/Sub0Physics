@@ -64,7 +64,7 @@ inline constexpr double PlanarTreeLink = 0.4;
  * A fixed 10-DOF planar tree in the xy plane, gravity along -y: a cart sliding along x carrying three
  * hanging branches of three links each, every link a revolute joint about z.
  */
-inline Model planarTree()
+inline ModelBuilder planarTreeBuilder()
 {
     ModelBuilder builder;
     builder.setGravity(gravityAlong(0.0, -9.81, 0.0));
@@ -85,6 +85,54 @@ inline Model planarTree()
         }
     }
     builder.addSite({.name = "tip", .body = BodyId{9}, .frame = offset(0.0, -PlanarTreeLink, 0.0)});
+    return builder;
+}
+
+/** The fixed 10-DOF planar tree; see planarTreeBuilder. */
+inline Model planarTree()
+{
+    return *planarTreeBuilder().build();
+}
+
+/** Parameters of the two elements of planarTreeWithElements. */
+struct PlanarTreeElements
+{
+    double cartStiffness = 2000.0;   ///< Coordinate spring on the cart [N/m].
+    double cartDamping = 20.0;       ///< Its damping [N s/m].
+    double cartReference = 0.05;     ///< Its relaxed cart position [m].
+    double strutPreload = 40.0;      ///< Tendon preload, spreading [N].
+    double strutStiffness = 3000.0;  ///< Tendon rate [N/m].
+    double strutDamping = 30.0;      ///< Tendon damping, both ways [N s/m].
+    double strutReference = 0.65;    ///< Tendon length at zero compression [m].
+};
+
+/**
+ * The planar tree with two force elements: a linear spring-damper on the cart's coordinate, and a preloaded
+ * strut (an axial spring-damper on compression) between the tips of the first and the last branch, which
+ * couples the branches.
+ */
+inline Model planarTreeWithElements(const PlanarTreeElements& p = {})
+{
+    using namespace sub0math;
+    ModelBuilder builder = planarTreeBuilder();
+    const SiteId first = builder.addSite({.name = "tip0", .body = BodyId{3}, .frame = offset(0.0, -PlanarTreeLink, 0.0)});
+    const SiteId last{0}; // "tip", on the last branch
+    builder.addElement(CoordinateElementDescription<sub0physics::LinearSpringDamper<f64::Length>>{
+        .name = "cart spring",
+        .body = BodyId{0},
+        .law = *sub0physics::LinearSpringDamper<f64::Length>::create(
+            {.stiffness = f64::Stiffness::fromSi(p.cartStiffness), .damping = f64::Damping::fromSi(p.cartDamping)}),
+        .reference = p.cartReference});
+    builder.addElement(TendonElementDescription<sub0physics::AxialSpringDamper>{
+        .name = "strut",
+        .first = first,
+        .second = last,
+        .law = *sub0physics::AxialSpringDamper::create({.preload = f64::Force::fromSi(p.strutPreload),
+                                                        .stiffness = f64::Stiffness::fromSi(p.strutStiffness),
+                                                        .compressionDamping = f64::Damping::fromSi(p.strutDamping),
+                                                        .reboundDamping = f64::Damping::fromSi(p.strutDamping)}),
+        .sense = LawSense::Decreasing,
+        .reference = metres(p.strutReference)});
     return *builder.build();
 }
 

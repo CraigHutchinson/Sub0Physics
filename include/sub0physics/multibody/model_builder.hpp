@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <expected>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 #include <sub0math/linear/vec.hpp>
@@ -10,6 +13,7 @@
 #include "sub0physics/constants.hpp"
 #include "sub0physics/fault.hpp"
 #include "sub0physics/multibody/description.hpp"
+#include "sub0physics/multibody/force_element.hpp"
 #include "sub0physics/multibody/model.hpp"
 
 namespace sub0physics::multibody
@@ -21,8 +25,9 @@ namespace sub0physics::multibody
  * Bodies are numbered in the order they are added, and a joint's parent must already exist, so the
  * numbering is a topological order of the tree. Nothing is checked until `build`, which validates the
  * whole description at once: positive mass, positive definite inertia whose principal moments obey the
- * triangle inequality, unit axes and rotations, finite
- * values, unique non-empty names and resolved references.
+ * triangle inequality, unit axes and rotations, finite values, unique non-empty names, resolved
+ * references, and force elements whose law suits what it is bound to (a law on a length on a prismatic
+ * joint or a tendon, a law on an angle on a revolute joint).
  *
  * ```cpp
  * using namespace sub0math;
@@ -65,6 +70,40 @@ public:
     SiteId addSite(const SiteDescription& site);
 
     /**
+     * Adds a force element on a joint coordinate.
+     *
+     * @tparam L The law.
+     * @param element The element.
+     * @return The new element's id, valid for this builder and the models it builds.
+     */
+    template<ElementLaw L>
+    ElementId addElement(const CoordinateElementDescription<L>& element)
+    {
+        const ElementId id = nextElement(element.name);
+        auto& stored = std::get<std::vector<Stored<CoordinateElementDescription<L>>>>(coordinateElements_);
+        stored.push_back({id, element});
+        stored.back().description.name = {}; // the builder's name list owns the name
+        return id;
+    }
+
+    /**
+     * Adds a force element between two sites.
+     *
+     * @tparam L The law; on a length.
+     * @param element The element.
+     * @return The new element's id, valid for this builder and the models it builds.
+     */
+    template<TendonLaw L>
+    ElementId addElement(const TendonElementDescription<L>& element)
+    {
+        const ElementId id = nextElement(element.name);
+        auto& stored = std::get<std::vector<Stored<TendonElementDescription<L>>>>(tendonElements_);
+        stored.push_back({id, element});
+        stored.back().description.name = {};
+        return id;
+    }
+
+    /**
      * Validates the description and compiles it.
      *
      * @return The model, or the first fault found (FaultKind::InvalidInput) naming what is wrong.
@@ -84,8 +123,33 @@ private:
         SiteDescription description;
     };
 
+    template<typename Description>
+    struct Stored
+    {
+        ElementId id;
+        Description description;
+    };
+
+    template<typename L>
+    using StoredCoordinateElement = Stored<CoordinateElementDescription<L>>;
+
+    template<typename L>
+    using StoredTendonElement = Stored<TendonElementDescription<L>>;
+
+    [[nodiscard]] std::expected<void, Fault> compileElements(Model& model) const;
+
+    ElementId nextElement(std::string_view name)
+    {
+        const ElementId id{static_cast<std::uint32_t>(elementNames_.size())};
+        elementNames_.emplace_back(name);
+        return id;
+    }
+
     std::vector<StoredBody> bodies_;
     std::vector<StoredSite> sites_;
+    ElementListsOf<StoredCoordinateElement, CoordinateLaws> coordinateElements_;
+    ElementListsOf<StoredTendonElement, TendonLaws> tendonElements_;
+    std::vector<std::string> elementNames_;
     sub0math::Vec3<sub0math::f64::Acceleration> gravity_{
         sub0math::f64::Acceleration{}, sub0math::f64::Acceleration{},
         sub0math::f64::Acceleration::fromSi(-StandardGravity)};

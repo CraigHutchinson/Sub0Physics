@@ -48,7 +48,8 @@ struct SiteKinematics
  * @param state Coordinates and rates.
  * @param site A site of the model.
  * @param workspace Workspace built for the model; its kinematics are updated.
- * @return The site's world pose and velocity, or InvalidInput for a site that is not in the model, a
+ * @return The site's world pose and velocity (zero velocity for a site fixed in the world), or InvalidInput
+ *         for a site that is not in the model, a
  *         workspace built for another model or a state that is not sized for this one.
  */
 [[nodiscard]] std::expected<SiteKinematics, Fault> computeSiteKinematics(const Model& model, const State& state,
@@ -69,17 +70,18 @@ struct SiteKinematics
                                                              Workspace& workspace, std::span<double> jacobian) noexcept;
 
 /**
- * Computes the kinetic and gravitational potential energy.
+ * Computes the energy account of a state.
  *
- * Kinetic energy is the sum of `v . I v / 2` over the bodies; gravitational potential is `-sum m g . c`,
- * zero with every centre of mass at the world origin. Elements add their own potential, and a run
- * accumulates `dissipated` and `externalWork`; this call leaves those two zero.
+ * Kinetic energy is the sum of `v . I v / 2` over the bodies. Potential is gravitational, `-sum m g . c`
+ * (zero with every centre of mass at the world origin), plus the force elements' stored energy.
+ * `dissipated` and `externalWork` are the run's flows that the steppers accumulate in the state
+ * (State::dissipated, State::externalWork), so an EnergyLedger fed these accounts closes over a run.
  *
  * @param model The model.
- * @param state Coordinates and rates.
- * @param workspace Workspace built for the model; its kinematics are updated.
- * @return The account (kinetic and gravitational potential), or InvalidInput for a workspace built for
- *         another model or a state that is not sized for this one.
+ * @param state Coordinates, rates and the run's energy flows.
+ * @param workspace Workspace built for the model; its kinematics (and element fields) are updated.
+ * @return The account, or InvalidInput for a workspace built for another model or a state that is not
+ *         sized for this one; OutsideDomain from an element.
  */
 [[nodiscard]] std::expected<EnergyAccount, Fault> computeEnergy(const Model& model, const State& state,
                                                                 Workspace& workspace) noexcept;

@@ -9,8 +9,10 @@
 #include <sub0math/linear/spatial_force.hpp>
 #include <sub0math/linear/spatial_inertia.hpp>
 #include <sub0math/linear/spatial_motion.hpp>
+#include <sub0math/linear/vec.hpp>
 #include <sub0math/units/quantities.hpp>
 
+#include "sub0physics/multibody/force_element.hpp"
 #include "sub0physics/multibody/model.hpp"
 
 namespace sub0physics::multibody
@@ -48,7 +50,15 @@ struct Workspace
           massMatrix(dof * dof, 0.0),
           massFactor(dof * dof, 0.0),
           bias(dof),
-          qdd(dof)
+          qdd(dof),
+          elementForce(dof, 0.0),
+          elementStiffness(dof * dof, 0.0),
+          elementDamping(dof * dof, 0.0),
+          elementSiteWrenches(2 * model.tendonCount()),
+          implicitMatrix(dof * dof, 0.0),
+          implicitRhs(dof, 0.0),
+          elementVectors(3 * dof),
+          elementScalars(dof * (dof + 2), 0.0)
     {
     }
 
@@ -81,6 +91,23 @@ struct Workspace
     std::vector<double> massFactor; ///< Tree-sparse factor of M (lower triangle: L below the diagonal, D on it).
     std::vector<double> bias;       ///< c(q, qd): Coriolis, centrifugal and gravity forces from RNEA.
     std::vector<double> qdd;        ///< Generalized accelerations from forward dynamics.
+
+    // Force elements (evaluateElements): sums over every element of the model at the last evaluated state.
+    std::vector<double> elementForce;     ///< Generalized force tau of the elements [N or N m].
+    std::vector<double> elementStiffness; ///< dtau/dq, row-major; exact (not symmetric for a damped tendon); written only when Jacobians are asked for.
+    std::vector<double> elementDamping;   ///< dtau/dqd, row-major, symmetric; written only when Jacobians are asked for.
+    double elementPotential = 0.0;        ///< Stored energy of the elements [J].
+    double elementDissipationPower = 0.0; ///< Power the elements remove [W]; never negative.
+    std::vector<ElementSiteWrench> elementSiteWrenches; ///< Two per tendon (first end, then second), in the model's order.
+
+    // The linearly implicit Euler step (stepLinearlyImplicitEuler).
+    std::vector<double> implicitMatrix; ///< `M - h D - h^2 K`, then its dense LDL^T factor (lower triangle).
+    std::vector<double> implicitRhs;    ///< Right-hand side, then the velocity change.
+    bool geometricStiffnessDropped = false; ///< Whether the last implicit step fell back to the material stiffness because `M - h D - h^2 K` was not positive definite.
+
+    // Scratch for the tendon geometry.
+    std::vector<sub0math::Vec3d> elementVectors; ///< 3 dofCount vectors.
+    std::vector<double> elementScalars;          ///< dofCount (dofCount + 2) values.
 };
 
 } // namespace sub0physics::multibody

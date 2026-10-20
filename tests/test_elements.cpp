@@ -145,6 +145,15 @@ struct TravelBufferFixture
     static constexpr double qMin = -0.004, qMax = 0.069, qScale = 0.0365, vScale = 2.0;
 };
 
+struct LinearFixture
+{
+    static LinearSpringDamper<f64::Length> law()
+    {
+        return *LinearSpringDamper<f64::Length>::create({.stiffness = newtonsPerMetre(4000.0), .damping = newtonSecondsPerMetre(60.0)});
+    }
+    static constexpr double qMin = -0.05, qMax = 0.05, qScale = 0.05, vScale = 1.0;
+};
+
 template<typename L>
 LawResponse<f64::Length> respondAt(const L& law, double q, double v)
 {
@@ -170,7 +179,7 @@ void checkPartial(double exact, double backward, double forward, double scale)
 } // namespace
 
 TEST_CASE_TEMPLATE("Law power balance holds along trajectories: force * qd = -dV/dt - dissipationPower", F, AxialFixture,
-                   ContactFixture, TravelBufferFixture)
+                   ContactFixture, TravelBufferFixture, LinearFixture)
 {
     const auto law = F::law();
     const double centre = 0.5 * (F::qMin + F::qMax);
@@ -198,7 +207,7 @@ TEST_CASE_TEMPLATE("Law power balance holds along trajectories: force * qd = -dV
     }
 }
 
-TEST_CASE_TEMPLATE("Law Jacobians match finite differences", F, AxialFixture, ContactFixture, TravelBufferFixture)
+TEST_CASE_TEMPLATE("Law Jacobians match finite differences", F, AxialFixture, ContactFixture, TravelBufferFixture, LinearFixture)
 {
     const auto law = F::law();
     const double hq = 1e-7 * F::qScale;

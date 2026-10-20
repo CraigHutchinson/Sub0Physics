@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <expected>
 #include <span>
 
@@ -8,7 +9,8 @@
 #include "sub0physics/multibody/state.hpp"
 #include "sub0physics/multibody/workspace.hpp"
 
-// Rigid-body dynamics of a tree, M(q) qdd + c(q, qd) = tau (docs/MULTIBODY.md section 3), in
+// Rigid-body dynamics of a tree, M(q) qdd + c(q, qd) = tau + tau_e(q, qd) (docs/MULTIBODY.md section 3), where
+// tau is applied and tau_e comes from the model's force elements (section 4), in
 // Featherstone's formulation: RNEA for c and inverse dynamics, CRBA for M, and a factorisation of M
 // that follows the tree so it creates no fill-in. None of these allocate. Every public entry point checks
 // that the workspace was built for the model and that the state is sized for it, and returns InvalidInput
@@ -46,8 +48,34 @@ namespace sub0physics::multibody
 [[nodiscard]] std::expected<void, Fault> computeBiasForces(const Model& model, const State& state,
                                                            Workspace& workspace) noexcept;
 
+/** Whether evaluateElements also computes the elements' Jacobians. */
+enum class ElementJacobians : std::uint8_t
+{
+    Skip,   ///< Force, energy, power and site wrenches only.
+    Compute ///< Also `elementStiffness` (dtau/dq) and `elementDamping` (dtau/dqd).
+};
+
 /**
- * Computes the generalized forces that produce given accelerations: tau = M qdd + c.
+ * Evaluates the model's force elements at a state (docs/MULTIBODY.md section 4).
+ *
+ * Writes `elementForce`, `elementPotential`, `elementDissipationPower`, `elementSiteWrenches` and, with
+ * ElementJacobians::Compute, `elementStiffness` and `elementDamping` as dense `dofCount x dofCount` sums
+ * (each element adds only on the coordinates it touches). Also writes the kinematics when the model has
+ * tendons. Never allocates.
+ *
+ * @param model The model.
+ * @param state Coordinates and rates.
+ * @param workspace Workspace built for the model.
+ * @param jacobians Whether to compute the Jacobians.
+ * @return Nothing, or a fault: InvalidInput for a workspace built for another model or a mis-sized state,
+ *         OutsideDomain when a tendon's two sites coincide.
+ */
+[[nodiscard]] std::expected<void, Fault> evaluateElements(const Model& model, const State& state, Workspace& workspace,
+                                                          ElementJacobians jacobians = ElementJacobians::Compute) noexcept;
+
+/**
+ * Computes the applied generalized forces that produce given accelerations: tau = M qdd + c - tau_e, so
+ * that forwardDynamics with this tau returns qdd. tau_e is the model's force elements (zero without any).
  *
  * @param model The model.
  * @param state Coordinates and rates.
@@ -55,7 +83,7 @@ namespace sub0physics::multibody
  * @param tau Output, dofCount entries.
  * @param workspace Workspace built for the model.
  * @return Nothing, or InvalidInput if a span has the wrong size, the workspace was built for another
- *         model or the state is not sized for this one.
+ *         model or the state is not sized for this one; OutsideDomain from an element.
  */
 [[nodiscard]] std::expected<void, Fault> inverseDynamics(const Model& model, const State& state,
                                                          std::span<const double> qdd, std::span<double> tau,
@@ -87,16 +115,18 @@ namespace sub0physics::multibody
                                                          std::span<double> x) noexcept;
 
 /**
- * Computes the generalized accelerations qdd = M^-1 (tau - c).
+ * Computes the generalized accelerations qdd = M^-1 (tau + tau_e - c), where tau_e is the model's force
+ * elements.
  *
- * Writes `qdd`, and on the way `massMatrix`, `massFactor`, `bias` and the kinematics.
+ * Writes `qdd`, and on the way `massMatrix`, `massFactor`, `bias`, the kinematics and, when the model has
+ * elements, their force, energy terms and site wrenches (not their Jacobians).
  *
  * @param model The model.
  * @param state Coordinates and rates.
  * @param tau Applied generalized forces, dofCount entries; empty for none.
  * @param workspace Workspace built for the model.
  * @return Nothing, or a fault: InvalidInput for a wrong-sized span or state, a workspace built for
- *         another model, or a mass matrix that is not positive definite.
+ *         another model, or a mass matrix that is not positive definite; OutsideDomain from an element.
  */
 [[nodiscard]] std::expected<void, Fault> forwardDynamics(const Model& model, const State& state,
                                                          std::span<const double> tau, Workspace& workspace) noexcept;

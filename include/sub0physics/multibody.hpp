@@ -2,6 +2,8 @@
 
 #include "sub0physics/multibody/description.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
+#include "sub0physics/multibody/force_element.hpp"
+#include "sub0physics/multibody/implicit_euler.hpp"
 #include "sub0physics/multibody/kinematics.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/model_builder.hpp"

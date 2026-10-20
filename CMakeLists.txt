@@ -29,6 +29,7 @@ add_library(Sub0Physics STATIC
     src/height_page.cpp
     src/model_builder.cpp
     src/multibody_dynamics.cpp
+    src/multibody_elements.cpp
     src/multibody_kinematics.cpp
     src/polyline_profile.cpp
     src/prepared_profile.cpp

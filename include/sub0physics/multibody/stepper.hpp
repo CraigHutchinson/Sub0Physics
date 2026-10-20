@@ -16,10 +16,12 @@ namespace sub0physics::multibody
 {
 
 /**
- * What drives a model over one step besides its own dynamics.
+ * What drives a model over one step besides its own dynamics: the external input.
  *
- * For now, applied generalized forces held constant over the step. Force elements join it in M1b
- * (docs/MULTIBODY.md section 4) without changing the stepper signature.
+ * Applied generalized forces, held constant over the step; every stepper adds their work to
+ * `State::externalWork`. The model's force elements are not part of it: they belong to the Model (built by
+ * ModelBuilder), so every stepper, forwardDynamics and computeEnergy include them without being told
+ * (docs/MULTIBODY.md section 4).
  */
 struct Forcing
 {
@@ -53,8 +55,10 @@ concept Stepper = requires(S& stepper, const Model& model, const Forcing& forcin
  * drifts with `h`, it is not conserved to round-off). Where long-horizon energy conservation matters use
  * RungeKuttaStepper, or the linearly implicit integrator (M1b) for stiff elements.
  *
- * First order, explicit and cheap: one forward-dynamics evaluation per step. The step is transactional:
- * on a fault the state is unchanged.
+ * First order, explicit and cheap: one forward-dynamics evaluation per step, including the model's force
+ * elements. It adds the elements' dissipated power at the start of the step, times h, to `state.dissipated`
+ * and the applied forces' work `tau . (q1 - q0)` to `state.externalWork`. The step is transactional: on a
+ * fault the state is unchanged.
  *
  * @param model The model.
  * @param forcing Applied generalized forces.

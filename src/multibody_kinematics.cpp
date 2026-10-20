@@ -31,12 +31,9 @@ sub0math::Vec3d plain(const sub0math::Vec3<sub0math::f64::Length>& v) noexcept
 void updateUnchecked(const Model& model, const State& state, Workspace& workspace) noexcept
 {
     detail::updateTransforms<true>(model, state, workspace);
-    const auto parents = model.parents();
-    for (std::size_t i = 0; i < parents.size(); ++i)
+    detail::composeWorldTransforms(model, workspace);
+    for (std::size_t i = 0; i < model.bodyCount(); ++i)
     {
-        const std::size_t p = parents[i];
-        workspace.worldToBody[i] =
-            p == NoParent ? workspace.parentToBody[i] : workspace.parentToBody[i] * workspace.worldToBody[p];
         workspace.bodyPose[i] = sub0math::toRigidTransform<sub0math::f64::Length>(workspace.worldToBody[i]);
     }
 }
@@ -65,8 +62,12 @@ std::expected<SiteKinematics, Fault> computeSiteKinematics(const Model& model, c
         return invalidInput("site is not a site of the model");
     }
     updateUnchecked(model, state, workspace);
-    const std::size_t body = model.siteBody(site).value();
     const Pose& frame = model.siteFrame(site);
+    const std::size_t body = model.siteBodies()[site.value()];
+    if (body == NoParent)
+    {
+        return SiteKinematics{frame, {}, {}}; // fixed in the world
+    }
     const sub0math::SpatialMotiond& v = workspace.bodyVelocity[body];
     const sub0math::Mat3d& toBody = workspace.worldToBody[body].rotation;
     // Velocity of the body point at the site, in body axes, then rotated into the world.
@@ -101,7 +102,11 @@ std::expected<void, Fault> computeSiteJacobian(const Model& model, const State& 
     {
         e = 0.0;
     }
-    const std::size_t body = model.siteBody(site).value();
+    const std::size_t body = model.siteBodies()[site.value()];
+    if (body == NoParent)
+    {
+        return {}; // fixed in the world: no coordinate moves it
+    }
     const sub0math::PluckerTransformd& bodyTransform = workspace.worldToBody[body];
     const sub0math::Vec3d point =
         bodyTransform.translation + detail::bodyToWorld(bodyTransform.rotation, plain(model.siteFrame(site).translation));
@@ -142,7 +147,18 @@ std::expected<EnergyAccount, Fault> computeEnergy(const Model& model, const Stat
         const sub0math::Vec3d centre = detail::bodyToWorld(x.rotation, inertias[i].centreOfMass()) + x.translation;
         potential -= inertias[i].mass * dot(g, centre);
     }
-    return EnergyAccount{.kinetic = sub0math::f64::Energy::fromSi(kinetic), .potential = sub0math::f64::Energy::fromSi(potential)};
+    if (model.elementCount() > 0)
+    {
+        if (auto added = detail::evaluateElementsUnchecked(model, state, workspace, false); !added)
+        {
+            return std::unexpected(added.error());
+        }
+        potential += workspace.elementPotential;
+    }
+    return EnergyAccount{.kinetic = sub0math::f64::Energy::fromSi(kinetic),
+                         .potential = sub0math::f64::Energy::fromSi(potential),
+                         .dissipated = state.dissipated,
+                         .externalWork = state.externalWork};
 }
 
 } // namespace sub0physics::multibody

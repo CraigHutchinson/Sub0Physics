@@ -23,7 +23,9 @@ namespace sub0physics::multibody
 
 /**
  * A model as a first-order system for the dynamic-size integrators: `x = [q; qd]` (State::values) and
- * `dx/dt = [qd; qdd]`, with `qdd` from forwardDynamics under constant applied forces.
+ * `dx/dt = [qd; qdd]`, with `qdd` from forwardDynamics (the model's force elements included) under constant
+ * applied forces. Given one more entry, `x = [q; qd; E]`, it also integrates the elements' dissipated energy:
+ * `dE/dt` is their dissipation power, so the integrator's order carries over to the energy account.
  *
  * It refers to a model and a workspace it does not own; both must outlive it, or be rebound with
  * `bind`. Its scratch is allocated once at construction, so evaluation never allocates.
@@ -77,11 +79,11 @@ public:
     }
 
     /**
-     * Evaluates `[qd; qdd]` at `[q; qd]`.
+     * Evaluates `[qd; qdd]` at `[q; qd]`, or `[qd; qdd; P]` at `[q; qd; E]` with P the elements' dissipation power.
      *
      * @param t Time [s]; the forcing is constant, so unused.
-     * @param x `[q; qd]`, 2 dofCount entries.
-     * @param dxdt Receives `[qd; qdd]`.
+     * @param x `[q; qd]` (2 dofCount entries) or `[q; qd; E]` (2 dofCount + 1).
+     * @param dxdt Receives the derivative; the same size as `x`.
      * @return Nothing, or the forward-dynamics fault; InvalidInput for wrong sizes.
      */
     [[nodiscard]] std::expected<void, Fault> evaluate(double t, std::span<const double> x,
@@ -89,17 +91,24 @@ public:
     {
         (void)t;
         const std::size_t n = tau_.size();
-        if (x.size() != 2 * n || dxdt.size() != 2 * n)
+        const bool withEnergy = x.size() == 2 * n + 1;
+        if ((x.size() != 2 * n && !withEnergy) || dxdt.size() != x.size())
         {
-            return invalidInput("model ODE needs [q; qd] of 2 dofCount entries");
+            return invalidInput("model ODE needs [q; qd] of 2 dofCount entries, or [q; qd; E] of one more");
         }
-        std::copy(x.begin(), x.end(), scratch_.values.begin());
+        const auto rates = x.begin() + static_cast<std::ptrdiff_t>(n);
+        const auto rateEnd = rates + static_cast<std::ptrdiff_t>(n);
+        std::copy(x.begin(), rateEnd, scratch_.values.begin());
         if (auto accelerated = forwardDynamics(*model_, scratch_, tau_, *workspace_); !accelerated)
         {
             return accelerated;
         }
-        std::copy(x.begin() + static_cast<std::ptrdiff_t>(n), x.end(), dxdt.begin());
+        std::copy(rates, rateEnd, dxdt.begin());
         std::copy(workspace_->qdd.begin(), workspace_->qdd.end(), dxdt.begin() + static_cast<std::ptrdiff_t>(n));
+        if (withEnergy)
+        {
+            dxdt[2 * n] = model_->elementCount() > 0 ? workspace_->elementDissipationPower : 0.0;
+        }
         return {};
     }
 
@@ -116,10 +125,11 @@ static_assert(OdeSystem<ModelOde, std::dynamic_extent>);
  * An explicit Runge-Kutta Stepper for a model: the non-stiff reference run (RK4: energy conserved to
  * the method's order, unlike SemiImplicitEuler).
  *
- * It integrates `[q; qd]` with the dynamic-size ExplicitRungeKutta through ModelOde, reusing the
- * endpoint derivative of one tick as the first stage of the next while the forcing is unchanged
- * (4 forward-dynamics evaluations per RK4 tick). It is bound to the model it was built for, like a
- * Workspace, and allocates only at construction.
+ * It integrates `[q; qd; dissipated]` with the dynamic-size ExplicitRungeKutta through ModelOde, reusing
+ * the endpoint derivative of one tick as the first stage of the next while the forcing is unchanged
+ * (4 forward-dynamics evaluations per RK4 tick), so `state.dissipated` is integrated to the method's order;
+ * the applied forces' work `tau . (q1 - q0)` is exact for forces constant over the step. It is bound to the
+ * model it was built for, like a Workspace, and allocates only at construction.
  *
  * @tparam Method The tableau.
  */
@@ -137,7 +147,8 @@ public:
      * @param workspace A workspace built for the model (the one passed to `step` is used when stepping).
      */
     RungeKuttaStepper(const Model& model, Workspace& workspace)
-        : modelId_(model.id()), integrator_(2 * model.dofCount()), ode_(model, workspace)
+        : modelId_(model.id()), integrator_(2 * model.dofCount() + 1), ode_(model, workspace),
+          x_(2 * model.dofCount() + 1, 0.0)
     {
     }
 
@@ -174,10 +185,21 @@ public:
             integrator_.invalidate();
         }
         ode_.bind(model, workspace);
-        if (auto stepped = integrator_.stepTick(ode_, tick, h, state.values); !stepped)
+        const std::size_t n = model.dofCount();
+        std::copy(state.values.begin(), state.values.end(), x_.begin());
+        x_[2 * n] = state.dissipated.si();
+        if (auto stepped = integrator_.stepTick(ode_, tick, h, x_); !stepped)
         {
             return stepped;
         }
+        double work = 0.0;
+        for (std::size_t i = 0; i < forcing.tau.size(); ++i)
+        {
+            work += forcing.tau[i] * (x_[i] - state.values[i]);
+        }
+        std::copy_n(x_.begin(), 2 * n, state.values.begin());
+        state.dissipated = sub0math::f64::Energy::fromSi(x_[2 * n]);
+        state.externalWork += sub0math::f64::Energy::fromSi(work);
         state.tick = tick + 1U;
         return {};
     }
@@ -186,6 +208,7 @@ private:
     std::uint64_t modelId_;
     ExplicitRungeKutta<std::dynamic_extent, Method> integrator_;
     ModelOde ode_;
+    std::vector<double> x_; // [q; qd; dissipated]
 };
 
 /** Classic RK4 on a model: the reference stepper. */
