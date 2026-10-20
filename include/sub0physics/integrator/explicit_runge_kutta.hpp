@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <expected>
 #include <span>
-#include <tuple>
 #include <type_traits>
 
 #include <sub0math/units/quantities.hpp>
@@ -74,9 +73,7 @@ public:
      */
     explicit ExplicitRungeKutta(std::size_t size)
         requires Dynamic
-        : k1_(size),
-          scratch_{StateVector<N>(size), StateVector<N>(size), StateVector<N>(size), StateVector<N>(size),
-                   StateVector<N>(size), StateVector<N>(size)},
+        : k1_(size), k2_(size), k3_(size), k4_(size), trial_(size), next_(size), endDerivative_(size),
           cachedState_(size)
     {
     }
@@ -145,18 +142,6 @@ public:
 private:
     using ConstStateRef = std::conditional_t<Dynamic, std::span<const double>, const StateVector<N>&>;
 
-    // The stages of one step. The fixed size keeps them local to the step, so the compiler can hold them in
-    // registers; the dynamic size keeps one set, allocated at construction.
-    struct Scratch
-    {
-        StateVector<N> k2;
-        StateVector<N> k3;
-        StateVector<N> k4;
-        StateVector<N> trial;
-        StateVector<N> next;
-        StateVector<N> end;
-    };
-
     // PERF: flattened: inlined evaluate 43 vs 52 ns per RK4 step.
     template<typename S>
     SUB0PHYSICS_FLATTEN std::expected<void, Fault> stepBetween(S& system, double t, double h, double end, StateRef state)
@@ -171,20 +156,8 @@ private:
             {
                 return std::unexpected(Fault{FaultKind::InvalidInput, "state size differs from the integrator's"});
             }
-            return stepWith(system, t, h, end, state, scratch_);
         }
-        else
-        {
-            // PERF: local stages avoid store-forwarding stalls (Midpoint 1.3x to 1.0x).
-            Scratch local;
-            return stepWith(system, t, h, end, state, local);
-        }
-    }
-
-    template<typename S>
-    std::expected<void, Fault> stepWith(S& system, double t, double h, double end, StateRef state, Scratch& s)
-    {
-        auto result = advance(system, t, h, end, state, s);
+        auto result = advance(system, t, h, end, state);
         if (!result)
         {
             // Leave the system observing the last valid state. The trial's fault is the one to report.
@@ -193,23 +166,23 @@ private:
             assign(cachedState_, state);
             return result;
         }
-        assign(state, s.next);
+        assign(state, next_);
         cachedTime_ = end;
-        assign(cachedState_, s.next);
+        assign(cachedState_, state);
         if constexpr (Dynamic)
         {
-            k1_.swap(s.end); // the old first stage is scratch now
+            k1_.swap(endDerivative_); // the old first stage is scratch now
         }
         else
         {
-            k1_ = s.end;
+            k1_ = endDerivative_;
         }
         cacheValid_ = true;
         return {};
     }
 
     template<typename S>
-    std::expected<void, Fault> advance(S& system, double t, double h, double end, ConstStateRef x, Scratch& s)
+    std::expected<void, Fault> advance(S& system, double t, double h, double end, ConstStateRef x)
     {
         const std::size_t n = size();
         if (!cacheValid_ || cachedTime_ != t || !sameState(x))
@@ -220,8 +193,8 @@ private:
             }
         }
         const double half = 0.5 * h;
-        stage(x, k1_, half, s.trial);
-        if (auto r = system.evaluate(t + half, s.trial, s.k2); !r)
+        stage(x, k1_, half);
+        if (auto r = system.evaluate(t + half, trial_, k2_); !r)
         {
             return r;
         }
@@ -229,41 +202,41 @@ private:
         {
             for (std::size_t i = 0; i < n; ++i)
             {
-                s.next[i] = x[i] + h * s.k2[i];
+                next_[i] = x[i] + h * k2_[i];
             }
         }
         else
         {
-            stage(x, s.k2, half, s.trial);
-            if (auto r = system.evaluate(t + half, s.trial, s.k3); !r)
+            stage(x, k2_, half);
+            if (auto r = system.evaluate(t + half, trial_, k3_); !r)
             {
                 return r;
             }
-            stage(x, s.k3, h, s.trial);
-            if (auto r = system.evaluate(end, s.trial, s.k4); !r)
+            stage(x, k3_, h);
+            if (auto r = system.evaluate(end, trial_, k4_); !r)
             {
                 return r;
             }
             for (std::size_t i = 0; i < n; ++i)
             {
-                s.next[i] = x[i] + h * (k1_[i] + 2.0 * s.k2[i] + 2.0 * s.k3[i] + s.k4[i]) / 6.0;
+                next_[i] = x[i] + h * (k1_[i] + 2.0 * k2_[i] + 2.0 * k3_[i] + k4_[i]) / 6.0;
             }
         }
-        for (const double value : s.next)
+        for (const double value : next_)
         {
             if (!std::isfinite(value))
             {
                 return std::unexpected(Fault{FaultKind::NonFiniteState, "nonfinite physical state"});
             }
         }
-        return system.evaluate(end, s.next, s.end);
+        return system.evaluate(end, next_, endDerivative_);
     }
 
-    void stage(ConstStateRef x, const StateVector<N>& k, double scale, StateVector<N>& trial) const noexcept
+    void stage(ConstStateRef x, const StateVector<N>& k, double scale) noexcept
     {
         for (std::size_t i = 0; i < size(); ++i)
         {
-            trial[i] = x[i] + scale * k[i];
+            trial_[i] = x[i] + scale * k[i];
         }
     }
 
@@ -293,7 +266,12 @@ private:
     }
 
     StateVector<N> k1_{};
-    std::conditional_t<Dynamic, Scratch, std::tuple<>> scratch_{}; // the dynamic size's stages
+    StateVector<N> k2_{};
+    StateVector<N> k3_{};
+    StateVector<N> k4_{};
+    StateVector<N> trial_{};
+    StateVector<N> next_{};
+    StateVector<N> endDerivative_{};
     StateVector<N> cachedState_{};
     double cachedTime_ = 0.0;
     bool cacheValid_ = false;
