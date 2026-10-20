@@ -40,6 +40,30 @@ A product that switches models must show, per mechanism:
 2. Both are in their asymptotic range (`observedOrder` near the nominal order).
 3. Repeated switches near the threshold do not inject energy or duplicate reactions.
 
+## Reference models, levers and quality profiles
+
+- **A port is a reference, not a ceiling.**
+  - A mechanism ported for parity with an upstream implementation becomes that mechanism's *reference model*. It is
+    frozen, and changes only when its upstream changes.
+  - Once it is stable, a post-parity review asks whether the port's choices limit us: upstream arithmetic
+    semantics, fixed resolutions, fixed steps, cold-started iterations, explicit methods where an implicit
+    one would allow larger steps.
+  - Improvements become further models behind the same interface. The reference is never edited for speed.
+- **Levers.** A lever is a deterministic parameter of one model that trades error for cost: step size, node count,
+  iteration tolerance, warm start, decimation, arithmetic mode, Jacobian reuse. A lever parameterises one
+  implementation; it never copies a formula.
+- **Evidence for a lever.**
+  - An error-against-cost frontier against the reference on held-out scenarios (`ErrorStatistics` per
+    channel, plus a benchmark).
+  - An energy balance at every setting (`EnergyLedger`).
+  - Determinism across compilers.
+  - Whether the lever can switch in-run (`decide`/`commit` with a state transfer) or only at setup.
+- **Quality profiles.**
+  - A product names profiles (for example offline reference, engineering analysis, interactive, ambient). Each maps
+    every mechanism to a model and its lever values, validated together as a compatible combination.
+  - A profile is not a global LOD integer: within a profile, a `FidelitySelector` can still raise one mechanism on
+    physical demand.
+
 ## Not provided yet
 
 Shadow references running beside the live model, asynchronous comparison windows, and state
