@@ -250,7 +250,7 @@ std::expected<void, Fault> addElements(const Model& model, const State& state, W
 }
 
 [[nodiscard]] std::expected<void, Fault> checkStep(const Model& model, const Forcing& forcing, std::uint64_t tick,
-                                                   double dt, const State& state, const Workspace& ws) noexcept
+                                                   double dt, const State& state, Workspace& ws) noexcept
 {
     if (!std::isfinite(dt) || !(dt > 0.0))
     {
@@ -323,17 +323,23 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
             double stiffnessRate = 0.0;
             for (std::size_t j = 0; j <= i; ++j)
             {
-                double symmetric = 0.5 * (k[i * n + j] + k[j * n + i]);
                 double damping = d[i * n + j];
-                if (fk != nullptr)
-                {
-                    symmetric += 0.5 * (fk[i * n + j] + fk[j * n + i]);
-                }
                 if (fd != nullptr)
                 {
                     damping += 0.5 * (fd[i * n + j] + fd[j * n + i]);
                 }
-                a[i * n + j] = m[i * n + j] - hd * damping - h2 * symmetric;
+                double entry = m[i * n + j] - hd * damping;
+                if (withStiffness)
+                {
+                    // PERF: K~ only when stiffness is implicit (not for DampingOnly or explicit steps).
+                    double symmetric = 0.5 * (k[i * n + j] + k[j * n + i]);
+                    if (fk != nullptr)
+                    {
+                        symmetric += 0.5 * (fk[i * n + j] + fk[j * n + i]);
+                    }
+                    entry -= h2 * symmetric;
+                }
+                a[i * n + j] = entry;
             }
             if (withStiffness)
             {
@@ -646,30 +652,16 @@ std::expected<void, Fault> stepSemiImplicitEuler(const Model& model, const Forci
     return {};
 }
 
-// The linearly implicit theta step: (M - theta h D - theta^2 h^2 K~) dqd = h (tau + tau_e - c + theta h K~ qd), then
-// q += h (qd + theta dqd), qd += dqd. theta = 1 is linearly implicit Euler (bit for bit its earlier form).
-std::expected<void, Fault> stepLinearlyImplicit(const Model& model, const Forcing& forcing, std::uint64_t tick,
-                                                double dt, State& state, Workspace& ws, ImplicitTerms terms,
-                                                double theta) noexcept
+// The rest of a linearly implicit theta step after prepareStep at `state`:
+// (M - theta h D - theta^2 h^2 K~) dqd = h (tau + tau_e - c + theta h K~ qd), then q += h (qd + theta dqd),
+// qd += dqd. theta = 1 is linearly implicit Euler (bit for bit its earlier form).
+std::expected<void, Fault> finishLinearlyImplicit(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                  double dt, State& state, Workspace& ws, ImplicitTerms terms,
+                                                  double theta) noexcept
 {
-    if (auto checked = checkStep(model, forcing, tick, dt, state, ws); !checked)
-    {
-        return checked;
-    }
-    const Forcing applied = detail::applyForcing(model, state, forcing, ws);
-    if (model.constraintCount() > 0)
-    {
-        if (theta != 1.0)
-        {
-            return invalidInput("the linearly implicit midpoint step does not support constraints yet");
-        }
-        return detail::stepConstrained(model, applied, dt, state, ws, true, terms);
-    }
     const std::size_t n = model.dofCount();
-    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full); !prepared)
-    {
-        return prepared;
-    }
+    // PERF: site forces mapped on the step's own transforms, not a second pass.
+    const Forcing applied = detail::applyForcing(model, state, forcing, ws, true);
     const bool hasElements = model.elementCount() > 0;
     const auto dense = formStepSystem(model, state, applied, hasElements ? ws.elementForce.data() : nullptr, ws, dt,
                                       true, terms, true, theta);
@@ -712,6 +704,30 @@ std::expected<void, Fault> stepLinearlyImplicit(const Model& model, const Forcin
     return {};
 }
 
+std::expected<void, Fault> stepLinearlyImplicit(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                double dt, State& state, Workspace& ws, ImplicitTerms terms,
+                                                double theta) noexcept
+{
+    if (auto checked = checkStep(model, forcing, tick, dt, state, ws); !checked)
+    {
+        return checked;
+    }
+    if (model.constraintCount() > 0)
+    {
+        if (theta != 1.0)
+        {
+            return invalidInput("the linearly implicit midpoint step does not support constraints yet");
+        }
+        return detail::stepConstrained(model, detail::applyForcing(model, state, forcing, ws), dt, state, ws, true,
+                                       terms);
+    }
+    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full); !prepared)
+    {
+        return prepared;
+    }
+    return finishLinearlyImplicit(model, forcing, tick, dt, state, ws, terms, theta);
+}
+
 std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const Forcing& forcing, std::uint64_t tick,
                                                      sub0math::f64::Time h, State& state, Workspace& ws,
                                                      ImplicitTerms terms) noexcept
@@ -724,6 +740,67 @@ std::expected<void, Fault> stepLinearlyImplicitMidpoint(const Model& model, cons
                                                         ImplicitTerms terms) noexcept
 {
     return stepLinearlyImplicit(model, forcing, tick, h.si(), state, ws, terms, 0.5);
+}
+
+std::expected<void, Fault> prepareLinearlyImplicitStep(const Model& model, const State& state, Workspace& ws,
+                                                       ImplicitTerms terms) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, ws); !checked)
+    {
+        return checked;
+    }
+    if (model.constraintCount() > 0)
+    {
+        return invalidInput("a prepared step does not support constraints; use stepLinearlyImplicitEuler");
+    }
+    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full); !prepared)
+    {
+        return prepared;
+    }
+    // The world transforms the site queries read (the elements composed them only when the model has tendons).
+    if (detail::isPlanar(model))
+    {
+        detail::planarWorldTransforms(model, ws);
+    }
+    else
+    {
+        detail::composeWorldTransforms(model, ws);
+        for (std::size_t i = 0; i < model.bodyCount(); ++i)
+        {
+            ws.bodyPose[i] = sub0math::toRigidTransform<sub0math::f64::Length>(ws.worldToBody[i]);
+        }
+    }
+    std::ranges::copy(state.values, ws.preparedValues.begin());
+    ws.preparedTerms = terms;
+    ws.stepPrepared = true;
+    return {};
+}
+
+std::expected<void, Fault> completeLinearlyImplicitStep(const Model& model, const Forcing& forcing, std::uint64_t tick,
+                                                        sub0math::f64::Time h, State& state, Workspace& ws,
+                                                        ImplicitScheme scheme) noexcept
+{
+    if (!ws.isBuiltFor(model) || !state.isSizedFor(model) || !ws.stepPrepared ||
+        !std::ranges::equal(state.values, ws.preparedValues))
+    {
+        return invalidInput("the workspace holds no step prepared at this state");
+    }
+    const double dt = h.si();
+    if (!std::isfinite(dt) || !(dt > 0.0))
+    {
+        return invalidInput("step needs a finite positive step size");
+    }
+    if (tick != state.tick)
+    {
+        return invalidInput("tick differs from the state's tick");
+    }
+    if (auto checked = detail::checkForcing(model, forcing); !checked)
+    {
+        return checked;
+    }
+    ws.stepPrepared = false;
+    return finishLinearlyImplicit(model, forcing, tick, dt, state, ws, ws.preparedTerms,
+                                  scheme == ImplicitScheme::Midpoint ? 0.5 : 1.0);
 }
 
 namespace detail
@@ -751,7 +828,8 @@ std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forci
     return {};
 }
 
-Forcing applyForcing(const Model& model, const State& state, const Forcing& forcing, Workspace& ws) noexcept
+Forcing applyForcing(const Model& model, const State& state, const Forcing& forcing, Workspace& ws,
+                     bool transformsCurrent) noexcept
 {
     if (forcing.siteForces.empty())
     {
@@ -766,7 +844,10 @@ Forcing applyForcing(const Model& model, const State& state, const Forcing& forc
     const auto parents = model.parents();
     if (isPlanar(model))
     {
-        planarTransforms<false>(model, state, ws);
+        if (!transformsCurrent)
+        {
+            planarTransforms<false>(model, state, ws);
+        }
         planarWorldTransforms(model, ws);
         const PlanarModel& pm = model.planar();
         for (const SiteForce& f : forcing.siteForces)
@@ -797,7 +878,10 @@ Forcing applyForcing(const Model& model, const State& state, const Forcing& forc
     }
     else
     {
-        updateTransforms<false>(model, state, ws);
+        if (!transformsCurrent)
+        {
+            updateTransforms<false>(model, state, ws);
+        }
         composeWorldTransforms(model, ws);
         const auto subspace = model.motionSubspaces();
         for (const SiteForce& f : forcing.siteForces)

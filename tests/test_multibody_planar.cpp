@@ -612,3 +612,72 @@ TEST_CASE("linearly implicit midpoint: conserves an oscillator's energy, second 
     State sc = sliderCrankState({}, 0.3, 1.0);
     CHECK_FALSE(stepLinearlyImplicitMidpoint(crank, Forcing{}, 0, f64::Time::fromSi(1e-3), sc, wc));
 }
+
+TEST_CASE("prepared step: prepare then complete is the one-call step bit for bit; sites and energy come with it")
+{
+    for (const Formulation formulation : {Formulation::Automatic, Formulation::General})
+    {
+        ModelBuilder builder = rigLikeBuilder();
+        builder.setFormulation(formulation);
+        const Model model = *builder.build();
+        const std::array<SiteForce, 2> forces{SiteForce{SiteId{2}, {0.0, 0.0, 420.0}, {}},
+                                              SiteForce{SiteId{3}, {12.0, 0.0, 610.0}, {0.0, 1.5, 0.0}}};
+        const std::array<SiteId, 4> sites{SiteId{0}, SiteId{1}, SiteId{2}, SiteId{4}};
+        for (const ImplicitScheme scheme : {ImplicitScheme::Euler, ImplicitScheme::Midpoint})
+        {
+            State oneCall = rigLikeState();
+            State twoPhase = oneCall;
+            Workspace wa(model);
+            Workspace wb(model);
+            for (std::uint64_t k = 0; k < 50; ++k)
+            {
+                const auto h = f64::Time::fromSi(1e-3);
+                if (scheme == ImplicitScheme::Euler)
+                {
+                    REQUIRE(stepLinearlyImplicitEuler(model, Forcing{{}, forces}, k, h, oneCall, wa));
+                }
+                else
+                {
+                    REQUIRE(stepLinearlyImplicitMidpoint(model, Forcing{{}, forces}, k, h, oneCall, wa));
+                }
+                REQUIRE(prepareLinearlyImplicitStep(model, twoPhase, wb));
+                std::array<SiteKinematics, 4> prepared{};
+                EnergyAccount account{};
+                REQUIRE(computePreparedSiteKinematics(model, twoPhase, sites, prepared, wb, &account));
+                REQUIRE(completeLinearlyImplicitStep(model, Forcing{{}, forces}, k, h, twoPhase, wb, scheme));
+                CHECK(twoPhase.values == oneCall.values);
+                CHECK(twoPhase.externalWork.si() == oneCall.externalWork.si());
+                // The prepared reads equal the stand-alone queries at the state they were taken at.
+                if (k == 10)
+                {
+                    State at = oneCall;
+                    Workspace wc(model);
+                    REQUIRE(prepareLinearlyImplicitStep(model, at, wc));
+                    REQUIRE(computePreparedSiteKinematics(model, at, sites, prepared, wc, &account));
+                    std::array<SiteKinematics, 4> direct{};
+                    EnergyAccount expected{};
+                    Workspace wd(model);
+                    REQUIRE(computeSiteKinematics(model, at, sites, direct, wd, &expected));
+                    for (std::size_t s = 0; s < sites.size(); ++s)
+                    {
+                        CHECK(prepared[s].pose.translation.x.si() == doctest::Approx(direct[s].pose.translation.x.si()).epsilon(1e-14));
+                        CHECK(prepared[s].velocity.z.si() == doctest::Approx(direct[s].velocity.z.si()).epsilon(1e-14));
+                    }
+                    CHECK(account.kinetic.si() == doctest::Approx(expected.kinetic.si()).epsilon(1e-14));
+                    CHECK(account.potential.si() == doctest::Approx(expected.potential.si()).epsilon(1e-14));
+                    // Any other use of the workspace withdraws the preparation; another state is refused.
+                    REQUIRE(computeEnergy(model, at, wc));
+                    CHECK_FALSE(completeLinearlyImplicitStep(model, Forcing{}, at.tick, h, at, wc));
+                    REQUIRE(prepareLinearlyImplicitStep(model, at, wc));
+                    State other = at;
+                    other.values[0] += 1e-9;
+                    CHECK_FALSE(completeLinearlyImplicitStep(model, Forcing{}, other.tick, h, other, wc));
+                    CHECK_FALSE(computePreparedSiteKinematics(model, other, sites, prepared, wc));
+                }
+            }
+        }
+    }
+    const Model crank = *sliderCrankBuilder().build();
+    Workspace wc(crank);
+    CHECK_FALSE(prepareLinearlyImplicitStep(crank, sliderCrankState({}, 0.3, 1.0), wc));
+}

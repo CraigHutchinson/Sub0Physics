@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <expected>
+#include <span>
 
 #include <sub0math/units/quantities.hpp>
 
 #include "sub0physics/fault.hpp"
+#include "sub0physics/multibody/kinematics.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/state.hpp"
 #include "sub0physics/multibody/stepper.hpp"
@@ -13,17 +15,6 @@
 
 namespace sub0physics::multibody
 {
-
-/**
- * Which Jacobians the linearly implicit Euler step treats implicitly: a discrete lever (docs/LOD.md) between the
- * reference stepper and MuJoCo's `implicitfast` structure.
- */
-enum class ImplicitTerms : std::uint8_t
-{
-    Full,              ///< D and K, including the tendons' geometric and rate-transport terms (default).
-    MaterialStiffness, ///< D and the material part of K only (geometric stiffness off).
-    DampingOnly        ///< D only: springs and stiffness explicit, as MuJoCo's `implicitfast`.
-};
 
 /**
  * Advances a state by one linearly implicit Euler step on velocities (docs/MULTIBODY.md section 5): the
@@ -160,5 +151,84 @@ struct LinearlyImplicitMidpoint
 };
 
 static_assert(Stepper<LinearlyImplicitMidpoint>);
+
+/** The weight of a linearly implicit step: Euler (1) or the midpoint rule (1/2). */
+enum class ImplicitScheme : std::uint8_t
+{
+    Euler,   ///< stepLinearlyImplicitEuler.
+    Midpoint ///< stepLinearlyImplicitMidpoint.
+};
+
+/**
+ * Prepares a linearly implicit step at a state, the first half of a two-phase step: transforms, velocities, bias forces,
+ * the mass matrix and the elements with their Jacobians, as the one-call steppers compute them at the start of the
+ * step. Between this and completeLinearlyImplicitStep the caller may read the prepared state with
+ * computePreparedSiteKinematics (sites and energy, at no further kinematics cost) to form its forcing, as a contact
+ * model does; nothing else may use the workspace, and any other entry point that writes it withdraws the preparation.
+ *
+ * prepare then complete gives exactly the one-call step (bit for bit).
+ *
+ * @param model The model; without constraints (the constrained steps need their own preparation).
+ * @param state The state the step will start from.
+ * @param workspace Workspace built for the model.
+ * @param terms Which Jacobians will be implicit.
+ * @return Nothing, or InvalidInput (sizes, another model's workspace, a model with constraints) or an element fault.
+ */
+[[nodiscard]] std::expected<void, Fault> prepareLinearlyImplicitStep(const Model& model, const State& state,
+                                                                     Workspace& workspace,
+                                                                     ImplicitTerms terms = ImplicitTerms::Full) noexcept;
+
+/**
+ * Reads site kinematics, and optionally the energy account, from a prepared step (prepareLinearlyImplicitStep), with
+ * no further kinematics pass. Leaves the preparation in place.
+ *
+ * @param model The model.
+ * @param state The state the step was prepared at.
+ * @param sites Sites of the model.
+ * @param out One result per site.
+ * @param workspace The prepared workspace.
+ * @param energy When given, receives computeEnergy's account of the state.
+ * @return Nothing, or InvalidInput when the workspace holds no preparation at this state, or for a site or output size.
+ */
+[[nodiscard]] std::expected<void, Fault> computePreparedSiteKinematics(const Model& model, const State& state,
+                                                                       std::span<const SiteId> sites,
+                                                                       std::span<SiteKinematics> out,
+                                                                       const Workspace& workspace,
+                                                                       EnergyAccount* energy = nullptr) noexcept;
+
+/**
+ * Reads site positions and velocities (no orientations, the cheapest site query) from a prepared step, and optionally
+ * the energy account; see computePreparedSiteKinematics.
+ *
+ * @param model The model.
+ * @param state The state the step was prepared at.
+ * @param sites Sites of the model.
+ * @param out One result per site.
+ * @param workspace The prepared workspace.
+ * @param energy When given, receives computeEnergy's account of the state.
+ * @return Nothing, or InvalidInput when the workspace holds no preparation at this state, or for a site or output size.
+ */
+[[nodiscard]] std::expected<void, Fault> computePreparedSiteMotion(const Model& model, const State& state,
+                                                                   std::span<const SiteId> sites,
+                                                                   std::span<SiteMotion> out, const Workspace& workspace,
+                                                                   EnergyAccount* energy = nullptr) noexcept;
+
+/**
+ * Completes a prepared step (prepareLinearlyImplicitStep): forms and solves the step with the forcing and commits it,
+ * as stepLinearlyImplicitEuler or stepLinearlyImplicitMidpoint would from the same state. The preparation is used up.
+ *
+ * @param model The model.
+ * @param forcing Applied forces and site forces, constant over the step.
+ * @param tick The tick the state is at; must equal `state.tick`.
+ * @param h Step size; finite and positive.
+ * @param state The state the step was prepared at; replaced by the state at tick + 1 only on success.
+ * @param workspace The prepared workspace.
+ * @param scheme Euler or midpoint.
+ * @return Nothing, or InvalidInput when the workspace holds no preparation at this state, or a stepper fault.
+ */
+[[nodiscard]] std::expected<void, Fault> completeLinearlyImplicitStep(const Model& model, const Forcing& forcing,
+                                                                      std::uint64_t tick, sub0math::f64::Time h,
+                                                                      State& state, Workspace& workspace,
+                                                                      ImplicitScheme scheme = ImplicitScheme::Euler) noexcept;
 
 } // namespace sub0physics::multibody

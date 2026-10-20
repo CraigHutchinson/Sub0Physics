@@ -39,6 +39,17 @@ enum class Formulation : std::uint8_t
 };
 
 /**
+ * Which Jacobians a linearly implicit step treats implicitly: a discrete lever (docs/LOD.md) between the reference
+ * stepper and MuJoCo's `implicitfast` structure. Used by stepLinearlyImplicitEuler and stepLinearlyImplicitMidpoint.
+ */
+enum class ImplicitTerms : std::uint8_t
+{
+    Full,              ///< D and K, including the tendons' geometric and rate-transport terms (default).
+    MaterialStiffness, ///< D and the material part of K only (geometric stiffness off).
+    DampingOnly        ///< D only: springs and stiffness explicit, as MuJoCo's `implicitfast`.
+};
+
+/**
  * The planar formulation's view of one body, in its plane's (i, j, k) axes: Model::planar.
  */
 struct PlanarBody

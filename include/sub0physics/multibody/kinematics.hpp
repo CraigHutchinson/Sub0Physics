@@ -41,6 +41,13 @@ struct SiteKinematics
 [[nodiscard]] std::expected<void, Fault> updateKinematics(const Model& model, const State& state,
                                                           Workspace& workspace) noexcept;
 
+/** Position and velocity of a site's origin in the world frame: SiteKinematics without the orientation. */
+struct SiteMotion
+{
+    sub0math::Vec3<sub0math::f64::Length> position;   ///< The site's origin.
+    sub0math::Vec3<sub0math::f64::Velocity> velocity; ///< Its velocity.
+};
+
 /**
  * Computes a site's pose and velocity.
  *
@@ -63,13 +70,14 @@ struct SiteKinematics
  * @param sites Sites of the model.
  * @param out One result per site, in the same order.
  * @param workspace Workspace built for the model; its kinematics are updated (the planar ones for a planar model).
+ * @param energy When given, also receives computeEnergy's account, from the same kinematics pass.
  * @return Nothing, or InvalidInput for a site that is not in the model, an output of another length, a workspace
- *         built for another model or a state that is not sized for this one.
+ *         built for another model or a state that is not sized for this one; OutsideDomain from an element.
  */
 [[nodiscard]] std::expected<void, Fault> computeSiteKinematics(const Model& model, const State& state,
                                                               std::span<const SiteId> sites,
-                                                              std::span<SiteKinematics> out,
-                                                              Workspace& workspace) noexcept;
+                                                              std::span<SiteKinematics> out, Workspace& workspace,
+                                                              EnergyAccount* energy = nullptr) noexcept;
 
 /**
  * Computes the translational Jacobian of a site's origin: its world velocity is `J qd`.

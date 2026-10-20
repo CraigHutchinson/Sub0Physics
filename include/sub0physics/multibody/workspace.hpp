@@ -149,6 +149,7 @@ struct Workspace
           constraintSiteWrenches(model.constraintWrenchCount()),
           jointReactions(model.bodyCount()),
           appliedForce(dof, 0.0),
+          preparedValues(2 * dof, 0.0),
           planar(model.formulation() == Formulation::Planar ? model.bodyCount() : 0U),
           constraintScratch(dof, model.constraintRowCount(), model.limits().size(), model)
     {
@@ -210,6 +211,9 @@ struct Workspace
     ConstraintReport constraintReport{};    ///< What the last step or projection achieved against the requested targets.
 
     std::vector<double> appliedForce; ///< The last step's applied generalized force: Forcing::tau plus the site forces mapped through their Jacobians [N or N m].
+    std::vector<double> preparedValues; ///< The state a prepared step was prepared at (prepareLinearlyImplicitStep); internal.
+    bool stepPrepared = false;          ///< Whether a prepared step is waiting for completeLinearlyImplicitStep; internal.
+    ImplicitTerms preparedTerms = ImplicitTerms::Full; ///< The prepared step's implicit terms; internal.
     PlanarKinematics planar;          ///< The planar formulation's kinematics (Formulation::Planar); empty otherwise.
     ConstraintScratch constraintScratch;    ///< Solver scratch; internal.
 };

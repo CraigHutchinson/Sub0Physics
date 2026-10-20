@@ -204,11 +204,16 @@ struct PlanarPoint
 [[nodiscard]] SUB0MATH_FORCE_INLINE sub0math::Vec3d planarVectorToWorld(const PlanarModel& pm, double x, double y,
                                                                        double normal) noexcept
 {
-    sub0math::Vec3d v{};
-    v[pm.axisI] = x;
-    v[pm.axisJ] = y;
-    v[pm.normal] = normal;
-    return v;
+    // PERF: a branch per plane beats indexed stores (store forwarding).
+    switch (pm.normal)
+    {
+    case 0:
+        return {normal, x, y}; // (i, j) = (y, z)
+    case 1:
+        return {y, normal, x}; // (i, j) = (z, x)
+    default:
+        return {x, y, normal}; // (i, j) = (x, y)
+    }
 }
 
 // Fills the general kinematic fields (parentToBody, worldToBody, bodyVelocity and bodyAcceleration) from planar,

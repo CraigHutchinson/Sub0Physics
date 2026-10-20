@@ -26,10 +26,12 @@ namespace sub0physics::multibody::detail
 {
 
 // The one precondition check every public entry point makes: the workspace belongs to the model and
-// the state has one entry per coordinate. A few comparisons; no allocation.
+// the state has one entry per coordinate. A few comparisons; no allocation. Every entry point that writes the
+// workspace calls it, so it also withdraws a prepared step (prepareLinearlyImplicitStep).
 [[nodiscard]] SUB0MATH_FORCE_INLINE std::expected<void, Fault> checkInputs(const Model& model, const State& state,
-                                                                          const Workspace& ws) noexcept
+                                                                          Workspace& ws) noexcept
 {
+    ws.stepPrepared = false;
     if (!ws.isBuiltFor(model))
     {
         return invalidInput("workspace was not built for this model");
@@ -191,10 +193,11 @@ struct EnergyTerms
 // Validates a forcing for a model: sizes and site ids.
 [[nodiscard]] std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forcing) noexcept;
 
-// ws.appliedForce := tau + sum over site forces of J^T [moment; force] at `state` (it updates the transforms it needs).
-// Returns the forcing the step runs: tau = ws.appliedForce, no site forces, the same Jacobians.
-[[nodiscard]] Forcing applyForcing(const Model& model, const State& state, const Forcing& forcing,
-                                   Workspace& ws) noexcept;
+// ws.appliedForce := tau + sum over site forces of J^T [moment; force] at `state`. It updates the joint transforms
+// unless `transformsCurrent` says they already hold `state` (the planar ones for a planar model), and the world
+// transforms always. Returns the forcing the step runs: tau = ws.appliedForce, no site forces, the same Jacobians.
+[[nodiscard]] Forcing applyForcing(const Model& model, const State& state, const Forcing& forcing, Workspace& ws,
+                                   bool transformsCurrent = false) noexcept;
 
 // x := A^-1 x with the factor from formStepMatrix.
 void solveStepMatrix(const Model& model, const Workspace& ws, bool dense, double* x) noexcept;
