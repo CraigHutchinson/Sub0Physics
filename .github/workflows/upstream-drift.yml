@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   drift:
-    # fae1f18bb316ba47cc7154be88636bb67a2cfaae: pin both refs to the merged Sub0Math commit sha (keep them equal).
+    # Shared tooling pinned to a Sub0Math commit; keep both refs equal when moving it.
     uses: CraigHutchinson/Sub0Math/.github/workflows/upstream-drift-reusable.yml@fae1f18bb316ba47cc7154be88636bb67a2cfaae
     with:
       sub0math-ref: fae1f18bb316ba47cc7154be88636bb67a2cfaae
