@@ -21,6 +21,7 @@ add_executable(Sub0Physics_Tests
     test_multibody_elements.cpp
     test_polyline_profile.cpp
     test_prepared_profile.cpp
+    test_terrain_extract.cpp
     test_terrain_grid.cpp
     test_terrain_page.cpp
     test_terrain_surfaces.cpp

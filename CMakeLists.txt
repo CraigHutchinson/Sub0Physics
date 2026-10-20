@@ -26,6 +26,7 @@ add_library(Sub0Physics STATIC
     src/corridor_builder.cpp
     src/damped_oscillator.cpp
     src/fidelity_selector.cpp
+    src/height_extract.cpp
     src/height_page.cpp
     src/model_builder.cpp
     src/multibody_constraints.cpp

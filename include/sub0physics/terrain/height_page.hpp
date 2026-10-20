@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <span>
@@ -134,6 +136,32 @@ public:
     [[nodiscard]] HeightSample heightAt(sub0math::Length x, sub0math::Length y) const noexcept;
 
     /**
+     * Heights of the surface at many local positions: the batch form of `heightAt`, structure-of-arrays in and
+     * out, for extraction and for callers that sample a patch. Each sample is exactly what `heightAt` gives.
+     *
+     * @param xs Local x of each sample.
+     * @param ys Local y of each sample; the same count as `xs`.
+     * @param heights Output: the height of each sample; unspecified where the sample is not known. At least
+     *        as many as `xs`.
+     * @param known Output: 1 where the surface is defined, else 0 (outside the page, or under a triangle with an
+     *        unknown node). At least as many as `xs`.
+     * @return The number of samples that are known; 0 for mismatched or short buffers (nothing is written).
+     */
+    [[nodiscard]] std::size_t heightsAt(std::span<const sub0math::Length> xs, std::span<const sub0math::Length> ys,
+                                        std::span<sub0math::Length> heights, std::span<std::uint8_t> known) const noexcept;
+
+    /**
+     * One row of node heights, for extraction loops that read many nodes in order.
+     *
+     * @param j Node row, 0 to Nodes - 1.
+     * @return The `Nodes` quantised heights of the row in 0.1 mm steps (meaningless where a node is unknown).
+     */
+    [[nodiscard]] std::span<const std::uint16_t> nodeRow(std::int32_t j) const noexcept
+    {
+        return {heights_.data() + static_cast<std::size_t>(j) * static_cast<std::size_t>(Nodes), static_cast<std::size_t>(Nodes)};
+    }
+
+    /**
      * Bounds of a pyramid block.
      *
      * @param level Pyramid level, 0 (8 x 8 cells) to PyramidLevels - 1 (the whole page).
@@ -173,6 +201,11 @@ private:
         return static_cast<std::size_t>(j) * static_cast<std::size_t>(Nodes) + static_cast<std::size_t>(i);
     }
 
+    // The lookup shared by `heightAt` and `heightsAt`: the arrays and the reciprocal spacing are arguments, so
+    // a batch hoists them out of its loop.
+    [[nodiscard]] static HeightSample lookup(const std::uint16_t* h, const std::uint64_t* mask, float inverseSpacing,
+                                             sub0math::Length x, sub0math::Length y) noexcept;
+
     PageFrame frame_;
     SourceRevision revision_;
     sub0math::Length spacing_;
@@ -183,11 +216,12 @@ private:
 };
 
 // PERF: plain HeightSample ~1.7x faster than std::optional (GCC 16).
-SUB0MATH_FORCE_INLINE HeightSample HeightPage::heightAt(sub0math::Length x, sub0math::Length y) const noexcept
+SUB0MATH_FORCE_INLINE HeightSample HeightPage::lookup(const std::uint16_t* h, const std::uint64_t* mask, float inverseSpacing,
+                                                      sub0math::Length x, sub0math::Length y) noexcept
 {
     // PERF: reciprocal spacing faster than dividing by the spacing.
-    const float lx = x.si() * inverseSpacing_;
-    const float ly = y.si() * inverseSpacing_;
+    const float lx = x.si() * inverseSpacing;
+    const float ly = y.si() * inverseSpacing;
     if (!(lx >= 0.0F && ly >= 0.0F && lx <= static_cast<float>(Cells) && ly <= static_cast<float>(Cells)))
     {
         return {sub0math::Length{}, false};
@@ -196,8 +230,6 @@ SUB0MATH_FORCE_INLINE HeightSample HeightPage::heightAt(sub0math::Length x, sub0
     const std::int32_t j = std::min(static_cast<std::int32_t>(ly), Cells - 1);
     const float fx = lx - static_cast<float>(i);
     const float fy = ly - static_cast<float>(j);
-    const std::uint16_t* h = heights_.data();
-    const std::uint64_t* mask = known_.data();
     const auto bit = [mask](std::size_t n) { return ((mask[n >> 6U] >> (n & 63U)) & 1U) != 0U; };
     const std::size_t a = index(i, j);
     const std::size_t d = a + static_cast<std::size_t>(Nodes) + 1U;
@@ -214,6 +246,33 @@ SUB0MATH_FORCE_INLINE HeightSample HeightPage::heightAt(sub0math::Length x, sub0
     if (!bit(a) || !bit(d) || !bit(c)) return {sub0math::Length{}, false};
     const float za = static_cast<float>(h[a]), zd = static_cast<float>(h[d]), zc = static_cast<float>(h[c]);
     return {sub0math::Length::fromSi((za + (zd - zc) * fx + (zc - za) * fy) * StepMetres), true};
+}
+
+SUB0MATH_FORCE_INLINE HeightSample HeightPage::heightAt(sub0math::Length x, sub0math::Length y) const noexcept
+{
+    return lookup(heights_.data(), known_.data(), inverseSpacing_, x, y);
+}
+
+inline std::size_t HeightPage::heightsAt(std::span<const sub0math::Length> xs, std::span<const sub0math::Length> ys,
+                                         std::span<sub0math::Length> heights, std::span<std::uint8_t> known) const noexcept
+{
+    const std::size_t n = xs.size();
+    if (ys.size() != n || heights.size() < n || known.size() < n)
+    {
+        return 0;
+    }
+    const std::uint16_t* h = heights_.data();
+    const std::uint64_t* mask = known_.data();
+    const float inverse = inverseSpacing_;
+    std::size_t count = 0;
+    for (std::size_t k = 0; k < n; ++k)
+    {
+        const HeightSample s = lookup(h, mask, inverse, xs[k], ys[k]);
+        heights[k] = s.height;
+        known[k] = s.known ? 1U : 0U;
+        count += s.known ? 1U : 0U;
+    }
+    return count;
 }
 
 /**

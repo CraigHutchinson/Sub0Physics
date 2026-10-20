@@ -250,6 +250,59 @@ TEST_CASE("Terrain page lookups never allocate")
     CHECK(lookups.since() == 0U);
 }
 
+TEST_CASE("Tile cache, extraction and ray casts never allocate once the buffers exist")
+{
+    using namespace sub0physics::terrain;
+    struct Tile
+    {
+        int value = 0;
+    };
+    struct Source final : TileSource<Tile>
+    {
+        LoadResult load(const TileKey& key, Tile& slot) noexcept override
+        {
+            slot.value = key.i;
+            return {LoadState::Ready, {}};
+        }
+    } source;
+    auto cache = SourceTileCache<Tile>::create({.residentTiles = 4, .pendingLoads = 4, .extraSlots = 2}, &source);
+    REQUIRE(cache);
+
+    const auto grid = GridSpec::create({.finestSpacing = sub0math::f64::Length::fromSi(0.01), .pages = {1, 1}});
+    REQUIRE(grid);
+    constexpr std::size_t nodes = static_cast<std::size_t>(HeightPage::Nodes) * HeightPage::Nodes;
+    std::vector<sub0math::f64::Length> heights(nodes);
+    for (std::size_t n = 0; n < nodes; ++n) heights[n] = sub0math::metres(0.2 + 0.0004 * static_cast<double>(n % HeightPage::Nodes));
+    const std::vector<std::uint8_t> known(nodes, 1);
+    const auto page = buildHeightPage(*grid, TileKey{0, 0, 0}, SourceRevision{1}, heights, known);
+    REQUIRE(page);
+    const std::array<const HeightPage*, 1> pointers{&*page};
+    const PageWindow window{{{0, 0}, {0, 0}}, 0, pointers};
+    HeightExtract out;
+    std::vector<sub0math::Length> xs(256, sub0math::Length::fromSi(0.5F)), ys(256, sub0math::Length::fromSi(0.7F)), hs(256);
+    std::vector<std::uint8_t> flags(256);
+    const AllocationCount count;
+    std::size_t sum = 0;
+    for (int k = 0; k < 50; ++k)
+    {
+        const TileKey key{k % 7, 0, 0};
+        if (cache->access(key).state == TileAccess::Started)
+        {
+            cache->pump([](const LoadEvent&) {});
+        }
+        HeightRequest request;
+        request.cells = {{10, 10}, {90 + k, 60}};
+        request.stride = (k % 2 == 0) ? 1U : 4U;
+        sum += extractHeights(*grid, window, request, out).deliveredCells;
+        const auto hit = castRay(out, {{sub0math::Length::fromSi(0.3F), sub0math::Length::fromSi(0.3F), sub0math::Length::fromSi(1.0F)}, {0.0F, 0.0F, -1.0F}},
+                                 sub0math::Length::fromSi(2.0F));
+        sum += hit.hit ? 1U : 0U;
+        sum += page->heightsAt(xs, ys, hs, flags);
+    }
+    CHECK(sum > 0U);
+    CHECK(count.since() == 0U);
+}
+
 TEST_CASE("Travel buffer creation, refusal and evaluation never allocate")
 {
     const AllocationCount count;

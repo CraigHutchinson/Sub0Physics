@@ -243,6 +243,32 @@ public:
     }
 
     /**
+     * The authored rectangle in the terrain frame: from the anchor, `pages * cellsPerSide` finest cells along
+     * each axis. (Coarse pages may extend past it; points outside it have no page.)
+     *
+     * @return The rectangle, lower corner first.
+     */
+    [[nodiscard]] constexpr sub0math::Aabb<sub0math::f64::Length, 2> domain() const noexcept
+    {
+        const auto s = layout_.finestSpacing;
+        return {layout_.anchor,
+                {layout_.anchor.x + s * static_cast<double>(std::int64_t{layout_.pages[0]} * layout_.cellsPerSide),
+                 layout_.anchor.y + s * static_cast<double>(std::int64_t{layout_.pages[1]} * layout_.cellsPerSide)}};
+    }
+
+    /**
+     * Reports whether a closed box lies inside the authored rectangle (edges included).
+     *
+     * @param box The box in the terrain frame.
+     * @return True when it does; false for any box that leaves the rectangle or has a non-finite corner.
+     */
+    [[nodiscard]] constexpr bool covers(const sub0math::Aabb<sub0math::f64::Length, 2>& box) const noexcept
+    {
+        const auto d = domain();
+        return box.lo.x >= d.lo.x && box.hi.x <= d.hi.x && box.lo.y >= d.lo.y && box.hi.y <= d.hi.y;
+    }
+
+    /**
      * Number of pages along one axis at a level: the level-0 count halved (rounding up) per level, so a
      * coarse page may extend past the authored rectangle.
      *
