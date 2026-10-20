@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
 #include <string_view>
 
 namespace sub0physics
@@ -25,5 +26,17 @@ struct Fault
     FaultKind kind;          ///< What class of refusal this is.
     std::string_view detail; ///< Human-readable reason; static storage.
 };
+
+/**
+ * Makes the error of a call whose argument broke its contract.
+ *
+ * @param detail What is wrong; must be a string literal (static storage).
+ * @return An unexpected `Fault{FaultKind::InvalidInput, detail}`, ready to return from a function
+ *         that yields `std::expected<T, Fault>`.
+ */
+[[nodiscard]] constexpr std::unexpected<Fault> invalidInput(std::string_view detail) noexcept
+{
+    return std::unexpected(Fault{FaultKind::InvalidInput, detail});
+}
 
 } // namespace sub0physics

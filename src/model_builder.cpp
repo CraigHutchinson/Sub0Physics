@@ -26,11 +26,6 @@ namespace
 // Unit vectors and rotations must be unit to this tolerance; they are then renormalised exactly.
 constexpr double UnitTolerance = 1e-9;
 
-std::unexpected<Fault> invalid(std::string_view detail)
-{
-    return std::unexpected(Fault{FaultKind::InvalidInput, detail});
-}
-
 template<typename T>
 bool isFinite(const sub0math::Vec3<T>& v)
 {
@@ -150,11 +145,11 @@ std::expected<Model, Fault> ModelBuilder::build() const
 {
     if (bodies_.empty())
     {
-        return invalid("model has no bodies");
+        return invalidInput("model has no bodies");
     }
     if (!isFinite(gravity_))
     {
-        return invalid("gravity must be finite");
+        return invalidInput("gravity must be finite");
     }
 
     Model model;
@@ -209,22 +204,22 @@ std::expected<Model, Fault> ModelBuilder::build() const
         const SiteDescription& site = stored.description;
         if (stored.name.empty())
         {
-            return invalid("site name is empty");
+            return invalidInput("site name is empty");
         }
         for (const std::string& other : model.siteName_)
         {
             if (other == stored.name)
             {
-                return invalid("site name is not unique");
+                return invalidInput("site name is not unique");
             }
         }
         if (site.body.value() >= n)
         {
-            return invalid("site body is not a body of this model");
+            return invalidInput("site body is not a body of this model");
         }
         if (!isFinite(site.frame) || !isUnit(site.frame.rotation))
         {
-            return invalid("site frame must be finite with a unit rotation");
+            return invalidInput("site frame must be finite with a unit rotation");
         }
         auto frame = site.frame;
         frame.rotation = sub0math::normalized(frame.rotation);

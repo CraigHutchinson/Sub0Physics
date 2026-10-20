@@ -10,30 +10,20 @@
 namespace sub0physics
 {
 
-namespace
-{
-
-std::unexpected<Fault> invalid(std::string_view detail) noexcept
-{
-    return std::unexpected(Fault{FaultKind::InvalidInput, detail});
-}
-
-} // namespace
-
 using sub0math::f64::Length;
 
 std::expected<PolylineProfile, Fault> PolylineProfile::create(std::vector<ProfilePoint> points)
 {
     if (points.size() < 2U)
     {
-        return invalid("profile needs at least two points");
+        return invalidInput("profile needs at least two points");
     }
     for (std::size_t i = 0; i < points.size(); ++i)
     {
         const ProfilePoint p = points[i];
         if (!(sub0math::abs(p.x) <= CoordinateLimit) || !(sub0math::abs(p.y) <= CoordinateLimit))
         {
-            return invalid("profile coordinates must be finite and within the coordinate limit");
+            return invalidInput("profile coordinates must be finite and within the coordinate limit");
         }
         if (i == 0U)
         {
@@ -43,21 +33,21 @@ std::expected<PolylineProfile, Fault> PolylineProfile::create(std::vector<Profil
         const Length dy = p.y - points[i - 1U].y;
         if (dx < Length{})
         {
-            return invalid("profile x must not decrease; overhangs are unsupported");
+            return invalidInput("profile x must not decrease; overhangs are unsupported");
         }
         if (sub0math::length(p - points[i - 1U]) < MinimumSegmentLength)
         {
-            return invalid("profile segments must be at least 1 micrometre long");
+            return invalidInput("profile segments must be at least 1 micrometre long");
         }
         if (i > 1U && dx == Length{} && points[i - 1U].x == points[i - 2U].x
             && dy * (points[i - 1U].y - points[i - 2U].y) < sub0math::f64::Area{})
         {
-            return invalid("vertical profile segments must not reverse or overlap");
+            return invalidInput("vertical profile segments must not reverse or overlap");
         }
     }
     if (points.back().x - points.front().x < MinimumSegmentLength)
     {
-        return invalid("profile must span a horizontal domain");
+        return invalidInput("profile must span a horizontal domain");
     }
     return PolylineProfile(std::move(points));
 }

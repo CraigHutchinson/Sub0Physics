@@ -18,11 +18,6 @@ namespace sub0physics::multibody
 namespace
 {
 
-std::unexpected<Fault> invalid(std::string_view detail) noexcept
-{
-    return std::unexpected(Fault{FaultKind::InvalidInput, detail});
-}
-
 // Recursive Newton-Euler over transforms and velocities already in the workspace. With accelerations,
 // tau = M qdd + c; without, tau = c.
 template<bool WithAcceleration>
@@ -115,7 +110,7 @@ std::expected<void, Fault> inverseDynamics(const Model& model, const State& stat
 {
     if (qdd.size() != model.dofCount() || tau.size() != model.dofCount())
     {
-        return invalid("inverse dynamics needs qdd and tau of dofCount entries");
+        return invalidInput("inverse dynamics needs qdd and tau of dofCount entries");
     }
     detail::updateTransforms<true>(model, state, workspace);
     recursiveNewtonEuler<true>(model, state, qdd.data(), tau.data(), workspace);
@@ -138,7 +133,7 @@ std::expected<void, Fault> factorMassMatrix(const Model& model, Workspace& works
         const double pivot = h[k * n + k];
         if (!(pivot > 0.0) || !std::isfinite(pivot))
         {
-            return invalid("mass matrix is not positive definite");
+            return invalidInput("mass matrix is not positive definite");
         }
         for (std::size_t i = parents[k]; i != NoParent; i = parents[i])
         {
@@ -185,7 +180,7 @@ std::expected<void, Fault> forwardDynamics(const Model& model, const State& stat
     const std::size_t n = model.dofCount();
     if (!tau.empty() && tau.size() != n)
     {
-        return invalid("forward dynamics needs tau of dofCount entries, or none");
+        return invalidInput("forward dynamics needs tau of dofCount entries, or none");
     }
     detail::updateTransforms<true>(model, state, workspace);
     recursiveNewtonEuler<false>(model, state, nullptr, workspace.bias.data(), workspace);
@@ -208,11 +203,11 @@ std::expected<void, Fault> stepSymplecticEuler(const Model& model, sub0math::f64
     const double dt = h.si();
     if (!std::isfinite(dt) || !(dt > 0.0))
     {
-        return invalid("step needs a finite positive step size");
+        return invalidInput("step needs a finite positive step size");
     }
     if (state.q.size() != model.dofCount() || state.qd.size() != model.dofCount())
     {
-        return invalid("state is not sized for the model");
+        return invalidInput("state is not sized for the model");
     }
     if (auto accelerated = forwardDynamics(model, state, tau, workspace); !accelerated)
     {
