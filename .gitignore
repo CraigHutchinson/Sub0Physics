@@ -7,6 +7,7 @@ build-*/
 CMakeUserPresets.json
 compile_commands.json
 .upstream/
+.sub0math/
 upstream-drift.md
 __pycache__/
 config/state.cfg

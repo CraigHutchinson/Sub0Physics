@@ -89,8 +89,14 @@ jobs:
           repository: ${{ steps.upstream.outputs.repository }}
           path: .upstream/bikelab
           fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: CraigHutchinson/Sub0Math
+          ref: SUB0MATH_REF_TODO  # SUB0MATH_REF_TODO: pin to the merged Sub0Math commit sha
+          path: .sub0math
+          sparse-checkout: tools/provenance
       - name: Check ported commit and blobs
-        run: python3 tools/upstream_provenance.py check --upstream-dir .upstream/bikelab
+        run: python3 .sub0math/tools/provenance/upstream_provenance.py check --upstream-dir .upstream/bikelab
 
   performance:
     name: performance (informational)

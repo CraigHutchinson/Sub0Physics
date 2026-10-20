@@ -1,7 +1,9 @@
 name: Upstream drift
 
-# Reports what changed in BikeLab since the commit recorded in upstream/bikelab.json, as one
-# open issue that is updated in place. Re-port, then run `tools/upstream_provenance.py record`.
+# Reports what changed in BikeLab since the commit recorded in upstream/bikelab.json, as one open
+# issue that is updated in place. The logic is shared: Sub0Math tools/provenance and its reusable
+# workflow. Files this repository does not own (`driftOwner` in the manifest) are left to the owner.
+# Re-port, then run `upstream_provenance.py record` (docs/UPSTREAM.md).
 
 on:
   schedule:
@@ -20,38 +22,11 @@ concurrency:
 
 jobs:
   drift:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Read upstream repository
-        id: upstream
-        run: echo "repository=$(jq -r '.repository | sub("https://github.com/"; "")' upstream/bikelab.json)" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ steps.upstream.outputs.repository }}
-          path: .upstream/bikelab
-          fetch-depth: 0
-      - name: Check ported commit and blobs
-        run: python3 tools/upstream_provenance.py check --upstream-dir .upstream/bikelab
-      - name: Compare with upstream main
-        id: drift
-        run: |
-          python3 tools/upstream_provenance.py drift --upstream-dir .upstream/bikelab --ref origin/main --report upstream-drift.md
-          cat upstream-drift.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Open, update or close the drift issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DRIFT: ${{ steps.drift.outputs.drift }}
-        run: |
-          title="Upstream drift: BikeLab"
-          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
-            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
-          if [ "$DRIFT" = "true" ]; then
-            if [ -n "$number" ]; then
-              gh issue edit "$number" --body-file upstream-drift.md
-            else
-              gh issue create --title "$title" --body-file upstream-drift.md
-            fi
-          elif [ -n "$number" ]; then
-            gh issue close "$number" --comment "No drift: the recorded commit matches upstream main for every ported and watched file."
-          fi
+    # SUB0MATH_REF_TODO: pin both refs to the merged Sub0Math commit sha (keep them equal).
+    uses: CraigHutchinson/Sub0Math/.github/workflows/upstream-drift-reusable.yml@SUB0MATH_REF_TODO
+    with:
+      sub0math-ref: SUB0MATH_REF_TODO
+      manifest: upstream/bikelab.json
+    permissions:
+      contents: read
+      issues: write
