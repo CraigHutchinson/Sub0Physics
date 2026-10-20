@@ -123,7 +123,7 @@ TEST_CASE("Terrain page lookups never allocate")
     std::vector<sub0math::f64::Length> heights(count);
     for (std::size_t n = 0; n < count; ++n) heights[n] = sub0math::metres(1.0 + 0.001 * static_cast<double>(n % HeightPage::Nodes));
     const std::vector<std::uint8_t> known(count, 1);
-    const auto page = buildHeightPage(GridSpec{sub0math::metres(0.01), 2}, TileKey{0, 0, 0}, SourceRevision{1}, heights, known);
+    const auto page = buildHeightPage(*GridSpec::create(sub0math::metres(0.01), 2), TileKey{0, 0, 0}, SourceRevision{1}, heights, known);
     REQUIRE(page);
     const AllocationCount lookups;
     float sum = 0.0F;

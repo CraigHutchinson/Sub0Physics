@@ -18,7 +18,8 @@ std::expected<HeightPage, Fault> buildHeightPage(const GridSpec& grid, const Til
     {
         return std::unexpected(Fault{FaultKind::InvalidInput, "a height page needs 257 x 257 heights and flags"});
     }
-    if (key.level >= grid.levels)
+    // A GridSpec can only come from GridSpec::create, so the grid itself is valid; the key is not.
+    if (key.level >= grid.levels())
     {
         return std::unexpected(Fault{FaultKind::InvalidInput, "page level is outside the grid"});
     }

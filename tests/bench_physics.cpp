@@ -55,7 +55,7 @@ void benchPageHeight(sub0bench::BenchRunner& runner)
     using namespace sub0physics::terrain;
     constexpr int nodes = HeightPage::Nodes;
     constexpr std::size_t count = static_cast<std::size_t>(nodes) * nodes;
-    const GridSpec grid{sub0math::f64::Length::fromSi(0.01), 4};
+    const GridSpec grid = *GridSpec::create(sub0math::f64::Length::fromSi(0.01), 4);
     std::vector<sub0math::f64::Length> heights(count);
     std::vector<std::uint8_t> known(count, 1);
     std::vector<std::uint16_t> raw(count);

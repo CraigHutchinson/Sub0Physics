@@ -2,6 +2,7 @@
 #include <concepts>
 #include <cstdint>
 #include <doctest.h>
+#include <type_traits>
 #include <vector>
 
 #include "sub0physics/terrain.hpp"
@@ -38,7 +39,7 @@ Samples sample(const GridSpec& grid, const TileKey& key, F&& height)
     return s;
 }
 
-const GridSpec Grid{f64::Length::fromSi(0.01), 4};
+const GridSpec Grid = *GridSpec::create(f64::Length::fromSi(0.01), 4);
 
 } // namespace
 
@@ -53,9 +54,61 @@ TEST_CASE("Grid spec: spacing per level, page lookup and corners")
     CHECK(Grid.spacing(3).si() == doctest::Approx(0.08));
     CHECK(Grid.pageSide(0).si() == doctest::Approx(2.56));
     const TerrainPoint p{{f64::Length::fromSi(-0.1), f64::Length::fromSi(5.2), f64::Length{}}};
-    CHECK(Grid.pageOf(p, 0) == TileKey{-1, 2, 0});
-    CHECK(Grid.pageOf(p, 2) == TileKey{-1, 0, 2});
+    REQUIRE(Grid.pageOf(p, 0));
+    CHECK(Grid.pageOf(p, 0).key == TileKey{-1, 2, 0});
+    REQUIRE(Grid.pageOf(p, 2));
+    CHECK(Grid.pageOf(p, 2).key == TileKey{-1, 0, 2});
     CHECK(Grid.pageCorner({-1, 2, 0}).x.si() == doctest::Approx(-2.56));
+}
+
+TEST_CASE("Grid spec: create validates levels and spacing")
+{
+    const auto make = [](double spacing, int levels) {
+        return GridSpec::create(f64::Length::fromSi(spacing), static_cast<std::uint8_t>(levels));
+    };
+    CHECK(make(0.01, 1).has_value());
+    CHECK(make(0.01, 16).has_value());
+    CHECK(make(GridSpec::MinSpacing, 4).has_value());
+    CHECK(make(GridSpec::MaxSpacing, 16).has_value());
+    CHECK_FALSE(make(0.01, 0).has_value());
+    CHECK_FALSE(make(0.01, 17).has_value());
+    CHECK_FALSE(make(0.01, 255).has_value());
+    CHECK_FALSE(make(0.0, 4).has_value());
+    CHECK_FALSE(make(-0.01, 4).has_value());
+    CHECK_FALSE(make(std::nan(""), 4).has_value());
+    CHECK_FALSE(make(HUGE_VAL, 4).has_value());
+    CHECK_FALSE(make(GridSpec::MinSpacing / 2, 4).has_value());
+    CHECK_FALSE(make(GridSpec::MaxSpacing * 2, 4).has_value());
+    const auto bad = make(0.01, 0);
+    CHECK(bad.error().kind == FaultKind::InvalidInput);
+    // The only way to a grid is create: no aggregate or default construction.
+    static_assert(!std::is_default_constructible_v<GridSpec>);
+    static_assert(!std::is_constructible_v<GridSpec, f64::Length, std::uint8_t>);
+    CHECK(make(0.01, 16)->levels() == 16);
+    CHECK(Grid.finestSpacing().si() == 0.01);
+}
+
+TEST_CASE("Grid spec: page lookup refuses what it cannot index")
+{
+    const auto at = [](double x, double y) {
+        return TerrainPoint{{f64::Length::fromSi(x), f64::Length::fromSi(y), f64::Length{}}};
+    };
+    const double nan = std::nan("");
+    CHECK(Grid.pageOf(at(1.0, 1.0), 0));
+    CHECK(Grid.pageOf(at(1.0, 1.0), 3));
+    CHECK_FALSE(Grid.pageOf(at(1.0, 1.0), 4));   // level outside the grid
+    CHECK_FALSE(Grid.pageOf(at(1.0, 1.0), 255));
+    CHECK_FALSE(Grid.pageOf(at(nan, 1.0), 0));
+    CHECK_FALSE(Grid.pageOf(at(1.0, nan), 0));
+    CHECK_FALSE(Grid.pageOf(at(HUGE_VAL, 1.0), 0));
+    CHECK_FALSE(Grid.pageOf(at(1.0, -HUGE_VAL), 0));
+    CHECK_FALSE(Grid.pageOf(at(1e300, 1.0), 0));  // index beyond 32 bits
+    CHECK_FALSE(Grid.pageOf(at(-1e300, 1.0), 0));
+    const double side = Grid.pageSide(0).si();
+    CHECK_FALSE(Grid.pageOf(at(side * 2147483648.5, 0.0), 0)); // one past INT32_MAX
+    CHECK(Grid.pageOf(at(side * 2147483647.5, 0.0), 0).key.i == 2147483647);
+    CHECK(Grid.pageOf(at(side * -2147483647.5, 0.0), 0).key.i == -2147483647 - 1);
+    CHECK_FALSE(Grid.pageOf(at(side * -2147483648.5, 0.0), 0));
 }
 
 TEST_CASE("Page frames keep positions exact far from the terrain origin")
