@@ -125,6 +125,44 @@ TEST_CASE("A clearance query never allocates, whatever the witness buffer holds"
     CHECK(count.since() == 0U);
 }
 
+TEST_CASE("Prepared profile queries never allocate once the ray origin has been sized")
+{
+    using sub0math::metres;
+    const auto step = PolylineProfile::create(test_profiles::metresPoints({{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.1}, {0.2, 0.1}, {0.2, 0.0}, {1.0, 0.0}}));
+    REQUIRE(step);
+    const PreparedProfile prepared(*step);
+    RayOrigin origin;
+    prepared.bindRayOrigin(test_profiles::at(0.1, 0.4), origin); // sizes the arrays
+    std::array<Witness2, DefaultWitnessCapacity> buffer{};
+    std::array<sub0math::Point2<sub0math::f64::Length>, 4> contour{{test_profiles::at(-0.3, 0.05), test_profiles::at(0.3, 0.05),
+                                                                    test_profiles::at(0.3, -0.05), test_profiles::at(-0.3, -0.05)}};
+    const AllocationCount count;
+    prepared.bindRayOrigin(test_profiles::at(0.1, 0.4), origin);
+    CHECK(prepared.castRay(origin, sub0math::Vec2d{0.0, -1.0}, 1e-10).status == RayStatus::Hit);
+    CHECK(prepared.castRay(test_profiles::at(0.1, 0.4), sub0math::Vec2d{0.3, -0.9}, 1e-10).status == RayStatus::Hit);
+    CHECK(prepared.sweepCircle(test_profiles::at(-0.5, 0.15), {metres(1.0), metres(0.0)}, metres(0.1)).status == CircleSweepStatus::Contact);
+    CHECK(prepared.onSurface(test_profiles::at(0.1, 0.1), 1e-10));
+    CHECK(prepared.contourIntrusion(contour).status == ContourStatus::Intrudes);
+    CHECK(measureCircleClearance(prepared, {{test_profiles::at(-0.1, 0.25), metres(0.1)}, metres(1e-10)}, buffer).witnessCount == 1U);
+    CHECK(count.since() == 0U);
+}
+
+TEST_CASE("The bounded periodic solver allocates nothing once the solution has capacity")
+{
+    std::vector<double> lower(512, 0.0);
+    for (std::size_t i = 200; i < 260; ++i)
+    {
+        lower[i] = 0.015;
+    }
+    BoundedPeriodicSolution solution;
+    solution.reserve(512);
+    const AllocationCount count;
+    CHECK(solveBoundedPeriodicTridiagonal(lower, 300000.0 * 0.0044, 30.0 / 0.0044, solution));
+    CHECK(solveBoundedPeriodicTridiagonal(lower, 300000.0 * 0.0044, 200.0 / 0.0044, solution));
+    CHECK(solution.converged);
+    CHECK(count.since() == 0U);
+}
+
 TEST_CASE("Corridor rasterising and grid lookups never allocate")
 {
     using namespace sub0physics::terrain;

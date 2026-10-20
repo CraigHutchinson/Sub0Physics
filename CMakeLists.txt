@@ -21,6 +21,7 @@ include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")
 # ── Core library ─────────────────────────────────────────────────────────────
 
 add_library(Sub0Physics STATIC
+    src/bounded_periodic_tridiagonal.cpp
     src/circle_clearance.cpp
     src/corridor_builder.cpp
     src/damped_oscillator.cpp
@@ -30,6 +31,7 @@ add_library(Sub0Physics STATIC
     src/multibody_dynamics.cpp
     src/multibody_kinematics.cpp
     src/polyline_profile.cpp
+    src/prepared_profile.cpp
 )
 
 add_library(Sub0Physics::Sub0Physics ALIAS Sub0Physics)

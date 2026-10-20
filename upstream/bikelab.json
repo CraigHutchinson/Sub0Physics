@@ -67,6 +67,28 @@
       "targets": [
         "include/sub0physics/element/travel_buffer.hpp"
       ]
+    },
+    {
+      "source": "dist/footprint.js",
+      "blob": "66c0a82f8aed95b92b0e60fff8867ea1cf105522",
+      "driftOwner": false,
+      "what": "Generic geometry of the static ring footprint: ray cast with tie and ambiguity rules, contour-intrusion check, on-surface test, and the bound-constrained periodic ring solve (the tyre model itself is not here)",
+      "targets": [
+        "include/sub0physics/geometry/prepared_profile.hpp",
+        "src/prepared_profile.cpp",
+        "include/sub0physics/solver/bounded_periodic_tridiagonal.hpp",
+        "src/bounded_periodic_tridiagonal.cpp"
+      ]
+    },
+    {
+      "source": "dist/wheel-limits.js",
+      "blob": "59db8f3682f369f6c04ff4a8aec092eccbc3ffd1",
+      "driftOwner": false,
+      "what": "Continuous swept-circle first touch over vertex caps and segment faces (the rim sweep geometry)",
+      "targets": [
+        "include/sub0physics/geometry/prepared_profile.hpp",
+        "src/prepared_profile.cpp"
+      ]
     }
   ]
 }

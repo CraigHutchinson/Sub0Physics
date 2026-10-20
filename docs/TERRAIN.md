@@ -121,6 +121,54 @@ are kept, `overflowed` is set and `witnessCount` is the number written. A zero-l
 distance only. `DefaultWitnessCapacity` (8) is enough for corners and valleys. The query allocates nothing
 (`Sub0Physics_AllocationTests`).
 
+## Prepared profiles: `PreparedProfile`
+
+`sub0physics/geometry/prepared_profile.hpp`. A `PreparedProfile` is built once from a validated
+`PolylineProfile` (`PreparedProfile(profile)` allocates; nothing else does) and keeps structure-of-arrays vertices
+and, per segment, the extents, squared length, the scaled-norm length and the outward unit normal (solid below).
+It copies the profile, so it does not refer to it afterwards. Every query is `noexcept`, allocates nothing and
+returns a status aggregate (`Hit`/`Miss`/`InvalidQuery`, `Contact`/`Clear`/`InvalidQuery`, `Clear`/`Intrudes`/
+`InvalidQuery`) with a `Witness2` where a feature answers. The vertex x never decreases, so queries search only the
+horizontal window that can matter, by binary search, instead of scanning the profile per sample.
+
+| Query | Answers | Notes |
+|---|---|---|
+| `castRay(origin, direction, tie)` | The nearest front-facing segment along a ray: `distance`, `ambiguous`, and an `Edge` witness whose normal is the segment's | Segments with `normal . direction >= -GrazingIncidence` (1e-12) are skipped; the segment parameter may overshoot by `tie`; a later hit within `tie` with a normal that differs by more than `DistinctNormal` (1e-6) marks the hit ambiguous (a corner or a tangent ray). Scans every segment, in profile order, so ties resolve to the first |
+| `bindRayOrigin(origin, bound)` then `castRay(bound, direction, tie)` | The same, for many rays from one origin | The origin-relative segment starts and their cross products with the extents are computed once into a reusable `RayOrigin`; this is what a fan of rays (one per ring node) should use |
+| `sweepCircle(start, delta, radius, tol)` | The first touch of a circle moved along a straight path: `fraction` (0 to 1, not time) and a witness (`Vertex`, or `Edge` for a segment face; `normal` points to the circle centre) | A quadratic per vertex cap and a linear equation per segment face over the x-window the circle can reach; independent of sampling. Check the starting clearance first: an already overlapping circle gets whichever roots exist |
+| `contourIntrusion(outline, tol)` | The deepest cut of a closed contour into the solid: `depth` and the surface feature straight above the deepest sample | Each chord is split at the x of the vertices it spans (produced in order, no sort and no scratch array) and each part is sampled at both ends and the middle, one-sided (`SampleEdge`, 1e-8) so vertical faces are caught; a sample on the surface is not an intrusion |
+| `onSurface(point, tol)` | Whether a point lies on the profile | The projection may overshoot a segment by `tol` of its length and the point may be `tol` metres from its line; the window is widened by the longest segment, so it is exact |
+| `surfaceHeight(x)` | The top of the solid at x | The same arithmetic as `PolylineProfile::surfaceHeight`, bit for bit |
+| `measureCircleClearance(prepared, query, witnesses)` | As the unprepared overload | Window from the segment under the centre and four independent minima; bit-identical to the unprepared overload, distance included |
+
+**Exactness.** The queries keep the operand order of the straightforward formulation they replace: the origin is
+subtracted first, cross products are `x * dy - z * dx`, and parameters are divisions, so a ported golden stays
+byte-identical. Three places needed a specific form, recorded here because a "faster" rewrite would change bits:
+
+- *Unit normals and segment lengths use a scaled, compensated norm* (the arithmetic of V8's `Math.hypot`: scale
+  by the larger magnitude, sum the squares with Kahan compensation, `sqrt(sum) * max`), not `std::hypot`. It does
+  not depend on the C library, and the ported goldens round with it. The ambiguity test uses the same norm.
+- *Projection parameters divide by the squared length.* A reciprocal multiply is about 10% faster in the
+  clearance minima but changes the last bit of distances and of `t`, and `t == 1.0` classifies a witness as a
+  vertex, so the prepared and unprepared clearance would disagree. Not taken.
+- *The sweep's projection test divides by `norm * norm`* (the square of the scaled norm), not by `dx * dx + dy * dy`;
+  the two can differ in the last place.
+
+Because the library is built without floating-point contraction (PUBLIC), the results are the same with FMA
+hardware (`-march=x86-64-v3`), which CI checks.
+
+## Bounded periodic chains: `solveBoundedPeriodicTridiagonal`
+
+`sub0physics/solver/bounded_periodic_tridiagonal.hpp`. Minimises `E(u) = sum [a/2 u[i]^2 + c/2 (u[i+1] - u[i])^2]`
+over a ring of nodes subject to `u >= lower`: a strictly convex quadratic with a periodic tridiagonal Hessian
+(diagonal `a + 2c`, neighbours `-c`), as in a radial tyre ring on an elastic foundation pressed by terrain. The
+method is cyclic exact coordinate minimisation in node order (each node sees its already updated predecessor), the
+wrap nodes peeled out of the loop, started at the bounds; converged when the diagonally scaled projected residual
+is below the tolerance. `BoundedPeriodicSolution` holds `u`, the gradient (positive where a bound is active: the
+reaction), the energy, the residual and the sweep count; reuse one and the solve allocates nothing once it has
+capacity. Tests: the unconstrained minimiser, a single active bound against its closed-form decaying solution on a
+ring, the KKT conditions and optimality against feasible perturbations on random problems, and the allocation gate.
+
 ## Test surfaces: `terrain/testing/`
 
 `sub0physics/terrain/testing.hpp` (not in the `sub0physics.hpp` umbrella) is the analytic-surface catalogue:

@@ -13,7 +13,7 @@ These are deterministic, so they block in CI:
 
 | Gate | Test | Contract |
 |---|---|---|
-| No allocation while stepping | `Sub0Physics_AllocationTests` | RK4/midpoint steps, recording, ledgers, statistics, selection and the closed form allocate nothing; a clearance query allocates only its witness list |
+| No allocation while stepping | `Sub0Physics_AllocationTests` | RK4/midpoint steps, recording, ledgers, statistics, selection and the closed form allocate nothing; clearance queries (both overloads), every `PreparedProfile` query and the bounded periodic chain solve (once the solution has capacity) allocate nothing |
 | No allocation in multibody dynamics | `Sub0Physics_MultibodyAllocationTests` | Semi-implicit Euler and `Rk4Stepper` steps (with changing forcing), inverse dynamics, site kinematics and Jacobians, and energy on a 10-DOF tree allocate nothing once the `Workspace` exists |
 | Evaluation count | `test_integrators.cpp` | Tick stepping costs exactly one evaluation per stage: 4 per RK4 step after the first |
 | Convergence order | `test_integrators.cpp` | RK4 observes order 4, midpoint order 2; a slower method that is "faster" is not a win |
@@ -37,6 +37,8 @@ factors out, and each is the twin of one library call:
 |---|---|
 | `page height x1024, hand-written raw arrays` | `HeightPage::heightAt` |
 | `clearance x256, hand-written twin` | `measureCircleClearance` (256 queries, 2048-point profile, witnesses into a fixed buffer) |
+| `clearance x256, measureCircleClearance (prepared)` | The same twin, judged for the `PreparedProfile` overload |
+| `chain solve 512 nodes, hand-written sweeps` | `solveBoundedPeriodicTridiagonal` (512 nodes, a pressed patch; u and gradient checked bit for bit) |
 | `grid cellOf x1024, hand-written floor and range` | `GridSpec::cellOf` (ownership through `sub0math::RegularGrid`) |
 | `page size x1024, 256 cells compile-time` | `page size x1024, 256 cells at run time` (the same hand-written kernel; a decision control for a runtime-sized `HeightPage`, see docs/TERRAIN.md) |
 | `travel buffer x1024, hand-written scalars` | `TravelBuffer::respond` |
@@ -118,6 +120,7 @@ Rules that keep hot code fast and analysable:
 | 2026-10-20 | `TravelBuffer::respond` at 1.5x to 1.8x: `std::fmax` compiles to a library call on MinGW GCC 16 (two `call fmax` per sample in the disassembly), while the reference's `std::max` is one `maxsd` | Disassembly of both loops; pair `travel buffer x1024` | `std::max` (same result for NaN and signed zero here): 1.02x to 1.04x (2.83 vs 2.73 µs min, 3.04 vs 2.98 µs median, 7 interleaved rounds). A precomputed reciprocal width measured no gain; not kept |
 | 2026-10-20 | The M1b law response (5 common fields plus extras) pushed a station's `evaluate` past GCC's early-inlining budget ("growth 15 exceeds early-inlining-insns"): `Rk4 step, contact oscillator` 43 to 52 ns | `-fopt-info-inline-missed`, 15 interleaved rounds | `ExplicitRungeKutta::stepBetween` is flattened (GCC/Clang): 43.4 vs 43.0 ns min, 47.0 vs 46.2 median against the pre-change build; Midpoint 23.6 vs 22.5 min, 24.4 vs 24.1 median. Supersedes the 2026-10-15 "force-inlining evaluate: no gain" note, measured when GCC kept it out of line on both sides |
 | 2026-10-20 | Revolute joints about z paid the general Rodrigues products | Pairs `planar tree 10-DOF ...` | Short branch for an axis of (0, 0, ±1): about 4% on mass matrix and forward dynamics; one pose pipeline (D6) does not touch the dynamics path |
+| 2026-10-20 | Wave 5 (D12): `PreparedProfile` and the chain solver moved here. The recorded clearance gap (1.9x to 2.0x) did not reproduce | GCC 16, MinGW, five interleaved rounds each: unprepared `measureCircleClearance` 0.89x to 0.94x of the twin before and 0.94x to 0.96x after (unchanged code; the earlier gap predates Sub0Math's force-inlined `closestPoint`); prepared overload 0.85x to 0.90x (79 to 82 vs 90 to 93 us per 256 queries); chain solve 0.89x to 0.95x | Prepared clearance kept: window from the centre segment, four minima. A reciprocal squared length was another 10% faster (74 vs 82 us) but changes the last bit of distance and of the projection parameter, so it was not taken (docs/TERRAIN.md Exactness). The clearance gap row is removed; no gap remains |
 
 ## Open gaps
 
@@ -126,5 +129,4 @@ Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANC
 | Since | Pair | Gap | Cause | Follow-up |
 |---|---|---|---|---|
 | 2026-10-16 | `page height x1024`, `HeightPage::heightAt` | about 1.07x in one process, 1.10x interleaved (pair ratio) | Per-call conversion and bounds work around an otherwise identical kernel | Terrain step G3: the batch extraction API (many samples per call, SoA out) is the real consumer; close it there or accept it with its numbers |
-| 2026-10-20 | `clearance x256`, `measureCircleClearance` | 1.9x to 2.0x (about 132 to 137 vs 67 to 71 �s per 256 queries, three runs, 2048-point sinusoid) | The reference works on prepared structure-of-arrays data (per-segment extents and reciprocal squared lengths, so no division per segment), takes a window from the segment under the centre and runs four independent minima; the API divides per segment inside `sub0math::closestPoint`, reads array-of-structures points and walks with a data-dependent early-out. The witness buffer is already caller-owned (the allocation is gone), so this is the compute gap | Wave 5 (D12): `PreparedProfile` with reciprocal lengths and normals, then re-measure; the twin is the target |
 | 2026-10-19 | `planar tree 10-DOF`: `computeMassMatrix`, `forwardDynamics` | 2.9x and 2.65x by median at the M1b foundations (271 vs 94 ns; 591 vs 223 ns; 3.2x and 2.9x by minimum), against 2.8x and 2.9x for the build before it, so not worsened; the tree-sparse LTDL factor and solve is at parity (1.02x median) | The reference uses three-component planar algebra and a compile-time tree; the core runs the general 3D formulation, by design (docs/MULTIBODY.md section 3) | M1d, with the bike rig as the consumer: a planar joint type or a compact transform for axis-aligned revolute joints (rotation about one coordinate axis), judged on the rig's whole step. About 0.6 us per evaluation is already far inside a 0.5 ms step |

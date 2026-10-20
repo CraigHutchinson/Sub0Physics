@@ -303,6 +303,7 @@ struct ClearanceTwin
 void benchClearance(sub0bench::BenchRunner& runner, const PolylineProfile& profile)
 {
     const ClearanceTwin twin(profile.points());
+    const PreparedProfile prepared(profile);
     std::vector<double> cx(256), cy(256);
     for (std::size_t k = 0; k < cx.size(); ++k)
     {
@@ -335,6 +336,16 @@ void benchClearance(sub0bench::BenchRunner& runner, const PolylineProfile& profi
         }
         ankerl::nanobench::doNotOptimizeAway(sum);
     });
+    runner.run("clearance x256, measureCircleClearance (prepared)", [&] {
+        double sum = 0.0;
+        std::array<Witness2, DefaultWitnessCapacity> w;
+        for (std::size_t k = 0; k < cx.size(); ++k)
+        {
+            const CircleClearance c = measureCircleClearance(prepared, {{{sub0math::metres(cx[k]), sub0math::metres(cy[k])}, radius}, tie}, w);
+            sum += c.gap.si() + w[0].normal.x + static_cast<double>(c.witnessCount);
+        }
+        ankerl::nanobench::doNotOptimizeAway(sum);
+    });
     runner.run("clearance x256, measureCircleClearance", [&] {
         double sum = 0.0;
         std::array<Witness2, DefaultWitnessCapacity> w;
@@ -344,6 +355,82 @@ void benchClearance(sub0bench::BenchRunner& runner, const PolylineProfile& profi
             sum += c.gap.si() + w[0].normal.x + static_cast<double>(c.witnessCount);
         }
         ankerl::nanobench::doNotOptimizeAway(sum);
+    });
+}
+
+// Hand-written bounded periodic chain solve: raw arrays, wrap nodes peeled, the residual of node i - 1 computed as
+// soon as node i is final. Same arithmetic as the solver, so it is the fastest bit-identical form.
+int referenceChainSweeps(const double* lower, std::size_t n, double a, double c, double* u, double* gradient)
+{
+    const double diagonal = a + 2.0 * c;
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        u[i] = lower[i];
+    }
+    const std::size_t last = n - 1U;
+    for (int sweep = 1; sweep <= 30000; ++sweep)
+    {
+        const double first = c * (u[last] + u[1]) / diagonal;
+        u[0] = first > lower[0] ? first : lower[0];
+        for (std::size_t i = 1; i < last; ++i)
+        {
+            const double relaxed = c * (u[i - 1U] + u[i + 1U]) / diagonal;
+            u[i] = relaxed > lower[i] ? relaxed : lower[i];
+        }
+        const double end = c * (u[last - 1U] + u[0]) / diagonal;
+        u[last] = end > lower[last] ? end : lower[last];
+        double residual = 0.0;
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            const double previous = u[i == 0U ? last : i - 1U];
+            const double next = u[i == last ? 0U : i + 1U];
+            gradient[i] = diagonal * u[i] - c * (previous + next);
+            const double projected = u[i] - gradient[i] / diagonal;
+            const double scaled = (u[i] - (projected > lower[i] ? projected : lower[i])) * diagonal;
+            residual = std::max(residual, scaled < 0.0 ? -scaled : scaled);
+        }
+        if (residual < 1e-7)
+        {
+            return sweep;
+        }
+    }
+    return 30000;
+}
+
+// Bounded periodic chain solve, 512 nodes with a pressed patch, against the hand-written twin above.
+void benchChain(sub0bench::BenchRunner& runner)
+{
+    constexpr double ds = 2.0 * 3.14159265358979323846 * 0.36 / 512.0;
+    const double a = 300000.0 * ds;
+    const double c = 30.0 / ds;
+    std::vector<double> lower(512, 0.0);
+    for (std::size_t i = 200; i < 260; ++i)
+    {
+        lower[i] = 0.015;
+    }
+    std::vector<double> u(512), gradient(512);
+    BoundedPeriodicSolution solution;
+    solution.reserve(512);
+    const int sweeps = referenceChainSweeps(lower.data(), lower.size(), a, c, u.data(), gradient.data());
+    if (!solveBoundedPeriodicTridiagonal(lower, a, c, solution) || solution.iterations != sweeps)
+    {
+        std::fprintf(stderr, "chain twin disagrees with the solver\n");
+        std::abort();
+    }
+    for (std::size_t i = 0; i < lower.size(); ++i)
+    {
+        if (u[i] != solution.u[i] || gradient[i] != solution.gradient[i])
+        {
+            std::fprintf(stderr, "chain twin disagrees with the solver at node %zu\n", i);
+            std::abort();
+        }
+    }
+    runner.bench().minEpochIterations(500);
+    runner.run("chain solve 512 nodes, hand-written sweeps", [&] {
+        ankerl::nanobench::doNotOptimizeAway(referenceChainSweeps(lower.data(), lower.size(), a, c, u.data(), gradient.data()));
+    });
+    runner.run("chain solve 512 nodes, solveBoundedPeriodicTridiagonal", [&] {
+        ankerl::nanobench::doNotOptimizeAway(solveBoundedPeriodicTridiagonal(lower, a, c, solution));
     });
 }
 
@@ -480,6 +567,7 @@ int main(int argc, char** argv)
     benchPageHeight(runner);
     benchPageSize(runner);
     benchGrid(runner);
+    benchChain(runner);
     benchTravelBuffer(runner);
     benchMultibody(runner);
     return runner.finish();

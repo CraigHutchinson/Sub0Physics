@@ -27,7 +27,7 @@ The script and the weekly workflow live in Sub0Math (`tools/provenance/`,
 entry. An upstream file ported into several repositories is owned by exactly one (`driftOwner`), so a
 change to it opens one issue, there; a non-owned entry carries `"driftOwner": false` and `"ownedBy"`.
 Here `driftOwner` is false at manifest level (unported watched files are reported by the other
-repository) and true on the five files ported here, so their drift issue is raised in this repository.
+repository) and true on the five files ported here, so their drift issue is raised in this repository. Two further entries (`footprint.js`, `wheel-limits.js`) record the generic geometry and ring solver taken from those files; they are `driftOwner: false`, because the station they belong to is ported elsewhere, and that repository raises their drift.
 
 ## Automation
 

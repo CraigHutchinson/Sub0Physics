@@ -8,6 +8,7 @@
 #include <span>
 
 #include "sub0physics/geometry/polyline_profile.hpp"
+#include "sub0physics/geometry/prepared_profile.hpp"
 #include "sub0physics/geometry/witness.hpp"
 
 namespace sub0physics
@@ -60,6 +61,22 @@ struct CircleQuery
  * @return The measured clearance, or the reason none is defined.
  */
 [[nodiscard]] CircleClearance measureCircleClearance(const PolylineProfile& profile, const CircleQuery& query,
+                                                    std::span<Witness2> witnesses) noexcept;
+
+/**
+ * Measures a circle's clearance from a prepared profile; the same query and result as the overload on a
+ * `PolylineProfile`, faster on long profiles.
+ *
+ * The nearest distance is found over the horizontal window the segment under the centre bounds, with four
+ * independent minima; the arithmetic of every distance is the unprepared one, so the result, including the
+ * distance, gap and witnesses, is bit-identical to the other overload's.
+ *
+ * @param profile The prepared ground profile.
+ * @param query The circle and tie tolerance.
+ * @param witnesses The caller's buffer for the witnesses, as the other overload.
+ * @return The measured clearance, or the reason none is defined.
+ */
+[[nodiscard]] CircleClearance measureCircleClearance(const PreparedProfile& profile, const CircleQuery& query,
                                                     std::span<Witness2> witnesses) noexcept;
 
 } // namespace sub0physics

@@ -4,6 +4,7 @@ set(VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor")
 
 add_executable(Sub0Physics_Tests
     test_main.cpp
+    test_bounded_periodic_tridiagonal.cpp
     test_channel_table.cpp
     test_circle_clearance.cpp
     test_corridor_builder.cpp
@@ -16,6 +17,7 @@ add_executable(Sub0Physics_Tests
     test_integrators.cpp
     test_multibody.cpp
     test_polyline_profile.cpp
+    test_prepared_profile.cpp
     test_terrain_grid.cpp
     test_terrain_page.cpp
     test_terrain_surfaces.cpp

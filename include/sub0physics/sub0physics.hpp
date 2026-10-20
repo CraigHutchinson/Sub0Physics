@@ -10,5 +10,6 @@
 #include "sub0physics/multibody.hpp"
 #include "sub0physics/profiling.hpp"
 #include "sub0physics/references.hpp"
+#include "sub0physics/solvers.hpp"
 #include "sub0physics/terrain.hpp"
 #include "sub0physics/verification.hpp"
