@@ -1,4 +1,5 @@
 // Counts every heap allocation in this executable, to pin "a multibody step never allocates".
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cmath>
@@ -149,4 +150,48 @@ TEST_CASE("Constrained stepping (closures, limits, split steps), projection and 
     REQUIRE(computeReactions(model, s, tau, ws));
     CHECK(allocations.load() - before == 0U);
     CHECK(splits > 0U);
+}
+
+TEST_CASE("M1d: site forces, forcing Jacobians, the midpoint step, the prepared step and reactions never allocate")
+{
+    for (const Formulation formulation : {Formulation::Automatic, Formulation::General})
+    {
+        ModelBuilder builder = testmodels::planarTreeWithElementsBuilder();
+        builder.setFormulation(formulation);
+        const Model model = *builder.build();
+        const std::size_t n = model.dofCount();
+        Workspace ws(model);
+        Workspace aux(model);
+        State s = State::atRest(model);
+        s.q()[2] = 0.3;
+        const SiteId tip = *model.findSite("tip");
+        const std::array<SiteForce, 1> forces{SiteForce{tip, {0.0, 30.0, 0.0}, {}}};
+        std::vector<double> stiffness(n * n, 0.0);
+        std::vector<double> damping(n * n, 0.0);
+        stiffness[0] = -100.0;
+        damping[0] = -1.0;
+        const Forcing forcing{{}, forces, stiffness, damping};
+        const std::array<SiteId, 1> sites{tip};
+        std::array<SiteKinematics, 1> kinematics{};
+        std::array<SiteMotion, 1> motion{};
+        sub0physics::EnergyAccount account{};
+        const auto h = sub0math::f64::Time::fromSi(1e-3);
+
+        const std::size_t start = allocations.load();
+        for (int k = 0; k < 200; ++k)
+        {
+            REQUIRE(stepLinearlyImplicitEuler(model, forcing, s.tick, h, s, ws, ImplicitTerms::DampingOnly));
+            REQUIRE(stepLinearlyImplicitMidpoint(model, forcing, s.tick, h, s, ws));
+            REQUIRE(stepSemiImplicitEuler(model, forcing, s.tick, h, s, ws));
+            REQUIRE(prepareLinearlyImplicitStep(model, s, ws));
+            REQUIRE(computePreparedSiteKinematics(model, s, sites, kinematics, ws, &account));
+            REQUIRE(computePreparedSiteMotion(model, s, sites, motion, ws, &account));
+            REQUIRE(completeLinearlyImplicitStep(model, forcing, s.tick, h, s, ws, ImplicitScheme::Midpoint));
+            REQUIRE(computeSiteKinematics(model, s, sites, kinematics, ws, &account));
+            REQUIRE(computeReactionsWithForcing(model, s, forcing, aux));
+            REQUIRE(computeAppliedForce(model, s, forcing, aux));
+        }
+        CHECK(allocations.load() - start == 0U);
+        CHECK(std::isfinite(account.kinetic.si() + motion[0].position.x.si()));
+    }
 }
