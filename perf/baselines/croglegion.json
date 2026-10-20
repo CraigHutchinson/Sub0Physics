@@ -41,6 +41,16 @@
       "median_ns": 3530.916,
       "cv": 0.0276,
       "rounds": 5
+    },
+    "planar tree 10-DOF LTDL factor and solve, factorMassMatrix + solveMassMatrix": {
+      "median_ns": 73.492,
+      "cv": 0.0049,
+      "rounds": 9
+    },
+    "planar tree 10-DOF LTDL factor and solve, hand-written": {
+      "median_ns": 66.715,
+      "cv": 0.0087,
+      "rounds": 9
     }
   },
   "pairs": {
@@ -55,6 +65,10 @@
     "Midpoint step, contact oscillator": {
       "reference": "Midpoint step, contact oscillator, hand-written",
       "ratio": 1.2704
+    },
+    "planar tree 10-DOF LTDL factor and solve, factorMassMatrix + solveMassMatrix": {
+      "reference": "planar tree 10-DOF LTDL factor and solve, hand-written",
+      "ratio": 1.1044
     }
   },
   "accepted": [
@@ -86,6 +100,27 @@
             "from": null,
             "to": 1.2704
           }
+        }
+      }
+    },
+    {
+      "date": "2026-10-20",
+      "commit": "76fffb38d4cf8a71df89420907e7be507ef7a4c9",
+      "reason": "M1c + fidelity merge: library LTDL time unchanged (64 vs 64 ns, A/B against 93f5bf2); the pair moved because the hand-written twin varies 57-64 ns between builds (layout)",
+      "benchmarks": {
+        "planar tree 10-DOF LTDL factor and solve, factorMassMatrix + solveMassMatrix": {
+          "from_ns": null,
+          "to_ns": 73.492,
+          "change": null,
+          "pair_ratio": {
+            "from": null,
+            "to": 1.1044
+          }
+        },
+        "planar tree 10-DOF LTDL factor and solve, hand-written": {
+          "from_ns": null,
+          "to_ns": 66.715,
+          "change": null
         }
       }
     }
