@@ -28,11 +28,24 @@ struct TravelBufferResponse
 };
 
 /**
+ * The parameters of a TravelBuffer. Initialise with designated initialisers, so the two lengths (stroke
+ * and zone depth) and the two scales cannot be swapped:
+ * `{.travel = ..., .zoneWidth = ..., .stiffness = ..., .damping = ...}`.
+ */
+struct TravelBufferSpec
+{
+    sub0math::f64::Length travel;      ///< Total stroke [m]; finite.
+    sub0math::f64::Length zoneWidth;   ///< Depth of each buffer zone [m]; finite, positive, and `2 * zoneWidth < travel`.
+    sub0math::f64::Stiffness stiffness; ///< Spring scale `k` [N/m]; finite and non-negative.
+    sub0math::f64::Damping damping;    ///< Damping scale `c` [N s/m]; finite and non-negative.
+};
+
+/**
  * Progressive compliant end-stops inside a finite stroke.
  *
  * Compression `q` runs from 0 (fully extended) to `travel`. A top buffer of depth `width` engages for
  * `q < width` and a bottom buffer of the same depth for `q > travel - width`; the zones never
- * overlap and the free zone between them exerts nothing. With penetration depth `d` into a buffer the
+ * overlap or touch (`2 * width < travel`, the BikeLab rule) and the free zone between them exerts nothing. With penetration depth `d` into a buffer the
  * spring force is `k d^2 / width` (progressive, not constant tangent stiffness) and the damper adds
  * `c s d / width`, where `s` is the speed of entering the buffer. Damping acts only while entering;
  * leaving a buffer is undamped.
@@ -56,34 +69,27 @@ public:
     /**
      * Validates and builds a buffer.
      *
-     * @param travel Total stroke [m]; finite.
-     * @param width Depth of each buffer zone [m]; finite, positive, and `2 * width <= travel`.
-     * @param stiffness Spring scale `k` [N/m]; finite and non-negative.
-     * @param damping Damping scale `c` [N s/m]; finite and non-negative.
+     * @param spec The parameters; see TravelBufferSpec. Zones that touch (`2 * zoneWidth == travel`) or
+     *        overlap are refused, as is any non-finite value.
      * @return The buffer, or an `InvalidInput` fault.
      */
-    [[nodiscard]] static constexpr std::expected<TravelBuffer, Fault> create(sub0math::f64::Length travel,
-                                                                             sub0math::f64::Length width,
-                                                                             sub0math::f64::Stiffness stiffness,
-                                                                             sub0math::f64::Damping damping) noexcept
+    [[nodiscard]] static constexpr std::expected<TravelBuffer, Fault> create(const TravelBufferSpec& spec) noexcept
     {
-        const double t = travel.si();
-        const double w = width.si();
-        const double k = stiffness.si();
-        const double c = damping.si();
+        const double t = spec.travel.si();
+        const double w = spec.zoneWidth.si();
+        const double k = spec.stiffness.si();
+        const double c = spec.damping.si();
         if (!std::isfinite(t) || !std::isfinite(w) || !(w > 0.0))
         {
-            return std::unexpected(
-                Fault{FaultKind::InvalidInput, "travel buffer needs a finite travel and a positive width"});
+            return invalidInput("travel buffer needs a finite travel and a positive zone width");
         }
-        if (!(2.0 * w <= t))
+        if (!(2.0 * w < t))
         {
-            return std::unexpected(Fault{FaultKind::InvalidInput, "travel buffer zones overlap: need 2 * width <= travel"});
+            return invalidInput("travel buffer zones overlap or touch: need 2 * zoneWidth < travel");
         }
         if (!std::isfinite(k) || !(k >= 0.0) || !std::isfinite(c) || !(c >= 0.0))
         {
-            return std::unexpected(
-                Fault{FaultKind::InvalidInput, "travel buffer needs finite non-negative stiffness and damping"});
+            return invalidInput("travel buffer needs finite non-negative stiffness and damping");
         }
         return TravelBuffer{t, w, k, c};
     }

@@ -116,8 +116,10 @@ void benchPageHeight(sub0bench::BenchRunner& runner)
 void benchTravelBuffer(sub0bench::BenchRunner& runner)
 {
     constexpr double travel = 0.065, width = 0.008, stiffness = 1.0e6, damping = 3000.0;
-    const auto buffer = *TravelBuffer::create(sub0math::metres(travel), sub0math::metres(width),
-                                              sub0math::newtonsPerMetre(stiffness), sub0math::newtonSecondsPerMetre(damping));
+    const auto buffer = *TravelBuffer::create({.travel = sub0math::metres(travel),
+                                              .zoneWidth = sub0math::metres(width),
+                                              .stiffness = sub0math::newtonsPerMetre(stiffness),
+                                              .damping = sub0math::newtonSecondsPerMetre(damping)});
     std::vector<double> qs(1024), vs(1024);
     for (std::size_t k = 0; k < qs.size(); ++k)
     {

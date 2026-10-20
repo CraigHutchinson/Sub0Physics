@@ -18,7 +18,10 @@ constexpr double C = 3000.0;
 
 TravelBuffer makeBuffer()
 {
-    return *TravelBuffer::create(metres(Travel), metres(Width), newtonsPerMetre(K), newtonSecondsPerMetre(C));
+    return *TravelBuffer::create({.travel = metres(Travel),
+                                  .zoneWidth = metres(Width),
+                                  .stiffness = newtonsPerMetre(K),
+                                  .damping = newtonSecondsPerMetre(C)});
 }
 
 TravelBufferResponse at(const TravelBuffer& buffer, double q, double v)
@@ -224,10 +227,16 @@ TEST_CASE("Travel buffer matches BikeLab's formula on a grid")
 TEST_CASE("Travel buffer factory validates its parameters")
 {
     const auto build = [](double travel, double width, double k, double c) {
-        return TravelBuffer::create(metres(travel), metres(width), newtonsPerMetre(k), newtonSecondsPerMetre(c));
+        return TravelBuffer::create({.travel = metres(travel),
+                                     .zoneWidth = metres(width),
+                                     .stiffness = newtonsPerMetre(k),
+                                     .damping = newtonSecondsPerMetre(c)});
     };
     CHECK(build(0.065, 0.008, 1e6, 3000.0).has_value());
-    CHECK(build(0.016, 0.008, 0.0, 0.0).has_value()); // zones touch exactly
+    CHECK(build(0.0160001, 0.008, 0.0, 0.0).has_value()); // zones just apart
+    CHECK_FALSE(build(0.016, 0.008, 0.0, 0.0).has_value()); // zones touch exactly: BikeLab rejects 2 * width >= travel
+    CHECK_FALSE(build(0.0, 0.0, 1e6, 0.0).has_value());
+    CHECK_FALSE(build(-0.065, 0.008, 1e6, 0.0).has_value());
     CHECK_FALSE(build(0.065, 0.0, 1e6, 0.0).has_value());
     CHECK_FALSE(build(0.065, -0.008, 1e6, 0.0).has_value());
     CHECK_FALSE(build(0.0159, 0.008, 1e6, 0.0).has_value());
