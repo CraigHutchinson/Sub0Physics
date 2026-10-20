@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: CraigHutchinson/Sub0Math
-          ref: fae1f18bb316ba47cc7154be88636bb67a2cfaae  # fae1f18bb316ba47cc7154be88636bb67a2cfaae: pin to the merged Sub0Math commit sha
+          ref: fae1f18bb316ba47cc7154be88636bb67a2cfaae  # shared Sub0Math tooling; keep equal to upstream-drift.yml
           path: .sub0math
           sparse-checkout: tools/provenance
       - name: Check ported commit and blobs
