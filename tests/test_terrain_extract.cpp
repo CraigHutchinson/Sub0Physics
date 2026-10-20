@@ -642,3 +642,163 @@ TEST_CASE("ColumnBuffer refuses to grow past its capacity and never truncates si
     CHECK(copy[2] == 9);
     CHECK(copy.capacity() == 3U);
 }
+
+// ---- Levers --------------------------------------------------------------------------------------------------
+
+namespace
+{
+
+// Largest difference between the stride-1 node heights and the stride-s triangulation evaluated at them.
+double coarseError(const HeightExtract& fine, const HeightExtract& coarse)
+{
+    const auto [cx, cy] = coarse.cells();
+    const std::int32_t s = static_cast<std::int32_t>(coarse.stride());
+    const auto fineStride = static_cast<std::size_t>(fine.cells()[0] + 1);
+    const std::array<std::int32_t, 2> offset{coarse.firstCell()[0] - fine.firstCell()[0], coarse.firstCell()[1] - fine.firstCell()[1]};
+    double worst = 0.0;
+    for (std::int32_t b = 0; b < cy; ++b)
+    {
+        for (std::int32_t a = 0; a < cx; ++a)
+        {
+            if (coarse.cellState()[static_cast<std::size_t>(b * cx + a)] != CellState::Delivered)
+            {
+                continue;
+            }
+            const auto t = coarse.cellTriangle()[static_cast<std::size_t>(b * cx + a)];
+            const double za = coarse.triangles()[t].a.z.si(), zb = coarse.triangles()[t].b.z.si(), zd = coarse.triangles()[t].c.z.si();
+            const double zc = coarse.triangles()[t + 1].c.z.si();
+            for (std::int32_t v = 0; v <= s; ++v)
+            {
+                for (std::int32_t u = 0; u <= s; ++u)
+                {
+                    const double fx = static_cast<double>(u) / s, fy = static_cast<double>(v) / s;
+                    const double z = fx >= fy ? za + (zb - za) * fx + (zd - zb) * fy : za + (zd - zc) * fx + (zc - za) * fy;
+                    const auto node = static_cast<std::size_t>(offset[1] + b * s + v) * fineStride + static_cast<std::size_t>(offset[0] + a * s + u);
+                    worst = std::max(worst, std::abs(z - static_cast<double>(fine.z()[node].si())));
+                }
+            }
+        }
+    }
+    return worst;
+}
+
+template<typename S>
+void checkResolutionLever(const S& surface, const char* name)
+{
+    Quad quad(surface);
+    const float curvature = curvatureBound(quad.window());
+    const HeightExtractLimits big{.nodes = 40000, .triangles = 80000};
+    HeightExtract fine(big), coarse(big);
+    HeightRequest request;
+    request.cells = {{16, 16}, {207, 207}};
+    REQUIRE(extractHeights(pageGrid(), quad.window(), request, fine).status == HeightStatus::Complete);
+    std::size_t lastTriangles = fine.triangles().size();
+    for (const std::uint32_t stride : {2U, 4U, 8U, 16U})
+    {
+        request.stride = stride;
+        const auto r = extractHeights(pageGrid(), quad.window(), request, coarse);
+        REQUIRE(r.status == HeightStatus::Complete);
+        const double achieved = coarseError(fine, coarse);
+        const double bound = static_cast<double>(curvature) * stride * stride / 4.0;
+        MESSAGE(name, " stride ", stride, ": achieved ", achieved, ", estimated bound ", bound);
+        CHECK(achieved <= bound + 2e-6); // float rounding of the patch coordinates
+        CHECK(coarse.triangles().size() < lastTriangles);
+        lastTriangles = coarse.triangles().size();
+    }
+    // The target-driven controller: a looser tolerance never gives a finer stride, and the error meets the target.
+    std::uint32_t previous = 1;
+    for (const double tolerance : {1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2})
+    {
+        const std::uint32_t stride = strideForTolerance(curvature, LengthF::fromSi(static_cast<float>(tolerance)), 16);
+        CHECK(stride >= previous);
+        previous = stride;
+        if (stride > 1U)
+        {
+            request.stride = stride;
+            REQUIRE(extractHeights(pageGrid(), quad.window(), request, coarse).status == HeightStatus::Complete);
+            CHECK(coarseError(fine, coarse) <= tolerance + 2e-6);
+        }
+    }
+}
+
+} // namespace
+
+TEST_CASE("Resolution lever: the achieved error stays within M s^2 / 4 on smooth surfaces, and cost falls with the stride")
+{
+    checkResolutionLever(testing::Plane{0.2, 0.1, -0.05}, "plane");
+    checkResolutionLever(testing::Berm{.y0 = 0.5, .radius = 1.5, .maxAngle = 0.5}, "berm");
+    checkResolutionLever(testing::Rut{.yc = 1.2, .halfWidth = 0.4, .depth = 0.08}, "rut");
+    checkResolutionLever(testing::Ramp{.x0 = 0.8, .length = 1.2, .rise = 0.3}, "ramp");
+}
+
+namespace
+{
+
+struct Noise
+{
+    static constexpr std::string_view Name = "Noise";
+    [[nodiscard]] double height(double x, double y) const noexcept
+    {
+        return 0.02 * std::sin(37.0 * x) * std::cos(23.0 * y) + 0.004 * std::sin(131.0 * x + 17.0 * y);
+    }
+    [[nodiscard]] sub0math::Vec3d normal(double, double) const noexcept
+    {
+        return {0.0, 0.0, 1.0};
+    }
+};
+
+} // namespace
+
+TEST_CASE("Resolution lever: a random rough surface obeys the same estimate, and a step forces the fine stride")
+{
+    checkResolutionLever(Noise{}, "noise");
+    Quad step(testing::Step{1.0, 0.1});
+    CHECK(strideForTolerance(curvatureBound(step.window()), LengthF::fromSi(0.001F), 16) == 1U); // a riser is not smooth
+    Quad plane(testing::Plane{});
+    CHECK(curvatureBound(plane.window()) < 1e-3F);
+    CHECK(strideForTolerance(0.0F, LengthF::fromSi(0.0F), 32) == 32U); // flat: as coarse as allowed
+    CHECK(strideForTolerance(0.01F, LengthF::fromSi(0.0F), 32) == 1U);
+}
+
+TEST_CASE("Corridor lever: more boxes never touch more cells, and the target stops the doubling")
+{
+    const auto grid = *GridSpec::create({.finestSpacing = Length::fromSi(0.02),
+                                         .cellsPerSide = 40,
+                                         .registration = Registration::CellCentre,
+                                         .anchor = {Length::fromSi(0.0), Length::fromSi(-1.6)},
+                                         .pages = {10, 4}});
+    std::vector<std::uint64_t> words(4096);
+    const CorridorFootprint footprint{Length::fromSi(0.38), Length::fromSi(0.05), Length::fromSi(0.1)};
+    const CorridorSpec turning{{Length::fromSi(5.0), Length::fromSi(0.0), f64::Angle::fromSi(0.0)},
+                               {Length::fromSi(5.4), Length::fromSi(0.3), f64::Angle::fromSi(0.9)}, footprint, 1};
+    const CorridorSpec straight{{Length::fromSi(5.0), Length::fromSi(0.0), f64::Angle::fromSi(0.0)},
+                                {Length::fromSi(5.4), Length::fromSi(0.0), f64::Angle::fromSi(0.0)}, footprint, 1};
+    std::size_t previous = ~std::size_t{0};
+    for (const std::uint32_t k : {1U, 2U, 4U, 8U, 16U, 32U, 64U})
+    {
+        CorridorSpec spec = turning;
+        spec.subIntervals = k;
+        const auto corridor = CorridorBuilder::create(spec);
+        REQUIRE(corridor);
+        const auto cells = corridor->rasterise(grid.cellGrid(0), words).cells;
+        CHECK(cells <= previous);
+        previous = cells;
+    }
+    const auto a = tightCorridor(straight, grid.cellGrid(0), words, 0.02);
+    for (const double gain : {0.0, 0.01, 0.02, 0.05, 0.1, 0.2})
+    {
+        const auto t = tightCorridor(turning, grid.cellGrid(0), words, gain);
+        REQUIRE(t);
+        MESSAGE("turning, gain target ", gain, ": ", t->subIntervals, " boxes, ", t->cells, " cells");
+    }
+    const auto b = tightCorridor(turning, grid.cellGrid(0), words, 0.05);
+    const auto c = tightCorridor(turning, grid.cellGrid(0), words, 0.0);
+    REQUIRE((a && b && c));
+    CHECK(a->subIntervals == 1U); // an axis-aligned straight motion gains nothing from splitting
+    CHECK(b->subIntervals > 1U);
+    CHECK(b->subIntervals < c->subIntervals);        // a looser target stops earlier
+    CHECK(c->subIntervals == CorridorBuilder::MaxSubIntervals); // no target: all the way
+    CHECK(b->cells >= c->cells);
+    CHECK_FALSE(tightCorridor(turning, grid.cellGrid(0), words, 1.5));
+    CHECK_FALSE(tightCorridor(turning, grid.cellGrid(0), std::span<std::uint64_t>(words.data(), 1), 0.02));
+}

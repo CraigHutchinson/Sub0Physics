@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 namespace sub0physics::terrain
@@ -62,6 +63,28 @@ std::expected<HeightPage, Fault> buildHeightPage(const GridSpec& grid, const Til
         if (known[n] == 0U) continue;
         page.heights_[n] = static_cast<std::uint16_t>(std::lround((heights[n].si() - origin) / step));
         page.known_[n >> 6U] |= std::uint64_t{1} << (n & 63U);
+    }
+
+    // Second differences along x, y and the diagonal, in steps, between authored nodes in a line.
+    {
+        std::int32_t worst = 0;
+        const auto at = [&](std::int32_t i, std::int32_t j) { return static_cast<std::int32_t>(page.heights_[HeightPage::index(i, j)]); };
+        const auto second = [&](std::int32_t i, std::int32_t j, std::int32_t di, std::int32_t dj) {
+            if (page.known(i, j) && page.known(i + di, j + dj) && page.known(i + 2 * di, j + 2 * dj))
+            {
+                worst = std::max(worst, std::abs(at(i, j) - 2 * at(i + di, j + dj) + at(i + 2 * di, j + 2 * dj)));
+            }
+        };
+        for (std::int32_t j = 0; j < HeightPage::Nodes; ++j)
+        {
+            for (std::int32_t i = 0; i < HeightPage::Nodes; ++i)
+            {
+                if (i + 2 < HeightPage::Nodes) second(i, j, 1, 0);
+                if (j + 2 < HeightPage::Nodes) second(i, j, 0, 1);
+                if (i + 2 < HeightPage::Nodes && j + 2 < HeightPage::Nodes) second(i, j, 1, 1);
+            }
+        }
+        page.maxSecondDifference_ = static_cast<float>(worst) * HeightPage::StepMetres;
     }
 
     // Pyramid level 0: each 8 x 8-cell block spans 9 x 9 nodes (its shared edges included), so a block's

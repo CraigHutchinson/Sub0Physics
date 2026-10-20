@@ -166,4 +166,28 @@ private:
     sub0math::Aabb<sub0math::f64::Length, 2> bounds_{};
 };
 
+/** What `tightCorridor` chose. */
+struct TightCorridor
+{
+    std::uint32_t subIntervals; ///< Boxes chosen, a power of two from 1 to `CorridorBuilder::MaxSubIntervals`.
+    std::size_t cells;          ///< Cells the corridor touches at that count.
+};
+
+/**
+ * The corridor-tightness lever, driven by a target: splits the motion into 1, 2, 4, ... boxes and stops when a
+ * doubling would save less than a fraction of the cells. More boxes follow a turning or diagonal footprint more
+ * closely, so fewer cells are fetched; the gain shrinks as the boxes shrink. Every count gives a corridor that
+ * contains the footprint (the bound of `CorridorBuilder` holds for any count), so the lever trades fetched cells
+ * for build and raster time, never safety.
+ *
+ * @param spec The motion and footprint; its `subIntervals` is ignored.
+ * @param grid The cells to count on.
+ * @param words Scratch for the mask: enough for the cells the single-box corridor touches (the largest).
+ * @param relativeGain Stop when doubling would remove less than this fraction of the current cell count; 0 to 1.
+ * @return The count and its cells, or the fault of an invalid spec or a scratch that is too small.
+ */
+[[nodiscard]] std::expected<TightCorridor, Fault> tightCorridor(CorridorSpec spec,
+                                                               const sub0math::RegularGrid<sub0math::f64::Length, 2>& grid,
+                                                               std::span<std::uint64_t> words, double relativeGain) noexcept;
+
 } // namespace sub0physics::terrain

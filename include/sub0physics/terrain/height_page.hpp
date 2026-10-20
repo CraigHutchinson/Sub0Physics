@@ -151,6 +151,18 @@ public:
                                         std::span<sub0math::Length> heights, std::span<std::uint8_t> known) const noexcept;
 
     /**
+     * The largest second difference of authored heights along x, along y or along the cell diagonal, over the
+     * page: `max |z[k-1] - 2 z[k] + z[k+1]|` in metres, taken between three authored nodes in a line. It bounds how
+     * far a coarser sampling of the page can stray from it (see `strideForTolerance`); zero for a plane.
+     *
+     * @return The bound [m].
+     */
+    [[nodiscard]] float maxSecondDifference() const noexcept
+    {
+        return maxSecondDifference_;
+    }
+
+    /**
      * The authored-node bits, one per node, row-major (bit `j * Nodes + i`), for loops that test many nodes.
      *
      * @return The words.
@@ -220,6 +232,7 @@ private:
     SourceRevision revision_;
     sub0math::Length spacing_;
     float inverseSpacing_;                                        // nodes per metre
+    float maxSecondDifference_ = 0.0F;                            // metres; see maxSecondDifference()
     std::vector<std::uint16_t> heights_;                          // Nodes x Nodes, row-major in j
     std::vector<std::uint64_t> known_;                            // one bit per node
     std::array<std::vector<HeightRange>, PyramidLevels> pyramid_; // level 0 = 32 x 32 blocks

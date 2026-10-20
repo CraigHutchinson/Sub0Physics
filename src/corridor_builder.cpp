@@ -139,4 +139,48 @@ Raster CorridorBuilder::rasterise(const sub0math::RegularGrid<Length, 2>& grid, 
     return {RasterStatus::Complete, {range, words.first(needed)}, cells};
 }
 
+std::expected<TightCorridor, Fault> tightCorridor(CorridorSpec spec, const sub0math::RegularGrid<sub0math::f64::Length, 2>& grid,
+                                                 std::span<std::uint64_t> words, double relativeGain) noexcept
+{
+    if (!(relativeGain >= 0.0 && relativeGain <= 1.0))
+    {
+        return invalidInput("the corridor gain target must be from 0 to 1");
+    }
+    const auto cellsFor = [&](std::uint32_t k) -> std::expected<std::size_t, Fault> {
+        spec.subIntervals = k;
+        const auto corridor = CorridorBuilder::create(spec);
+        if (!corridor)
+        {
+            return std::unexpected(corridor.error());
+        }
+        const Raster raster = corridor->rasterise(grid, words);
+        if (raster.status == RasterStatus::BufferTooSmall)
+        {
+            return invalidInput("the corridor mask scratch is too small");
+        }
+        return raster.cells; // zero when the corridor misses the grid
+    };
+    std::uint32_t k = 1;
+    auto cells = cellsFor(k);
+    if (!cells)
+    {
+        return std::unexpected(cells.error());
+    }
+    while (k < CorridorBuilder::MaxSubIntervals)
+    {
+        const auto finer = cellsFor(k * 2U);
+        if (!finer)
+        {
+            return std::unexpected(finer.error());
+        }
+        if (static_cast<double>(*finer) > static_cast<double>(*cells) * (1.0 - relativeGain))
+        {
+            break;
+        }
+        k *= 2U;
+        cells = finer;
+    }
+    return TightCorridor{k, *cells};
+}
+
 } // namespace sub0physics::terrain

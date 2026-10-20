@@ -272,6 +272,28 @@ private:
                                            std::uint8_t level, std::uint32_t stride, HeightExtract& out) noexcept;
 
 /**
+ * The largest second difference of heights over the pages of a window: the page-level curvature that the
+ * resolution lever works from.
+ *
+ * @param pages The window; absent pages are skipped.
+ * @return `max HeightPage::maxSecondDifference()` [m]; zero when there are none.
+ */
+[[nodiscard]] float curvatureBound(const PageWindow& pages) noexcept;
+
+/**
+ * The resolution lever, driven by a target: the coarsest stride whose estimated height error stays within a
+ * tolerance. Dropping to every `s`-th node of piecewise-linear data with second differences at most `M` leaves
+ * each dropped node within `M s^2 / 4` of the coarser triangulation (an estimate checked by the tests against
+ * the whole catalogue and random fields, not a proof for triangles). Stride 1 is the reference and has no error.
+ *
+ * @param secondDifference `curvatureBound` of the pages the request reads [m].
+ * @param tolerance The height error the consumer accepts [m]; not negative.
+ * @param maxStride The largest stride allowed: a power of two, 1 to 256.
+ * @return A power of two from 1 to `maxStride`; `maxStride` for a flat surface.
+ */
+[[nodiscard]] std::uint32_t strideForTolerance(float secondDifference, sub0math::Length tolerance, std::uint32_t maxStride = 64) noexcept;
+
+/**
  * Casts a ray against an extract's delivered triangles, walking the cells the ray crosses.
  *
  * @param extract The patch.

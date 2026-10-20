@@ -325,6 +325,40 @@ HeightResult extractCorridor(const GridSpec& grid, const CorridorBuilder& corrid
     return extractHeights(grid, pages, request, out);
 }
 
+float curvatureBound(const PageWindow& pages) noexcept
+{
+    float worst = 0.0F;
+    for (const HeightPage* page : pages.data)
+    {
+        if (page != nullptr)
+        {
+            worst = std::max(worst, page->maxSecondDifference());
+        }
+    }
+    return worst;
+}
+
+std::uint32_t strideForTolerance(float secondDifference, Length tolerance, std::uint32_t maxStride) noexcept
+{
+    maxStride = std::clamp(maxStride, 1U, 256U);
+    const std::uint32_t top = std::bit_floor(maxStride);
+    if (!(secondDifference > 0.0F))
+    {
+        return top;
+    }
+    std::uint32_t stride = 1;
+    while (stride < top)
+    {
+        const double next = static_cast<double>(stride) * 2.0;
+        if (static_cast<double>(secondDifference) * next * next / 4.0 > static_cast<double>(tolerance.si()))
+        {
+            break;
+        }
+        stride *= 2U;
+    }
+    return stride;
+}
+
 namespace
 {
 
