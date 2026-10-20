@@ -152,10 +152,49 @@ HeightResult extractHeights(const GridSpec& grid, const PageWindow& pages, const
     };
     for (std::int32_t b = 0; b <= cy; ++b)
     {
-        for (std::int32_t a = 0; a <= cx; ++a)
+        const std::int32_t J = lo1 + b * si;
+        const std::int32_t pj = std::min(J, totalY - 1) / N;
+        const std::int32_t lj = J - pj * N;
+        Length* zRow = nodeZ + static_cast<std::size_t>(b) * static_cast<std::size_t>(cx + 1);
+        std::uint8_t* kRow = nodeKnown + static_cast<std::size_t>(b) * static_cast<std::size_t>(cx + 1);
+        // Runs of nodes that share a page are read with the page and its row resolved once.
+        for (std::int32_t a = 0; a <= cx;)
         {
-            const auto at = static_cast<std::size_t>(b) * static_cast<std::size_t>(cx + 1) + static_cast<std::size_t>(a);
-            nodeSample(lo0 + a * si, lo1 + b * si, nodeZ[at], nodeKnown[at]);
+            const std::int32_t I = lo0 + a * si;
+            if (I > totalX || J > totalY)
+            {
+                zRow[a] = Length{};
+                kRow[a] = 0U;
+                ++a;
+                continue;
+            }
+            const std::int32_t pi = std::min(I, totalX - 1) / N;
+            const std::int32_t lastI = (pi + 1) * N - 1 + ((pi + 1) * N == totalX ? 1 : 0); // the grid's last node is on its last page
+            const std::int32_t end = std::min(cx, a + (lastI - I) / si);
+            const HeightPage* page = pages.at(pi, pj);
+            if (page == nullptr)
+            {
+                for (std::int32_t k = a; k <= end; ++k)
+                {
+                    nodeSample(lo0 + k * si, J, zRow[k], kRow[k]);
+                }
+            }
+            else
+            {
+                const auto row = page->nodeRow(lj);
+                const float dz = dzOf(*page);
+                const std::uint64_t* words = page->knownWords().data();
+                const auto rowBit = static_cast<std::size_t>(lj) * static_cast<std::size_t>(HeightPage::Nodes);
+                std::int32_t li = I - pi * N;
+                for (std::int32_t k = a; k <= end; ++k, li += si)
+                {
+                    const std::size_t bit = rowBit + static_cast<std::size_t>(li);
+                    const bool known = ((words[bit >> 6U] >> (bit & 63U)) & 1U) != 0U;
+                    kRow[k] = known ? 1U : 0U;
+                    zRow[k] = known ? Length::fromSi(HeightPage::toHeight(row[static_cast<std::size_t>(li)]).si() + dz) : Length{};
+                }
+            }
+            a = end + 1;
         }
     }
 
@@ -183,76 +222,81 @@ HeightResult extractHeights(const GridSpec& grid, const PageWindow& pages, const
     HeightResult result{HeightStatus::Complete};
     CellState* state = out.cellState_.data();
     std::uint32_t* cellTri = out.cellTriangle_.data();
+    HeightExtract::TriangleF* triangles = out.triangles_.data();
+    Vec3f* normals = out.triangleNormal_.data();
+    std::uint32_t* triCell = out.triangleCell_.data();
+    std::size_t tri = 0;
+    const auto nodeStride = static_cast<std::size_t>(cx + 1);
     for (std::int32_t b = 0; b < cy; ++b)
     {
-        for (std::int32_t a = 0; a < cx; ++a)
+        const std::int32_t J = lo1 + b * si;
+        const float y0 = static_cast<float>(b) * h, y1 = static_cast<float>(b + 1) * h;
+        // Runs of cells that share a page: the page and its presence are resolved once per run.
+        for (std::int32_t a = 0; a < cx;)
         {
             const std::int32_t I = lo0 + a * si;
-            const std::int32_t J = lo1 + b * si;
-            const auto cell = static_cast<std::size_t>(b) * static_cast<std::size_t>(cx) + static_cast<std::size_t>(a);
-            cellTri[cell] = HeightExtract::NoTriangle;
-            if (!requested(I, J))
+            const std::int32_t pi = I / N;
+            const std::int32_t end = std::min(cx - 1, a + ((pi + 1) * N - 1 - I) / si);
+            const HeightPage* page = (I < totalX && J < totalY) ? pages.at(pi, J / N) : nullptr;
+            for (std::int32_t c = a; c <= end; ++c)
             {
-                state[cell] = CellState::NotRequested;
-                continue;
-            }
-            const HeightPage* page = (I < totalX && J < totalY) ? pages.at(I / N, J / N) : nullptr;
-            bool deliver = page != nullptr;
-            const std::int32_t li = I % N;
-            const std::int32_t lj = J % N;
-            if (deliver)
-            {
-                // Every finer node under the cell must be authored: a coarse cell never interpolates across nodata.
-                for (std::int32_t v = 0; v <= si && deliver; ++v)
+                const std::int32_t Ic = lo0 + c * si;
+                const auto cell = static_cast<std::size_t>(b) * static_cast<std::size_t>(cx) + static_cast<std::size_t>(c);
+                cellTri[cell] = HeightExtract::NoTriangle;
+                if (mask != nullptr && !requested(Ic, J))
                 {
-                    for (std::int32_t u = 0; u <= si && deliver; ++u)
+                    state[cell] = CellState::NotRequested;
+                    continue;
+                }
+                const std::size_t n0 = static_cast<std::size_t>(b) * nodeStride + static_cast<std::size_t>(c);
+                const std::size_t n1 = n0 + nodeStride;
+                bool deliver = page != nullptr && (nodeKnown[n0] & nodeKnown[n0 + 1] & nodeKnown[n1] & nodeKnown[n1 + 1]) != 0U;
+                if (deliver && si > 1)
+                {
+                    // Every finer node under a coarse cell must be authored: it never interpolates across nodata.
+                    const std::int32_t li = Ic % N;
+                    const std::int32_t lj = J % N;
+                    for (std::int32_t v = 0; v <= si && deliver; ++v)
                     {
-                        deliver = page->known(li + u, lj + v);
+                        for (std::int32_t u = 0; u <= si && deliver; ++u)
+                        {
+                            deliver = page->known(li + u, lj + v);
+                        }
                     }
                 }
+                if (!deliver)
+                {
+                    state[cell] = CellState::Unknown;
+                    ++result.unknownCells;
+                    continue;
+                }
+                state[cell] = CellState::Delivered;
+                ++result.deliveredCells;
+                const float za = nodeZ[n0].si(), zb = nodeZ[n0 + 1].si(), zc = nodeZ[n1].si(), zd = nodeZ[n1 + 1].si();
+                const float x0 = static_cast<float>(c) * h, x1 = static_cast<float>(c + 1) * h;
+                using P = sub0math::Point3<Length>;
+                const P pa{Length::fromSi(x0), Length::fromSi(y0), Length::fromSi(za)};
+                const P pb{Length::fromSi(x1), Length::fromSi(y0), Length::fromSi(zb)};
+                const P pc{Length::fromSi(x0), Length::fromSi(y1), Length::fromSi(zc)};
+                const P pd{Length::fromSi(x1), Length::fromSi(y1), Length::fromSi(zd)};
+                cellTri[cell] = static_cast<std::uint32_t>(tri);
+                // Capacity was checked: two triangles per cell at most.
+                triangles[tri] = {pa, pb, pd};
+                triangles[tri + 1] = {pa, pd, pc};
+                // Normals from the cross products of the same triangles, written out: (b-a)x(d-a), (d-a)x(c-a).
+                const float n0x = -(zb - za), n0y = zb - zd, i0 = 1.0F / std::sqrt(n0x * n0x + n0y * n0y + h * h);
+                const float n1x = zc - zd, n1y = za - zc, i1 = 1.0F / std::sqrt(n1x * n1x + n1y * n1y + h * h);
+                normals[tri] = Vec3f{n0x * i0, n0y * i0, h * i0};
+                normals[tri + 1] = Vec3f{n1x * i1, n1y * i1, h * i1};
+                triCell[tri] = triCell[tri + 1] = static_cast<std::uint32_t>(cell);
+                tri += 2;
             }
-            if (!deliver)
-            {
-                state[cell] = CellState::Unknown;
-                ++result.unknownCells;
-                continue;
-            }
-            const auto nodeAt = [&](std::int32_t u, std::int32_t v) {
-                return static_cast<std::size_t>(b + v) * static_cast<std::size_t>(cx + 1) + static_cast<std::size_t>(a + u);
-            };
-            if (nodeKnown[nodeAt(0, 0)] == 0U || nodeKnown[nodeAt(1, 0)] == 0U || nodeKnown[nodeAt(0, 1)] == 0U ||
-                nodeKnown[nodeAt(1, 1)] == 0U)
-            {
-                state[cell] = CellState::Unknown;
-                ++result.unknownCells;
-                continue;
-            }
-            state[cell] = CellState::Delivered;
-            ++result.deliveredCells;
-            const float za = nodeZ[nodeAt(0, 0)].si(), zb = nodeZ[nodeAt(1, 0)].si();
-            const float zc = nodeZ[nodeAt(0, 1)].si(), zd = nodeZ[nodeAt(1, 1)].si();
-            const float x0 = static_cast<float>(a) * h, x1 = static_cast<float>(a + 1) * h;
-            const float y0 = static_cast<float>(b) * h, y1 = static_cast<float>(b + 1) * h;
-            using P = sub0math::Point3<Length>;
-            const P pa{Length::fromSi(x0), Length::fromSi(y0), Length::fromSi(za)};
-            const P pb{Length::fromSi(x1), Length::fromSi(y0), Length::fromSi(zb)};
-            const P pc{Length::fromSi(x0), Length::fromSi(y1), Length::fromSi(zc)};
-            const P pd{Length::fromSi(x1), Length::fromSi(y1), Length::fromSi(zd)};
-            cellTri[cell] = static_cast<std::uint32_t>(out.triangles_.size());
-            // Capacities were checked: two triangles per cell at most.
-            (void)out.triangles_.pushBack({pa, pb, pd});
-            (void)out.triangles_.pushBack({pa, pd, pc});
-            // Normals from the cross products of the same triangles, written out: (b-a)x(d-a), (d-a)x(c-a).
-            const auto unit = [](float nx, float ny, float nz) {
-                const float inv = 1.0F / std::sqrt(nx * nx + ny * ny + nz * nz);
-                return Vec3f{nx * inv, ny * inv, nz * inv};
-            };
-            (void)out.triangleNormal_.pushBack(unit(-(zb - za), zb - zd, h));
-            (void)out.triangleNormal_.pushBack(unit(zc - zd, za - zc, h));
-            (void)out.triangleCell_.pushBack(static_cast<std::uint32_t>(cell));
-            (void)out.triangleCell_.pushBack(static_cast<std::uint32_t>(cell));
+            a = end + 1;
         }
     }
+    (void)out.triangles_.resize(tri);
+    (void)out.triangleNormal_.resize(tri);
+    (void)out.triangleCell_.resize(tri);
     if (result.unknownCells != 0U)
     {
         result.status = HeightStatus::Partial;

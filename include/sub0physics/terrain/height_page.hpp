@@ -151,6 +151,16 @@ public:
                                         std::span<sub0math::Length> heights, std::span<std::uint8_t> known) const noexcept;
 
     /**
+     * The authored-node bits, one per node, row-major (bit `j * Nodes + i`), for loops that test many nodes.
+     *
+     * @return The words.
+     */
+    [[nodiscard]] std::span<const std::uint64_t> knownWords() const noexcept
+    {
+        return known_;
+    }
+
+    /**
      * One row of node heights, for extraction loops that read many nodes in order.
      *
      * @param j Node row, 0 to Nodes - 1.
