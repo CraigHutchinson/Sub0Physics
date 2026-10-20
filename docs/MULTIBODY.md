@@ -289,6 +289,8 @@ M1b builds on these contracts, which a cross-repository review fixed before more
   `worldToBody` from `parentToBody` and sets `bodyPose = toRigidTransform(worldToBody)`; site velocities,
   Jacobians and energy read the world transforms. `Model` stores each placement once (`treeTransforms()`;
   `jointPlacements()` is removed).
+- **Ids (D8):** `BodyId` and `SiteId` are `Id<Tag, std::uint32_t>` (`core/id.hpp`); `WorldBody` is the one
+  sentinel, `BodyId::invalid()`. A default-constructed id is now invalid rather than body 0.
 
 **Deviations and decisions:**
 

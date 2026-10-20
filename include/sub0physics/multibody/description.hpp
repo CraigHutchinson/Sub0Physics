@@ -7,8 +7,9 @@
 #include <sub0math/geometry/point.hpp>
 #include <sub0math/linear/rigid_transform.hpp>
 #include <sub0math/linear/vec.hpp>
-#include <sub0math/role/role.hpp>
 #include <sub0math/units/quantities.hpp>
+
+#include "sub0physics/core/id.hpp"
 
 // The typed model description that ModelBuilder compiles into a Model (docs/MULTIBODY.md section 2).
 // These aggregates are the asset that must not be locked in: they say what a mechanism is, in Sub0Math
@@ -18,13 +19,13 @@ namespace sub0physics::multibody
 {
 
 /** Identifies a body within one ModelBuilder and the Model it builds; bodies are numbered as added. */
-using BodyId = sub0math::Role<struct BodyIdTag, std::uint32_t>;
+using BodyId = Id<struct BodyIdTag, std::uint32_t>;
 
 /** Identifies a site within one ModelBuilder and the Model it builds. */
-using SiteId = sub0math::Role<struct SiteIdTag, std::uint32_t>;
+using SiteId = Id<struct SiteIdTag, std::uint32_t>;
 
-/** The fixed world frame, as a joint's parent. */
-inline constexpr BodyId WorldBody{std::numeric_limits<std::uint32_t>::max()};
+/** The fixed world frame, as a joint's parent: the one sentinel, `BodyId::invalid()`. */
+inline constexpr BodyId WorldBody = BodyId::invalid();
 
 /** The kinds of joint the core supports; each has one generalized coordinate. */
 enum class JointType : std::uint8_t
