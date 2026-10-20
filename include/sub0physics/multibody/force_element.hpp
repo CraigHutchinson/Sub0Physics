@@ -178,7 +178,8 @@ struct ElementInputs
 {
     const Model& model;         ///< The model the element belongs to.
     const State& state;         ///< Coordinates and rates.
-    const Workspace& workspace; ///< `worldToBody` holds the world transforms at `state`.
+    const Workspace& workspace; ///< `worldToBody` holds the world transforms at `state` (`planar.worldToBody` when `planar`).
+    bool planar = false;        ///< Whether to read the planar formulation's kinematics (Formulation::Planar).
 };
 
 /**

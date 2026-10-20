@@ -56,13 +56,19 @@ struct RotationalInertia
     sub0math::Vec3<sub0math::f64::MomentOfInertia> products{}; ///< Ixy, Ixz, Iyz (tensor entries, not negated).
 };
 
-/** A rigid body and the joint that attaches it to its parent. */
+/**
+ * A rigid body and the joint that attaches it to its parent.
+ *
+ * A body with several joints (MJCF's `<joint>` list) is a chain of bodies with one joint each: the outer ones
+ * massless (mass and inertia exactly zero), the last carrying the mass. ModelBuilder accepts a massless body only
+ * when the mass matrix stays positive definite, which it checks at the zero configuration.
+ */
 struct BodyDescription
 {
     std::string_view name;                                 ///< Unique, non-empty; copied by the builder.
-    sub0math::f64::Mass mass;                              ///< Positive.
+    sub0math::f64::Mass mass;                              ///< Positive; or zero, with a zero inertia, for a massless body that only carries a joint.
     sub0math::Point3<sub0math::f64::Length> centreOfMass;  ///< In the body frame.
-    RotationalInertia inertia;                             ///< About the centre of mass; positive definite, principal moments obeying the triangle inequality.
+    RotationalInertia inertia;                             ///< About the centre of mass; positive definite, principal moments obeying the triangle inequality; all zero for a massless body.
     JointDescription joint;                                ///< Connection to the parent.
 };
 

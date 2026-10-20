@@ -19,12 +19,59 @@
 #include "sub0physics/multibody/constraint.hpp"
 #include "sub0physics/multibody/description.hpp"
 #include "sub0physics/multibody/force_element.hpp"
+#include "sub0physics/multibody/planar.hpp"
 
 namespace sub0physics::multibody
 {
 
 /** Parent index of a body attached to the world. */
 inline constexpr std::size_t NoParent = std::numeric_limits<std::size_t>::max();
+
+/**
+ * How a model's dynamics are evaluated (docs/MULTIBODY.md, M1d status). Both give the same results to rounding;
+ * the planar one is cheaper.
+ */
+enum class Formulation : std::uint8_t
+{
+    Automatic, ///< A builder request only: Planar when the model qualifies, otherwise General (the default).
+    General,   ///< The 3D spatial formulation, valid for every model.
+    Planar     ///< Three-component planar algebra (planar.hpp), for a model whose motion stays in one coordinate plane.
+};
+
+/**
+ * The planar formulation's view of one body, in its plane's (i, j, k) axes: Model::planar.
+ */
+struct PlanarBody
+{
+    PlanarTransform placement; ///< The joint placement at coordinate zero: rotation about k and in-plane offset.
+    bool unrotated;            ///< Whether the placement rotation is the identity.
+    bool revolute;             ///< Joint type: revolute (about +-k) or prismatic (in the plane).
+    double axisSign;           ///< Revolute: +1 for an axis along +k, -1 along -k.
+    double axisX;              ///< Prismatic: the axis's i component, in the joint frame.
+    double axisY;              ///< Prismatic: the axis's j component, in the joint frame.
+    PlanarInertia inertia;     ///< In-plane mass properties about the body origin.
+};
+
+/**
+ * What the planar formulation needs from a model (Formulation::Planar): the plane, and the in-plane view of every
+ * body and site. A model qualifies when every revolute axis lies along one coordinate axis k (either sense), every
+ * prismatic axis is perpendicular to it, every placement rotation is about k, and gravity has no k component; the
+ * tests are exact, so a model built from in-plane numbers qualifies and one that is out of plane by rounding does
+ * not. Out-of-plane offsets (placements, centres of mass, sites along k) are allowed: they never change the in-plane
+ * motion, and tendon lengths include the constant k separation of their sites.
+ */
+struct PlanarModel
+{
+    std::size_t normal = 2;          ///< k: the axis normal to the plane (0 x, 1 y, 2 z).
+    std::size_t axisI = 0;           ///< i: the plane's first axis.
+    std::size_t axisJ = 1;           ///< j: the plane's second axis.
+    double gravityX = 0.0;           ///< Gravity along i [m/s^2].
+    double gravityY = 0.0;           ///< Gravity along j [m/s^2].
+    std::vector<PlanarBody> bodies;  ///< One per body.
+    std::vector<double> siteX;       ///< Each site's i offset in its body frame (world i for a world site) [m].
+    std::vector<double> siteY;       ///< Each site's j offset [m].
+    std::vector<double> siteNormal;  ///< Each site's world k coordinate, constant in planar motion [m].
+};
 
 /**
  * An immutable articulated-body model: flat arrays in topological order, built by ModelBuilder.
@@ -287,6 +334,24 @@ public:
         return constraintWrenchCount_;
     }
 
+    /** @return How the dynamics are evaluated: General or Planar (never Automatic). */
+    [[nodiscard]] Formulation formulation() const noexcept
+    {
+        return formulation_;
+    }
+
+    /** @return The planar formulation's view of the model; meaningful only when formulation() is Planar. */
+    [[nodiscard]] const PlanarModel& planar() const noexcept
+    {
+        return planar_;
+    }
+
+    /** @return Whether some body is massless (it only carries a joint, like a body with several joints in MJCF). */
+    [[nodiscard]] bool hasMasslessBodies() const noexcept
+    {
+        return hasMasslessBodies_;
+    }
+
     /** @return The constraint solver's levers, set with ModelBuilder::setConstraintSettings. */
     [[nodiscard]] const ConstraintSettings& constraintSettings() const noexcept
     {
@@ -323,6 +388,9 @@ private:
     std::size_t constraintWrenchCount_ = 0;
     ConstraintSettings constraintSettings_{};
     bool elementsFollowTree_ = true;
+    bool hasMasslessBodies_ = false;
+    Formulation formulation_ = Formulation::General;
+    PlanarModel planar_{};
     sub0math::Vec3<sub0math::f64::Acceleration> gravity_{};
     sub0math::SpatialMotiond baseAcceleration_{};
 };

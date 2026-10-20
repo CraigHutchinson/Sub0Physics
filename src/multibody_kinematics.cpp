@@ -10,6 +10,7 @@
 #include <sub0math/units/quantities.hpp>
 
 #include "multibody_joint.hpp"
+#include "multibody_planar.hpp"
 #include "sub0physics/multibody/kinematics.hpp"
 
 namespace sub0physics::multibody
@@ -36,6 +37,74 @@ void updateUnchecked(const Model& model, const State& state, Workspace& workspac
     {
         workspace.bodyPose[i] = sub0math::toRigidTransform<sub0math::f64::Length>(workspace.worldToBody[i]);
     }
+}
+
+// Kinetic and potential energy of a planar model whose planar transforms, velocities and world transforms are in
+// the workspace; the elements' energy terms are evaluated (planar).
+std::expected<detail::EnergyTerms, Fault> planarEnergyTerms(const Model& model, const State& state,
+                                                            Workspace& workspace) noexcept
+{
+    const PlanarModel& pm = model.planar();
+    const PlanarKinematics& k = workspace.planar;
+    double kinetic = 0.0;
+    double potential = 0.0;
+    for (std::size_t i = 0; i < pm.bodies.size(); ++i)
+    {
+        const PlanarInertia& in = pm.bodies[i].inertia;
+        const PlanarMotion& v = k.velocity[i];
+        kinetic += 0.5 * dot(v, in * v);
+        // m times the world centre of mass: m o + R h.
+        const PlanarTransform& x = k.worldToBody[i];
+        const double cx = in.m * x.x + (x.c * in.hx - x.s * in.hy);
+        const double cy = in.m * x.y + (x.s * in.hx + x.c * in.hy);
+        potential -= pm.gravityX * cx + pm.gravityY * cy;
+    }
+    if (model.elementCount() > 0)
+    {
+        if (auto added = detail::evaluateElementsUnchecked(model, state, workspace, false, true, true); !added)
+        {
+            return std::unexpected(added.error());
+        }
+        potential += workspace.elementPotential;
+    }
+    return detail::EnergyTerms{kinetic, potential};
+}
+
+// A site's kinematics from the planar kinematics in the workspace.
+SiteKinematics planarSiteKinematics(const Model& model, const Workspace& workspace, SiteId site) noexcept
+{
+    using sub0math::f64::AngularVelocity;
+    using sub0math::f64::Length;
+    using sub0math::f64::Velocity;
+    const PlanarModel& pm = model.planar();
+    const std::size_t s = site.value();
+    const Pose& frame = model.siteFrame(site);
+    const std::size_t body = model.siteBodies()[s];
+    if (body == NoParent)
+    {
+        return SiteKinematics{frame, {}, {}};
+    }
+    const PlanarTransform& x = workspace.planar.worldToBody[body];
+    const PlanarMotion& v = workspace.planar.velocity[body];
+    const detail::PlanarPoint p = detail::planarToWorld(x, pm.siteX[s], pm.siteY[s]);
+    // Velocity of the body point at the site, in body axes (v + w k x r), then rotated into the world.
+    const double lx = v.x - v.w * pm.siteY[s];
+    const double ly = v.y + v.w * pm.siteX[s];
+    const sub0math::Vec3d position = detail::planarVectorToWorld(pm, p.x, p.y, pm.siteNormal[s]);
+    const sub0math::Vec3d velocity = detail::planarVectorToWorld(pm, x.c * lx - x.s * ly, x.s * lx + x.c * ly, 0.0);
+    const sub0math::Vec3d omega = detail::planarVectorToWorld(pm, 0.0, 0.0, v.w);
+    // The site's orientation: its body's (a rotation about k by the world angle), then its own frame.
+    const double half = 0.5 * std::atan2(x.s, x.c);
+    sub0math::Quatd rotation{std::cos(half), 0.0, 0.0, 0.0};
+    const double sh = std::sin(half);
+    rotation.x = pm.normal == 0 ? sh : 0.0;
+    rotation.y = pm.normal == 1 ? sh : 0.0;
+    rotation.z = pm.normal == 2 ? sh : 0.0;
+    return SiteKinematics{{rotation * frame.rotation,
+                           {Length::fromSi(position.x), Length::fromSi(position.y), Length::fromSi(position.z)}},
+                          {Velocity::fromSi(velocity.x), Velocity::fromSi(velocity.y), Velocity::fromSi(velocity.z)},
+                          {AngularVelocity::fromSi(omega.x), AngularVelocity::fromSi(omega.y),
+                           AngularVelocity::fromSi(omega.z)}};
 }
 
 } // namespace
@@ -79,6 +148,61 @@ std::expected<SiteKinematics, Fault> computeSiteKinematics(const Model& model, c
     return SiteKinematics{workspace.bodyPose[body] * frame,
             {Velocity::fromSi(world.x), Velocity::fromSi(world.y), Velocity::fromSi(world.z)},
             {AngularVelocity::fromSi(omega.x), AngularVelocity::fromSi(omega.y), AngularVelocity::fromSi(omega.z)}};
+}
+
+std::expected<void, Fault> computeSiteKinematics(const Model& model, const State& state,
+                                                std::span<const SiteId> sites, std::span<SiteKinematics> out,
+                                                Workspace& workspace) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
+    {
+        return checked;
+    }
+    if (out.size() != sites.size())
+    {
+        return invalidInput("site kinematics need one output per site");
+    }
+    for (const SiteId site : sites)
+    {
+        if (site.value() >= model.siteCount())
+        {
+            return invalidInput("site is not a site of the model");
+        }
+    }
+    if (detail::isPlanar(model))
+    {
+        detail::planarTransforms<true>(model, state, workspace);
+        detail::planarWorldTransforms(model, workspace);
+        for (std::size_t s = 0; s < sites.size(); ++s)
+        {
+            out[s] = planarSiteKinematics(model, workspace, sites[s]);
+        }
+        return {};
+    }
+    updateUnchecked(model, state, workspace);
+    for (std::size_t s = 0; s < sites.size(); ++s)
+    {
+        const SiteId site = sites[s];
+        const Pose& frame = model.siteFrame(site);
+        const std::size_t body = model.siteBodies()[site.value()];
+        if (body == NoParent)
+        {
+            out[s] = SiteKinematics{frame, {}, {}};
+            continue;
+        }
+        const sub0math::SpatialMotiond& v = workspace.bodyVelocity[body];
+        const sub0math::Mat3d& toBody = workspace.worldToBody[body].rotation;
+        const sub0math::Vec3d local = v.linear + cross(v.angular, plain(frame.translation));
+        const sub0math::Vec3d world = detail::bodyToWorld(toBody, local);
+        const sub0math::Vec3d omega = detail::bodyToWorld(toBody, v.angular);
+        using sub0math::f64::AngularVelocity;
+        using sub0math::f64::Velocity;
+        out[s] = SiteKinematics{workspace.bodyPose[body] * frame,
+                                {Velocity::fromSi(world.x), Velocity::fromSi(world.y), Velocity::fromSi(world.z)},
+                                {AngularVelocity::fromSi(omega.x), AngularVelocity::fromSi(omega.y),
+                                 AngularVelocity::fromSi(omega.z)}};
+    }
+    return {};
 }
 
 std::expected<void, Fault> computeSiteJacobian(const Model& model, const State& state, SiteId site,
@@ -134,8 +258,18 @@ std::expected<EnergyAccount, Fault> computeEnergy(const Model& model, const Stat
     {
         return std::unexpected(checked.error());
     }
-    updateUnchecked(model, state, workspace);
-    const auto terms = detail::energyTerms(model, state, workspace);
+    std::expected<detail::EnergyTerms, Fault> terms;
+    if (detail::isPlanar(model))
+    {
+        detail::planarTransforms<true>(model, state, workspace);
+        detail::planarWorldTransforms(model, workspace);
+        terms = planarEnergyTerms(model, state, workspace);
+    }
+    else
+    {
+        updateUnchecked(model, state, workspace);
+        terms = detail::energyTerms(model, state, workspace);
+    }
     if (!terms)
     {
         return std::unexpected(terms.error());
@@ -160,8 +294,10 @@ std::expected<EnergyTerms, Fault> energyTerms(const Model& model, const State& s
         const sub0math::SpatialMotiond& v = workspace.bodyVelocity[i];
         kinetic += 0.5 * dot(v, inertias[i] * v);
         const sub0math::PluckerTransformd& x = workspace.worldToBody[i];
-        const sub0math::Vec3d centre = detail::bodyToWorld(x.rotation, inertias[i].centreOfMass()) + x.translation;
-        potential -= inertias[i].mass * dot(g, centre);
+        // m c in world axes as m o + R h: no division by the mass, so a massless body adds exactly nothing.
+        const sub0math::Vec3d moment = detail::bodyToWorld(x.rotation, inertias[i].firstMoment) +
+                                       x.translation * inertias[i].mass;
+        potential -= dot(g, moment);
     }
     if (model.elementCount() > 0)
     {

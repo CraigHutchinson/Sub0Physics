@@ -184,7 +184,18 @@ public:
         {
             return invalidInput("the Runge-Kutta stepper does not support strict limits; use an Euler stepper");
         }
-        const auto changed = ode_.setForcing(forcing.tau);
+        // Site forces are mapped to generalized forces at the start of the step and held over it, as in every
+        // stepper.
+        std::span<const double> tau = forcing.tau;
+        if (!forcing.siteForces.empty())
+        {
+            if (auto mapped = computeAppliedForce(model, state, forcing, workspace); !mapped)
+            {
+                return mapped;
+            }
+            tau = workspace.appliedForce;
+        }
+        const auto changed = ode_.setForcing(tau);
         if (!changed)
         {
             return std::unexpected(changed.error());
@@ -216,9 +227,9 @@ public:
             state.projectionEnergy = candidate_.projectionEnergy;
         }
         double work = 0.0;
-        for (std::size_t i = 0; i < forcing.tau.size(); ++i)
+        for (std::size_t i = 0; i < tau.size(); ++i)
         {
-            work += forcing.tau[i] * (x_[i] - state.values[i]);
+            work += tau[i] * (x_[i] - state.values[i]);
         }
         std::copy_n(x_.begin(), 2 * n, state.values.begin());
         state.dissipated = sub0math::f64::Energy::fromSi(x_[2 * n]);

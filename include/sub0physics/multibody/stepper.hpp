@@ -5,6 +5,7 @@
 #include <expected>
 #include <span>
 
+#include <sub0math/linear/vec.hpp>
 #include <sub0math/units/quantities.hpp>
 
 #include "sub0physics/fault.hpp"
@@ -16,16 +17,36 @@ namespace sub0physics::multibody
 {
 
 /**
+ * An external force and moment applied at a site (docs/MULTIBODY.md section 4, "External wrench"): a contact or a
+ * fixture force that the caller computes, such as a tyre on a platen.
+ */
+struct SiteForce
+{
+    SiteId site;            ///< Where it acts; a site of the model on a body (a world site receives nothing).
+    sub0math::Vec3d force;  ///< Force on the site's body [N], world axes, through the site's origin.
+    sub0math::Vec3d moment{}; ///< Moment on the body [N m], world axes.
+};
+
+/**
  * What drives a model over one step besides its own dynamics: the external input.
  *
- * Applied generalized forces, held constant over the step; every stepper adds their work to
- * `State::externalWork`. The model's force elements are not part of it: they belong to the Model (built by
- * ModelBuilder), so every stepper, forwardDynamics and computeEnergy include them without being told
+ * Applied generalized forces and site forces, held constant over the step; every stepper adds their work to
+ * `State::externalWork`. A site force enters as `J^T [moment; force]` with its site's Jacobian at the start of the
+ * step (the sum is in `Workspace::appliedForce`), and as an external wrench on its body in computeReactions, so loads
+ * at the joints see it where it acts. The model's force elements are not part of it: they belong to the Model (built
+ * by ModelBuilder), so every stepper, forwardDynamics and computeEnergy include them without being told
  * (docs/MULTIBODY.md section 4).
+ *
+ * **Jacobians.** An input that depends on the state (a contact computed by the caller) may supply its derivatives
+ * `d(applied)/dq` and `d(applied)/dqd` in generalized coordinates, so the linearly implicit step treats it as
+ * implicitly as an element. Explicit steppers ignore them.
  */
 struct Forcing
 {
-    std::span<const double> tau; ///< Applied generalized forces, dofCount entries (N or N m); empty for none.
+    std::span<const double> tau;             ///< Applied generalized forces, dofCount entries (N or N m); empty for none.
+    std::span<const SiteForce> siteForces{}; ///< External forces at sites; empty for none.
+    std::span<const double> stiffness{};     ///< d(applied)/dq, row-major dofCount x dofCount, or empty.
+    std::span<const double> damping{};       ///< d(applied)/dqd, row-major dofCount x dofCount, or empty.
 };
 
 /**

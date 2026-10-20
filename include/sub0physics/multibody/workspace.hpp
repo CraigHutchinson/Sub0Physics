@@ -15,6 +15,7 @@
 #include "sub0physics/multibody/constraint.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 #include "sub0physics/multibody/model.hpp"
+#include "sub0physics/multibody/planar.hpp"
 #include "sub0physics/multibody/state.hpp"
 
 namespace sub0physics::multibody
@@ -75,10 +76,38 @@ struct ConstraintScratch
 
 
 /**
+ * The planar formulation's kinematics (Formulation::Planar), in the plane's axes: written by the dynamics, element,
+ * energy and site queries of a planar model instead of the general fields. Empty for a general model.
+ */
+struct PlanarKinematics
+{
+    /**
+     * Sizes the arrays for a model.
+     *
+     * @param bodies Bodies of a planar model, or zero for a general one.
+     */
+    explicit PlanarKinematics(std::size_t bodies)
+        : parentToBody(bodies), worldToBody(bodies), velocity(bodies), acceleration(bodies), force(bodies),
+          composite(bodies)
+    {
+    }
+
+    std::vector<PlanarTransform> parentToBody; ///< Parent frame to body frame, at q.
+    std::vector<PlanarTransform> worldToBody;  ///< World frame to body frame.
+    std::vector<PlanarMotion> velocity;        ///< Each body's velocity, in its frame.
+    std::vector<PlanarMotion> acceleration;    ///< Each body's acceleration (gravity included as -g), in its frame.
+    std::vector<PlanarForce> force;            ///< Net force each joint transmits, in its body's frame.
+    std::vector<PlanarInertia> composite;      ///< Inertia of each body's subtree, in its frame.
+};
+
+/**
  * Preallocated scratch and results for one model's kinematics and dynamics.
  *
  * Sized once from the model; the algorithms write into it and never resize it, so a step does not
- * allocate. Fields hold the results of the last algorithm that wrote them (documented on each
+ * allocate. For a model with Formulation::Planar the dynamics, element, energy and site queries write the compact
+ * `planar` kinematics instead of the general kinematic fields (parentToBody, bodyVelocity, bodyAcceleration,
+ * bodyForce, compositeInertia, worldToBody, bodyPose); updateKinematics, computeReactions and the constrained steps
+ * write the general ones. Fields hold the results of the last algorithm that wrote them (documented on each
  * function) and are meant to be read, not resized. Matrices are row-major `dofCount x dofCount`.
  * Use one workspace per thread.
  *
@@ -119,6 +148,8 @@ struct Workspace
           constraintForce(model.constraintRowCount(), 0.0),
           constraintSiteWrenches(model.constraintWrenchCount()),
           jointReactions(model.bodyCount()),
+          appliedForce(dof, 0.0),
+          planar(model.formulation() == Formulation::Planar ? model.bodyCount() : 0U),
           constraintScratch(dof, model.constraintRowCount(), model.limits().size(), model)
     {
     }
@@ -177,6 +208,9 @@ struct Workspace
     std::vector<ConstraintSiteWrench> constraintSiteWrenches; ///< From computeReactions: two per closure and per distance limit (first site, then second).
     std::vector<JointReaction> jointReactions; ///< From computeReactions: the wrench each joint transmits to its body.
     ConstraintReport constraintReport{};    ///< What the last step or projection achieved against the requested targets.
+
+    std::vector<double> appliedForce; ///< The last step's applied generalized force: Forcing::tau plus the site forces mapped through their Jacobians [N or N m].
+    PlanarKinematics planar;          ///< The planar formulation's kinematics (Formulation::Planar); empty otherwise.
     ConstraintScratch constraintScratch;    ///< Solver scratch; internal.
 };
 

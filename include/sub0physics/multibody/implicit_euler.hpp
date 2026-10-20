@@ -15,6 +15,17 @@ namespace sub0physics::multibody
 {
 
 /**
+ * Which Jacobians the linearly implicit Euler step treats implicitly: a discrete lever (docs/LOD.md) between the
+ * reference stepper and MuJoCo's `implicitfast` structure.
+ */
+enum class ImplicitTerms : std::uint8_t
+{
+    Full,              ///< D and K, including the tendons' geometric and rate-transport terms (default).
+    MaterialStiffness, ///< D and the material part of K only (geometric stiffness off).
+    DampingOnly        ///< D only: springs and stiffness explicit, as MuJoCo's `implicitfast`.
+};
+
+/**
  * Advances a state by one linearly implicit Euler step on velocities (docs/MULTIBODY.md section 5): the
  * default stepper, stable for stiff force elements because they enter through their own Jacobians.
  *
@@ -53,16 +64,21 @@ namespace sub0physics::multibody
  * @param state State at tick; replaced by the state at tick + 1 only on success.
  * @param workspace Workspace built for the model; on success `qdd` holds `dqd / h` and the element and
  *        implicit-matrix fields hold the start of the step.
+ * @param terms Which Jacobians are implicit; the default, Full, is described above. The forcing's Jacobians follow
+ *        the same choice (its stiffness is dropped with DampingOnly).
  * @return Nothing, or the fault: InvalidInput (step size, tick, sizes, a workspace built for another model,
  *         a matrix that is not positive definite), OutsideDomain (an element) or NonFiniteState.
  */
 [[nodiscard]] std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const Forcing& forcing,
                                                                    std::uint64_t tick, sub0math::f64::Time h,
-                                                                   State& state, Workspace& workspace) noexcept;
+                                                                   State& state, Workspace& workspace,
+                                                                   ImplicitTerms terms = ImplicitTerms::Full) noexcept;
 
-/** The linearly implicit Euler step as a Stepper; stateless. */
+/** The linearly implicit Euler step as a Stepper; its one lever is which Jacobians are implicit. */
 struct LinearlyImplicitEuler
 {
+    ImplicitTerms terms = ImplicitTerms::Full; ///< Which Jacobians are implicit.
+
     /** Integrator order. */
     static constexpr int Order = 1;
 
@@ -81,7 +97,7 @@ struct LinearlyImplicitEuler
                                                   sub0math::f64::Time h, State& state,
                                                   Workspace& workspace) const noexcept
     {
-        return stepLinearlyImplicitEuler(model, forcing, tick, h, state, workspace);
+        return stepLinearlyImplicitEuler(model, forcing, tick, h, state, workspace, terms);
     }
 };
 

@@ -26,7 +26,7 @@ namespace sub0physics::multibody
  *
  * Bodies are numbered in the order they are added, and a joint's parent must already exist, so the
  * numbering is a topological order of the tree. Nothing is checked until `build`, which validates the
- * whole description at once: positive mass, positive definite inertia whose principal moments obey the
+ * whole description at once: positive mass (or a massless body that only carries a joint), positive definite inertia whose principal moments obey the
  * triangle inequality, unit axes and rotations, finite values, unique non-empty names, resolved
  * references, force elements whose law suits what it is bound to (a law on a length on a prismatic
  * joint or a tendon, a law on an angle on a revolute joint), and constraints with resolved sites on two
@@ -150,6 +150,18 @@ public:
     }
 
     /**
+     * Chooses how the model's dynamics are evaluated (Model::formulation). Automatic, the default, selects the
+     * planar formulation when the model qualifies (PlanarModel) and the general one otherwise; General forces the
+     * 3D formulation; Planar requires the planar one, and `build` refuses a model that does not qualify.
+     *
+     * @param formulation The request.
+     */
+    void setFormulation(Formulation formulation) noexcept
+    {
+        formulation_ = formulation;
+    }
+
+    /**
      * Validates the description and compiles it.
      *
      * @return The model, or the first fault found (FaultKind::InvalidInput) naming what is wrong.
@@ -187,6 +199,7 @@ private:
 
     [[nodiscard]] std::expected<void, Fault> compileElements(Model& model) const;
     [[nodiscard]] std::expected<void, Fault> compileConstraints(Model& model) const;
+    [[nodiscard]] std::expected<void, Fault> compileFormulation(Model& model) const;
 
     template<typename Description>
     ConstraintId addConstraintDescription(std::string_view name, Description description)
@@ -213,6 +226,7 @@ private:
     std::vector<ConstraintDescription> constraints_;
     std::vector<std::string> constraintNames_;
     ConstraintSettings constraintSettings_{};
+    Formulation formulation_ = Formulation::Automatic;
     sub0math::Vec3<sub0math::f64::Acceleration> gravity_{
         sub0math::f64::Acceleration{}, sub0math::f64::Acceleration{},
         sub0math::f64::Acceleration::fromSi(-StandardGravity)};

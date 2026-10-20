@@ -793,15 +793,15 @@ struct Trial
 };
 
 std::expected<Trial, Fault> trialStep(const Model& model, const Forcing& forcing, double h, Workspace& ws,
-                                      bool implicit, bool allowFallback) noexcept
+                                      bool implicit, ImplicitTerms terms, bool allowFallback) noexcept
 {
     ConstraintScratch& sc = ws.constraintScratch;
     const ConstraintSettings& settings = model.constraintSettings();
     const std::size_t n = model.dofCount();
     const State& start = sc.start;
-    const auto dense = detail::formStepMatrix(model, start, forcing.tau,
+    const auto dense = detail::formStepMatrix(model, start, forcing,
                                               model.elementCount() > 0 ? sc.elementForce.data() : nullptr, ws, h,
-                                              implicit, allowFallback);
+                                              implicit, terms, allowFallback);
     if (!dense)
     {
         return std::unexpected(dense.error());
@@ -913,11 +913,11 @@ std::expected<Trial, Fault> trialStep(const Model& model, const Forcing& forcing
 }
 
 // The start of a sub-step: dynamics at sc.start, the start's element force, the engaged limits and their rows.
-std::expected<void, Fault> prepareSubstep(const Model& model, Workspace& ws, bool implicit) noexcept
+std::expected<void, Fault> prepareSubstep(const Model& model, Workspace& ws, bool implicit, ImplicitTerms terms) noexcept
 {
     ConstraintScratch& sc = ws.constraintScratch;
     const ConstraintSettings& settings = model.constraintSettings();
-    if (auto prepared = detail::prepareStepDynamics(model, sc.start, ws, implicit); !prepared)
+    if (auto prepared = detail::prepareStepDynamics(model, sc.start, ws, implicit, terms); !prepared)
     {
         return prepared;
     }
@@ -944,7 +944,7 @@ namespace detail
 {
 
 std::expected<void, Fault> stepConstrained(const Model& model, const Forcing& forcing, double dt, State& state,
-                                           Workspace& ws, bool implicit) noexcept
+                                           Workspace& ws, bool implicit, ImplicitTerms terms) noexcept
 {
     ConstraintScratch& sc = ws.constraintScratch;
     ConstraintReport& report = ws.constraintReport;
@@ -979,7 +979,7 @@ std::expected<void, Fault> stepConstrained(const Model& model, const Forcing& fo
     double projectionEnergy = 0.0;
     for (;;)
     {
-        if (auto prepared = prepareSubstep(model, ws, implicit); !prepared)
+        if (auto prepared = prepareSubstep(model, ws, implicit, terms); !prepared)
         {
             return prepared;
         }
@@ -992,7 +992,7 @@ std::expected<void, Fault> stepConstrained(const Model& model, const Forcing& fo
             }
         }
         const double h = remaining * dt;
-        auto trial = trialStep(model, forcing, h, ws, implicit, true);
+        auto trial = trialStep(model, forcing, h, ws, implicit, terms, true);
         if (!trial)
         {
             return std::unexpected(trial.error());
@@ -1021,7 +1021,7 @@ std::expected<void, Fault> stepConstrained(const Model& model, const Forcing& fo
                     theta = 0.5 * (lo + hi);
                 }
                 ++report.eventIterations;
-                trial = trialStep(model, forcing, theta * h, ws, implicit, false);
+                trial = trialStep(model, forcing, theta * h, ws, implicit, terms, false);
                 if (!trial)
                 {
                     return std::unexpected(trial.error());
@@ -1222,13 +1222,21 @@ std::expected<void, Fault> projectConstraints(const Model& model, State& state, 
 std::expected<void, Fault> computeReactions(const Model& model, const State& state, std::span<const double> tau,
                                             Workspace& workspace) noexcept
 {
-    if (auto accelerated = forwardDynamics(model, state, tau, workspace); !accelerated)
+    return computeReactionsWithForcing(model, state, Forcing{tau}, workspace);
+}
+
+std::expected<void, Fault> computeReactionsWithForcing(const Model& model, const State& state, const Forcing& forcing,
+                                            Workspace& workspace) noexcept
+{
+    if (auto accelerated = forwardDynamicsWithForcing(model, state, forcing, workspace); !accelerated)
     {
         return accelerated;
     }
     Workspace& ws = workspace;
     ConstraintScratch& sc = ws.constraintScratch;
     const std::size_t n = model.dofCount();
+    // The general kinematics at the state (a planar model's dynamics wrote only the planar ones).
+    detail::updateTransforms<true>(model, state, ws);
     detail::composeWorldTransforms(model, ws);
     std::ranges::fill(sc.bodyExternal, sub0math::SpatialForced{});
     // A world wrench (force through world point p, plus a moment) on a body, in its frame about its origin.
@@ -1245,6 +1253,11 @@ std::expected<void, Fault> computeReactions(const Model& model, const State& sta
     {
         const SitePoint p = sitePoint(model, ws, w.site);
         addWrench(p.body, p.position, w.force, w.moment);
+    }
+    for (const SiteForce& f : forcing.siteForces)
+    {
+        const SitePoint p = sitePoint(model, ws, f.site);
+        addWrench(p.body, p.position, f.force, f.moment);
     }
     for (const LoopClosure& closure : model.closures())
     {

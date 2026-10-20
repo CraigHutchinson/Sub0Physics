@@ -56,6 +56,22 @@ struct SiteKinematics
                                                                          SiteId site, Workspace& workspace) noexcept;
 
 /**
+ * Computes several sites' poses and velocities at one state, updating the kinematics once.
+ *
+ * @param model The model.
+ * @param state Coordinates and rates.
+ * @param sites Sites of the model.
+ * @param out One result per site, in the same order.
+ * @param workspace Workspace built for the model; its kinematics are updated (the planar ones for a planar model).
+ * @return Nothing, or InvalidInput for a site that is not in the model, an output of another length, a workspace
+ *         built for another model or a state that is not sized for this one.
+ */
+[[nodiscard]] std::expected<void, Fault> computeSiteKinematics(const Model& model, const State& state,
+                                                              std::span<const SiteId> sites,
+                                                              std::span<SiteKinematics> out,
+                                                              Workspace& workspace) noexcept;
+
+/**
  * Computes the translational Jacobian of a site's origin: its world velocity is `J qd`.
  *
  * @param model The model.

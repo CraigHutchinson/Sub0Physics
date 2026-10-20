@@ -21,8 +21,11 @@
 #include <sub0math/linear/spatial_inertia.hpp>
 #include <sub0math/linear/vec.hpp>
 
+#include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/model_builder.hpp"
+#include "sub0physics/multibody/state.hpp"
+#include "sub0physics/multibody/workspace.hpp"
 
 namespace sub0physics::multibody
 {
@@ -115,6 +118,15 @@ bool satisfiesTriangleInequality(const sub0math::Mat3d& inertia)
     return i[2] <= (i[0] + i[1]) * (1.0 + RelativeTolerance);
 }
 
+// A massless body: mass and every inertia entry exactly zero.
+bool isMassless(const BodyDescription& body)
+{
+    const auto& m = body.inertia.moments;
+    const auto& p = body.inertia.products;
+    return body.mass.si() == 0.0 && m.x.si() == 0.0 && m.y.si() == 0.0 && m.z.si() == 0.0 && p.x.si() == 0.0 &&
+           p.y.si() == 0.0 && p.z.si() == 0.0;
+}
+
 std::optional<Fault> checkBody(const BodyDescription& body, std::uint32_t index, const std::vector<std::string>& names)
 {
     if (body.name.empty())
@@ -128,20 +140,24 @@ std::optional<Fault> checkBody(const BodyDescription& body, std::uint32_t index,
             return Fault{FaultKind::InvalidInput, "body name is not unique"};
         }
     }
-    if (!std::isfinite(body.mass.si()) || !(body.mass.si() > 0.0))
-    {
-        return Fault{FaultKind::InvalidInput, "body mass must be finite and positive"};
-    }
     const auto com = body.centreOfMass - sub0math::Point3<sub0math::f64::Length>::origin();
     if (!isFinite(com) || !isFinite(body.inertia.moments) || !isFinite(body.inertia.products))
     {
         return Fault{FaultKind::InvalidInput, "body centre of mass and inertia must be finite"};
     }
-    if (!isPositiveDefinite(inertiaMatrix(body.inertia)))
+    if (isMassless(body))
+    {
+        // A body that only carries a joint; build checks that the mass matrix stays positive definite.
+    }
+    else if (!std::isfinite(body.mass.si()) || !(body.mass.si() > 0.0))
+    {
+        return Fault{FaultKind::InvalidInput, "body mass must be finite and positive (or zero with zero inertia)"};
+    }
+    else if (!isPositiveDefinite(inertiaMatrix(body.inertia)))
     {
         return Fault{FaultKind::InvalidInput, "body inertia must be positive definite"};
     }
-    if (!satisfiesTriangleInequality(inertiaMatrix(body.inertia)))
+    else if (!satisfiesTriangleInequality(inertiaMatrix(body.inertia)))
     {
         return Fault{FaultKind::InvalidInput, "body inertia violates the triangle inequality (a principal moment exceeds the sum of the other two)"};
     }
@@ -265,6 +281,7 @@ std::expected<Model, Fault> ModelBuilder::build() const
             body.mass.si(), {com.x.si(), com.y.si(), com.z.si()}, inertiaMatrix(body.inertia)));
         model.springReference_.push_back(joint.springReference);
         model.bodyName_.push_back(bodies_[i].name);
+        model.hasMasslessBodies_ = model.hasMasslessBodies_ || isMassless(body);
     }
 
     model.siteBody_.reserve(sites_.size());
@@ -310,7 +327,104 @@ std::expected<Model, Fault> ModelBuilder::build() const
 
     model.gravity_ = gravity_;
     model.baseAcceleration_ = {{}, {-gravity_.x.si(), -gravity_.y.si(), -gravity_.z.si()}};
+    if (auto compiled = compileFormulation(model); !compiled)
+    {
+        return std::unexpected(compiled.error());
+    }
+    if (model.hasMasslessBodies_)
+    {
+        // A massless body is valid only when every joint still moves some mass: M positive definite. Checked at the
+        // zero configuration (a configuration-dependent singularity, such as a massless revolute body whose
+        // children's mass lies on its axis there, faults the first step that meets it instead).
+        Workspace workspace(model);
+        const State zero = State::atRest(model);
+        if (auto mass = computeMassMatrix(model, zero, workspace); !mass)
+        {
+            return std::unexpected(mass.error());
+        }
+        if (!factorMassMatrix(model, workspace))
+        {
+            return invalidInput("a massless body leaves a joint that moves no mass: the mass matrix is singular");
+        }
+    }
     return model;
+}
+
+std::expected<void, Fault> ModelBuilder::compileFormulation(Model& model) const
+{
+    model.formulation_ = Formulation::General;
+    if (formulation_ == Formulation::General)
+    {
+        return {};
+    }
+    // The plane's normal k: the first coordinate axis (z, then y, then x) for which every test holds exactly.
+    const std::size_t n = model.parent_.size();
+    const std::array<double, 3> gravity{model.gravity_.x.si(), model.gravity_.y.si(), model.gravity_.z.si()};
+    for (const std::size_t k : {std::size_t{2}, std::size_t{1}, std::size_t{0}})
+    {
+        const std::size_t i = (k + 1) % 3;
+        const std::size_t j = (k + 2) % 3;
+        if (gravity[k] != 0.0)
+        {
+            continue;
+        }
+        PlanarModel planar{.normal = k, .axisI = i, .axisJ = j, .gravityX = gravity[i], .gravityY = gravity[j],
+                           .bodies = {}, .siteX = {}, .siteY = {}, .siteNormal = {}};
+        planar.bodies.reserve(n);
+        std::vector<double> normalOffset(n, 0.0); // each body origin's world k coordinate
+        bool qualifies = true;
+        for (std::size_t b = 0; b < n; ++b)
+        {
+            const sub0math::PluckerTransformd& tree = model.treeTransform_[b];
+            const sub0math::Mat3d& e = tree.rotation;
+            const sub0math::Vec3d& axis = model.axis_[b];
+            const bool revolute = model.jointType_[b] == JointType::Revolute;
+            if (e(k, i) != 0.0 || e(k, j) != 0.0 || e(i, k) != 0.0 || e(j, k) != 0.0 || e(k, k) != 1.0 ||
+                (revolute ? (axis[i] != 0.0 || axis[j] != 0.0) : axis[k] != 0.0))
+            {
+                qualifies = false;
+                break;
+            }
+            const sub0math::SpatialInertiad& inertia = model.inertia_[b];
+            // E = R^T for a frame rotated by theta about k: E(i, i) = cos, E(i, j) = sin.
+            planar.bodies.push_back({.placement = {e(i, i), e(i, j), tree.translation[i], tree.translation[j]},
+                                     .unrotated = model.placementUnrotated_[b] != 0U,
+                                     .revolute = revolute,
+                                     .axisSign = revolute ? axis[k] : 0.0,
+                                     .axisX = revolute ? 0.0 : axis[i],
+                                     .axisY = revolute ? 0.0 : axis[j],
+                                     .inertia = {inertia.mass, inertia.firstMoment[i], inertia.firstMoment[j],
+                                                 inertia.rotational(k, k)}});
+            const std::size_t p = model.parent_[b];
+            normalOffset[b] = (p == NoParent ? 0.0 : normalOffset[p]) + tree.translation[k];
+        }
+        if (!qualifies)
+        {
+            continue;
+        }
+        const std::size_t sites = model.siteBody_.size();
+        planar.siteX.reserve(sites);
+        planar.siteY.reserve(sites);
+        planar.siteNormal.reserve(sites);
+        for (std::size_t s = 0; s < sites; ++s)
+        {
+            const auto& t = model.siteFrame_[s].translation;
+            const std::array<double, 3> offset{t.x.si(), t.y.si(), t.z.si()};
+            const std::size_t body = model.siteBody_[s];
+            planar.siteX.push_back(offset[i]);
+            planar.siteY.push_back(offset[j]);
+            planar.siteNormal.push_back((body == NoParent ? 0.0 : normalOffset[body]) + offset[k]);
+        }
+        model.formulation_ = Formulation::Planar;
+        model.planar_ = std::move(planar);
+        return {};
+    }
+    if (formulation_ == Formulation::Planar)
+    {
+        return invalidInput("the planar formulation needs every revolute axis along one coordinate axis, prismatic "
+                            "axes and placement rotations in its plane, and no gravity along it");
+    }
+    return {};
 }
 
 std::expected<void, Fault> ModelBuilder::compileElements(Model& model) const

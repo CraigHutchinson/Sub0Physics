@@ -20,6 +20,7 @@ add_executable(Sub0Physics_Tests
     test_multibody.cpp
     test_multibody_constraints.cpp
     test_multibody_elements.cpp
+    test_multibody_planar.cpp
     test_polyline_profile.cpp
     test_prepared_profile.cpp
     test_terrain_extract.cpp

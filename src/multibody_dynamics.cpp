@@ -11,6 +11,7 @@
 #include <sub0math/linear/spatial_motion.hpp>
 
 #include "multibody_joint.hpp"
+#include "multibody_planar.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/implicit_euler.hpp"
 #include "sub0physics/multibody/stepper.hpp"
@@ -229,14 +230,23 @@ void solveDense(std::size_t n, const double* a, double* x) noexcept
     }
 }
 
-// Elements at a state whose parent-to-body transforms are in the workspace.
-std::expected<void, Fault> addElements(const Model& model, const State& state, Workspace& ws, bool jacobians) noexcept
+// Elements at a state whose parent-to-body transforms are in the workspace (planar ones for a planar model).
+std::expected<void, Fault> addElements(const Model& model, const State& state, Workspace& ws, bool jacobians,
+                                       bool geometricStiffness = true) noexcept
 {
+    const bool planar = detail::isPlanar(model);
     if (model.tendonCount() > 0)
     {
-        detail::composeWorldTransforms(model, ws);
+        if (planar)
+        {
+            detail::planarWorldTransforms(model, ws);
+        }
+        else
+        {
+            detail::composeWorldTransforms(model, ws);
+        }
     }
-    return detail::evaluateElementsUnchecked(model, state, ws, jacobians);
+    return detail::evaluateElementsUnchecked(model, state, ws, jacobians, geometricStiffness, planar);
 }
 
 [[nodiscard]] std::expected<void, Fault> checkStep(const Model& model, const Forcing& forcing, std::uint64_t tick,
@@ -254,23 +264,29 @@ std::expected<void, Fault> addElements(const Model& model, const State& state, W
     {
         return checked;
     }
-    if (!forcing.tau.empty() && forcing.tau.size() != model.dofCount())
-    {
-        return invalidInput("forcing needs tau of dofCount entries, or none");
-    }
-    return {};
+    return detail::checkForcing(model, forcing);
 }
 
 // The start of an implicit (or constrained) step: transforms, velocities, bias forces, mass matrix and the elements
 // (with their Jacobians when asked).
-std::expected<void, Fault> prepareStep(const Model& model, const State& state, Workspace& ws, bool jacobians) noexcept
+std::expected<void, Fault> prepareStep(const Model& model, const State& state, Workspace& ws, bool jacobians,
+                                       bool geometricStiffness = true) noexcept
 {
-    detail::updateTransforms<true>(model, state, ws);
-    recursiveNewtonEuler<false>(model, state, nullptr, ws.bias.data(), ws);
-    compositeRigidBody(model, ws);
+    if (detail::isPlanar(model))
+    {
+        detail::planarTransforms<true>(model, state, ws);
+        detail::planarNewtonEuler<false>(model, state, nullptr, ws.bias.data(), ws);
+        detail::planarCompositeRigidBody(model, ws);
+    }
+    else
+    {
+        detail::updateTransforms<true>(model, state, ws);
+        recursiveNewtonEuler<false>(model, state, nullptr, ws.bias.data(), ws);
+        compositeRigidBody(model, ws);
+    }
     if (model.elementCount() > 0)
     {
-        return addElements(model, state, ws, jacobians);
+        return addElements(model, state, ws, jacobians, geometricStiffness);
     }
     return {};
 }
@@ -278,19 +294,22 @@ std::expected<void, Fault> prepareStep(const Model& model, const State& state, W
 // Forms and factorises the step matrix in `implicitMatrix` and its right-hand side in `implicitRhs`:
 // implicit: (M - h D - h^2 K~) dqd = h (tau + tau_e - c + h K~ qd), with K~ the symmetric part of K (a valid
 // linearization for a W-method: the step stays first order with any Jacobian; only stability depends on it);
-// explicit: M dqd = h (tau + tau_e - c). Only the lower triangle is formed; both factorisations read only it.
-// Needs prepareStep at `state`; `elementForce` is tau_e (null without elements). Returns whether the factor is
-// dense (else along the tree). The geometric fallback re-evaluates the elements, so it needs the start's transforms
-// (`allowFallback`).
-std::expected<bool, Fault> formStepSystem(const Model& model, const State& state, std::span<const double> tau,
+// explicit: M dqd = h (tau + tau_e - c). D and K are the elements' plus the forcing's; DampingOnly drops K. Only the
+// lower triangle is formed; both factorisations read only it. Needs prepareStep at `state`; `elementForce` is tau_e
+// (null without elements). Returns whether the factor is dense (else along the tree). The geometric fallback
+// re-evaluates the elements, so it needs the start's transforms (`allowFallback`).
+std::expected<bool, Fault> formStepSystem(const Model& model, const State& state, const Forcing& applied,
                                           const double* elementForce, Workspace& ws, double dt, bool implicit,
-                                          bool allowFallback) noexcept
+                                          ImplicitTerms terms, bool allowFallback) noexcept
 {
     const std::size_t n = model.dofCount();
     const double* qd = state.values.data() + n;
     const double* m = ws.massMatrix.data();
     const double* k = ws.elementStiffness.data();
     const double* d = ws.elementDamping.data();
+    const double* fk = applied.stiffness.empty() ? nullptr : applied.stiffness.data();
+    const double* fd = applied.damping.empty() ? nullptr : applied.damping.data();
+    const std::span<const double> tau = applied.tau;
     double* a = ws.implicitMatrix.data();
     double* b = ws.implicitRhs.data();
     const bool hasElements = model.elementCount() > 0;
@@ -302,29 +321,45 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
             double stiffnessRate = 0.0;
             for (std::size_t j = 0; j <= i; ++j)
             {
-                const double symmetric = 0.5 * (k[i * n + j] + k[j * n + i]);
-                a[i * n + j] = m[i * n + j] - hd * d[i * n + j] - h2 * symmetric;
+                double symmetric = 0.5 * (k[i * n + j] + k[j * n + i]);
+                double damping = d[i * n + j];
+                if (fk != nullptr)
+                {
+                    symmetric += 0.5 * (fk[i * n + j] + fk[j * n + i]);
+                }
+                if (fd != nullptr)
+                {
+                    damping += 0.5 * (fd[i * n + j] + fd[j * n + i]);
+                }
+                a[i * n + j] = m[i * n + j] - hd * damping - h2 * symmetric;
             }
             if (withStiffness)
             {
                 for (std::size_t j = 0; j < n; ++j)
                 {
-                    stiffnessRate += 0.5 * (k[i * n + j] + k[j * n + i]) * qd[j];
+                    double symmetric = 0.5 * (k[i * n + j] + k[j * n + i]);
+                    if (fk != nullptr)
+                    {
+                        symmetric += 0.5 * (fk[i * n + j] + fk[j * n + i]);
+                    }
+                    stiffnessRate += symmetric * qd[j];
                 }
             }
-            const double applied = tau.empty() ? 0.0 : tau[i];
+            const double force = tau.empty() ? 0.0 : tau[i];
             const double element = elementForce == nullptr ? 0.0 : elementForce[i];
-            b[i] = dt * (applied + element - ws.bias[i] + dt * stiffnessRate);
+            b[i] = dt * (force + element - ws.bias[i] + dt * stiffnessRate);
         }
     };
-    const bool dense = implicit && !model.elementsFollowTree();
+    // Forcing Jacobians may couple any coordinates: they take the dense factorisation.
+    const bool dense = implicit && (!model.elementsFollowTree() || fk != nullptr || fd != nullptr);
     const auto factor = [&]() { return dense ? factorDense(n, a, ws.elementScalars.data()) : factorTree(model, a); };
     // Without elements, K and D are zero from the workspace's construction and never written.
-    assemble(implicit && hasElements);
+    const bool stiffness = implicit && (hasElements || fk != nullptr) && terms != ImplicitTerms::DampingOnly;
+    assemble(stiffness);
     ws.geometricStiffnessDropped = false;
     if (!factor())
     {
-        if (!implicit || !hasElements || !allowFallback)
+        if (!stiffness || !hasElements || !allowFallback || terms != ImplicitTerms::Full)
         {
             return invalidInput("step matrix is not positive definite");
         }
@@ -332,7 +367,8 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
         // faster than h can follow). Fall back to the material stiffness, which is negative semidefinite for
         // passive laws, so M - h D - h^2 K_material is positive definite and stiff elements stay implicit.
         ws.geometricStiffnessDropped = true;
-        if (auto material = detail::evaluateElementsUnchecked(model, state, ws, true, false); !material)
+        if (auto material = detail::evaluateElementsUnchecked(model, state, ws, true, false, detail::isPlanar(model));
+            !material)
         {
             return std::unexpected(material.error());
         }
@@ -358,6 +394,65 @@ void solveStepSystem(const Model& model, const Workspace& ws, bool dense, double
     }
 }
 
+// The free (unconstrained) accelerations M^-1 (tau + tau_e - c) at `state`, the dynamics written on the way.
+std::expected<void, Fault> freeAccelerations(const Model& model, const State& state, std::span<const double> tau,
+                                             Workspace& ws) noexcept
+{
+    const std::size_t n = model.dofCount();
+    if (detail::isPlanar(model))
+    {
+        detail::planarTransforms<true>(model, state, ws);
+        detail::planarNewtonEuler<false>(model, state, nullptr, ws.bias.data(), ws);
+        detail::planarCompositeRigidBody(model, ws);
+    }
+    else
+    {
+        detail::updateTransforms<true>(model, state, ws);
+        recursiveNewtonEuler<false>(model, state, nullptr, ws.bias.data(), ws);
+        compositeRigidBody(model, ws);
+    }
+    if (auto factored = factorUnchecked(model, ws); !factored)
+    {
+        return factored;
+    }
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        ws.qdd[i] = (tau.empty() ? 0.0 : tau[i]) - ws.bias[i];
+    }
+    if (model.elementCount() > 0)
+    {
+        if (auto added = addElements(model, state, ws, false); !added)
+        {
+            return added;
+        }
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            ws.qdd[i] += ws.elementForce[i];
+        }
+    }
+    solveUnchecked(model, ws, ws.qdd);
+    return {};
+}
+
+// Forward dynamics after the input checks; `tau` is the applied generalized force.
+std::expected<void, Fault> forwardUnchecked(const Model& model, const State& state, std::span<const double> tau,
+                                            Workspace& ws) noexcept
+{
+    if (auto free = freeAccelerations(model, state, tau, ws); !free)
+    {
+        return free;
+    }
+    if (model.constraintCount() > 0)
+    {
+        if (detail::isPlanar(model))
+        {
+            detail::expandPlanarKinematics(model, ws, true);
+        }
+        return detail::constrainAccelerations(model, state, ws);
+    }
+    return {};
+}
+
 } // namespace
 
 std::expected<void, Fault> computeMassMatrix(const Model& model, const State& state, Workspace& workspace) noexcept
@@ -365,6 +460,12 @@ std::expected<void, Fault> computeMassMatrix(const Model& model, const State& st
     if (auto checked = detail::checkInputs(model, state, workspace); !checked)
     {
         return checked;
+    }
+    if (detail::isPlanar(model))
+    {
+        detail::planarTransforms<false>(model, state, workspace);
+        detail::planarCompositeRigidBody(model, workspace);
+        return {};
     }
     detail::updateTransforms<false>(model, state, workspace);
     compositeRigidBody(model, workspace);
@@ -376,6 +477,12 @@ std::expected<void, Fault> computeBiasForces(const Model& model, const State& st
     if (auto checked = detail::checkInputs(model, state, workspace); !checked)
     {
         return checked;
+    }
+    if (detail::isPlanar(model))
+    {
+        detail::planarTransforms<true>(model, state, workspace);
+        detail::planarNewtonEuler<false>(model, state, nullptr, workspace.bias.data(), workspace);
+        return {};
     }
     detail::updateTransforms<true>(model, state, workspace);
     recursiveNewtonEuler<false>(model, state, nullptr, workspace.bias.data(), workspace);
@@ -393,8 +500,16 @@ std::expected<void, Fault> inverseDynamics(const Model& model, const State& stat
     {
         return invalidInput("inverse dynamics needs qdd and tau of dofCount entries");
     }
-    detail::updateTransforms<true>(model, state, workspace);
-    recursiveNewtonEuler<true>(model, state, qdd.data(), tau.data(), workspace);
+    if (detail::isPlanar(model))
+    {
+        detail::planarTransforms<true>(model, state, workspace);
+        detail::planarNewtonEuler<true>(model, state, qdd.data(), tau.data(), workspace);
+    }
+    else
+    {
+        detail::updateTransforms<true>(model, state, workspace);
+        recursiveNewtonEuler<true>(model, state, qdd.data(), tau.data(), workspace);
+    }
     if (model.elementCount() > 0)
     {
         if (auto added = addElements(model, state, workspace, false); !added)
@@ -439,37 +554,46 @@ std::expected<void, Fault> forwardDynamics(const Model& model, const State& stat
     {
         return checked;
     }
-    const std::size_t n = model.dofCount();
-    if (!tau.empty() && tau.size() != n)
+    if (!tau.empty() && tau.size() != model.dofCount())
     {
         return invalidInput("forward dynamics needs tau of dofCount entries, or none");
     }
-    detail::updateTransforms<true>(model, state, workspace);
-    recursiveNewtonEuler<false>(model, state, nullptr, workspace.bias.data(), workspace);
-    compositeRigidBody(model, workspace);
-    if (auto factored = factorUnchecked(model, workspace); !factored)
+    return forwardUnchecked(model, state, tau, workspace);
+}
+
+std::expected<void, Fault> forwardDynamicsWithForcing(const Model& model, const State& state, const Forcing& forcing,
+                                           Workspace& workspace) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
     {
-        return factored;
+        return checked;
     }
-    for (std::size_t i = 0; i < n; ++i)
+    if (auto checked = detail::checkForcing(model, forcing); !checked)
     {
-        workspace.qdd[i] = (tau.empty() ? 0.0 : tau[i]) - workspace.bias[i];
+        return checked;
     }
-    if (model.elementCount() > 0)
+    const Forcing applied = detail::applyForcing(model, state, forcing, workspace);
+    return forwardUnchecked(model, state, applied.tau, workspace);
+}
+
+std::expected<void, Fault> computeAppliedForce(const Model& model, const State& state, const Forcing& forcing,
+                                               Workspace& workspace) noexcept
+{
+    if (auto checked = detail::checkInputs(model, state, workspace); !checked)
     {
-        if (auto added = addElements(model, state, workspace, false); !added)
+        return checked;
+    }
+    if (auto checked = detail::checkForcing(model, forcing); !checked)
+    {
+        return checked;
+    }
+    const Forcing applied = detail::applyForcing(model, state, forcing, workspace);
+    if (applied.tau.data() != workspace.appliedForce.data())
+    {
+        for (std::size_t i = 0; i < model.dofCount(); ++i)
         {
-            return added;
+            workspace.appliedForce[i] = applied.tau.empty() ? 0.0 : applied.tau[i];
         }
-        for (std::size_t i = 0; i < n; ++i)
-        {
-            workspace.qdd[i] += workspace.elementForce[i];
-        }
-    }
-    solveUnchecked(model, workspace, workspace.qdd);
-    if (model.constraintCount() > 0)
-    {
-        return detail::constrainAccelerations(model, state, workspace);
     }
     return {};
 }
@@ -482,11 +606,12 @@ std::expected<void, Fault> stepSemiImplicitEuler(const Model& model, const Forci
     {
         return checked;
     }
+    const Forcing applied = detail::applyForcing(model, state, forcing, workspace);
     if (model.constraintCount() > 0)
     {
-        return detail::stepConstrained(model, forcing, dt, state, workspace, false);
+        return detail::stepConstrained(model, applied, dt, state, workspace, false);
     }
-    if (auto accelerated = forwardDynamics(model, state, forcing.tau, workspace); !accelerated)
+    if (auto accelerated = forwardUnchecked(model, state, applied.tau, workspace); !accelerated)
     {
         return accelerated;
     }
@@ -508,7 +633,7 @@ std::expected<void, Fault> stepSemiImplicitEuler(const Model& model, const Forci
         qd[i] += dt * workspace.qdd[i];
         const double step = dt * qd[i];
         q[i] += step;
-        work += (forcing.tau.empty() ? 0.0 : forcing.tau[i]) * step;
+        work += (applied.tau.empty() ? 0.0 : applied.tau[i]) * step;
     }
     if (model.elementCount() > 0)
     {
@@ -520,25 +645,27 @@ std::expected<void, Fault> stepSemiImplicitEuler(const Model& model, const Forci
 }
 
 std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const Forcing& forcing, std::uint64_t tick,
-                                                     sub0math::f64::Time h, State& state, Workspace& ws) noexcept
+                                                     sub0math::f64::Time h, State& state, Workspace& ws,
+                                                     ImplicitTerms terms) noexcept
 {
     const double dt = h.si();
     if (auto checked = checkStep(model, forcing, tick, dt, state, ws); !checked)
     {
         return checked;
     }
+    const Forcing applied = detail::applyForcing(model, state, forcing, ws);
     if (model.constraintCount() > 0)
     {
-        return detail::stepConstrained(model, forcing, dt, state, ws, true);
+        return detail::stepConstrained(model, applied, dt, state, ws, true, terms);
     }
     const std::size_t n = model.dofCount();
-    if (auto prepared = prepareStep(model, state, ws, true); !prepared)
+    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full); !prepared)
     {
         return prepared;
     }
     const bool hasElements = model.elementCount() > 0;
-    const auto dense = formStepSystem(model, state, forcing.tau, hasElements ? ws.elementForce.data() : nullptr, ws,
-                                      dt, true, true);
+    const auto dense = formStepSystem(model, state, applied, hasElements ? ws.elementForce.data() : nullptr, ws, dt,
+                                      true, terms, true);
     if (!dense)
     {
         return std::unexpected(dense.error());
@@ -567,7 +694,7 @@ std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const F
         qdOut[i] += b[i];
         const double step = dt * qdOut[i];
         qOut[i] += step;
-        work += (forcing.tau.empty() ? 0.0 : forcing.tau[i]) * step;
+        work += (applied.tau.empty() ? 0.0 : applied.tau[i]) * step;
     }
     if (hasElements)
     {
@@ -581,22 +708,121 @@ std::expected<void, Fault> stepLinearlyImplicitEuler(const Model& model, const F
 namespace detail
 {
 
-std::expected<void, Fault> prepareStepDynamics(const Model& model, const State& state, Workspace& ws,
-                                               bool elementJacobians) noexcept
+std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forcing) noexcept
 {
-    if (auto prepared = prepareStep(model, state, ws, elementJacobians); !prepared)
+    const std::size_t n = model.dofCount();
+    if (!forcing.tau.empty() && forcing.tau.size() != n)
+    {
+        return invalidInput("forcing needs tau of dofCount entries, or none");
+    }
+    if ((!forcing.stiffness.empty() && forcing.stiffness.size() != n * n) ||
+        (!forcing.damping.empty() && forcing.damping.size() != n * n))
+    {
+        return invalidInput("forcing Jacobians need dofCount x dofCount entries, or none");
+    }
+    for (const SiteForce& f : forcing.siteForces)
+    {
+        if (f.site.value() >= model.siteCount())
+        {
+            return invalidInput("site force names a site that is not in the model");
+        }
+    }
+    return {};
+}
+
+Forcing applyForcing(const Model& model, const State& state, const Forcing& forcing, Workspace& ws) noexcept
+{
+    if (forcing.siteForces.empty())
+    {
+        return forcing; // nothing to map: the caller's tau runs as given
+    }
+    const std::size_t n = model.dofCount();
+    double* out = ws.appliedForce.data();
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        out[i] = forcing.tau.empty() ? 0.0 : forcing.tau[i];
+    }
+    const auto parents = model.parents();
+    if (isPlanar(model))
+    {
+        planarTransforms<false>(model, state, ws);
+        planarWorldTransforms(model, ws);
+        const PlanarModel& pm = model.planar();
+        for (const SiteForce& f : forcing.siteForces)
+        {
+            const std::size_t body = model.siteBodies()[f.site.value()];
+            if (body == NoParent)
+            {
+                continue;
+            }
+            const PlanarPoint p = planarSitePoint(model, ws, f.site.value());
+            const double fx = f.force[pm.axisI];
+            const double fy = f.force[pm.axisJ];
+            const double mk = f.moment[pm.normal];
+            for (std::size_t j = body; j != NoParent; j = parents[j])
+            {
+                const PlanarBody& b = pm.bodies[j];
+                const PlanarTransform& x = ws.planar.worldToBody[j];
+                if (b.revolute)
+                {
+                    out[j] += b.axisSign * (mk + (p.x - x.x) * fy - (p.y - x.y) * fx);
+                }
+                else
+                {
+                    out[j] += (x.c * b.axisX - x.s * b.axisY) * fx + (x.s * b.axisX + x.c * b.axisY) * fy;
+                }
+            }
+        }
+    }
+    else
+    {
+        updateTransforms<false>(model, state, ws);
+        composeWorldTransforms(model, ws);
+        const auto subspace = model.motionSubspaces();
+        for (const SiteForce& f : forcing.siteForces)
+        {
+            const std::size_t body = model.siteBodies()[f.site.value()];
+            if (body == NoParent)
+            {
+                continue;
+            }
+            const sub0math::PluckerTransformd& xb = ws.worldToBody[body];
+            const auto& offset = model.siteFrame(f.site).translation;
+            const sub0math::Vec3d p =
+                xb.translation + bodyToWorld(xb.rotation, sub0math::Vec3d{offset.x.si(), offset.y.si(), offset.z.si()});
+            for (std::size_t j = body; j != NoParent; j = parents[j])
+            {
+                const sub0math::PluckerTransformd& x = ws.worldToBody[j];
+                const sub0math::Vec3d omega = bodyToWorld(x.rotation, subspace[j].angular);
+                const sub0math::Vec3d linear = bodyToWorld(x.rotation, subspace[j].linear);
+                out[j] += dot(linear + cross(omega, p - x.translation), f.force) + dot(omega, f.moment);
+            }
+        }
+    }
+    return Forcing{ws.appliedForce, {}, forcing.stiffness, forcing.damping};
+}
+
+std::expected<void, Fault> prepareStepDynamics(const Model& model, const State& state, Workspace& ws,
+                                               bool elementJacobians, ImplicitTerms terms) noexcept
+{
+    if (auto prepared = prepareStep(model, state, ws, elementJacobians, terms == ImplicitTerms::Full); !prepared)
     {
         return prepared;
+    }
+    if (isPlanar(model))
+    {
+        expandPlanarKinematics(model, ws, true);
+        return {};
     }
     composeWorldTransforms(model, ws);
     return {};
 }
 
-std::expected<bool, Fault> formStepMatrix(const Model& model, const State& state, std::span<const double> tau,
+std::expected<bool, Fault> formStepMatrix(const Model& model, const State& state, const Forcing& applied,
                                           const double* elementForce, Workspace& ws, double dt, bool implicit,
-                                          bool allowFallback) noexcept
+                                          ImplicitTerms terms, bool allowFallback) noexcept
 {
-    return formStepSystem(model, state, tau, elementForce, ws, dt, implicit, allowFallback);
+    return formStepSystem(model, state, applied, elementForce, ws, dt, implicit, terms, allowFallback);
 }
 
 void solveStepMatrix(const Model& model, const Workspace& ws, bool dense, double* x) noexcept

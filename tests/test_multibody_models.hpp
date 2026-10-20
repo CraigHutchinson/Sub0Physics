@@ -108,11 +108,11 @@ struct PlanarTreeElements
 };
 
 /**
- * The planar tree with two force elements: a linear spring-damper on the cart's coordinate, and a preloaded
+ * The planar tree with two force elements, as a builder: a linear spring-damper on the cart's coordinate, and a preloaded
  * strut (an axial spring-damper on compression) between the tips of the first and the last branch, which
  * couples the branches.
  */
-inline Model planarTreeWithElements(const PlanarTreeElements& p = {})
+inline ModelBuilder planarTreeWithElementsBuilder(const PlanarTreeElements& p = {})
 {
     using namespace sub0math;
     ModelBuilder builder = planarTreeBuilder();
@@ -134,7 +134,13 @@ inline Model planarTreeWithElements(const PlanarTreeElements& p = {})
                                                         .reboundDamping = f64::Damping::fromSi(p.strutDamping)}),
         .sense = LawSense::Decreasing,
         .reference = metres(p.strutReference)});
-    return *builder.build();
+    return builder;
+}
+
+/** The planar tree with its two elements; see planarTreeWithElementsBuilder. */
+inline Model planarTreeWithElements(const PlanarTreeElements& p = {})
+{
+    return *planarTreeWithElementsBuilder(p).build();
 }
 
 /** Geometry and masses of sliderCrank(). */

@@ -557,7 +557,7 @@ TEST_CASE("Model builder validates the description")
         BodyDescription d = body("a");
         d.mass = sub0math::kilograms(0.0);
         b.addBody(d);
-        CHECK(faultOf(b) == "body mass must be finite and positive");
+        CHECK(faultOf(b) == "body mass must be finite and positive (or zero with zero inertia)");
     }
     {
         ModelBuilder b;

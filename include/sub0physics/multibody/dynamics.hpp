@@ -7,6 +7,7 @@
 #include "sub0physics/fault.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/state.hpp"
+#include "sub0physics/multibody/stepper.hpp"
 #include "sub0physics/multibody/workspace.hpp"
 
 // Rigid-body dynamics of a tree, M(q) qdd + c(q, qd) = tau + tau_e(q, qd) (docs/MULTIBODY.md section 3), where
@@ -137,6 +138,36 @@ enum class ElementJacobians : std::uint8_t
                                                          std::span<const double> tau, Workspace& workspace) noexcept;
 
 /**
+ * Maps a forcing to generalized coordinates: `appliedForce = tau + sum J_s^T [moment; force]` over its site forces,
+ * with each site's Jacobian at `state`.
+ *
+ * @param model The model.
+ * @param state Coordinates.
+ * @param forcing The external input.
+ * @param workspace Workspace built for the model; `appliedForce` receives the result, and the kinematics are updated
+ *        when there are site forces.
+ * @return Nothing, or InvalidInput for a forcing of the wrong sizes, a site that is not in the model, a workspace
+ *         built for another model or a state that is not sized for this one.
+ */
+[[nodiscard]] std::expected<void, Fault> computeAppliedForce(const Model& model, const State& state,
+                                                             const Forcing& forcing, Workspace& workspace) noexcept;
+
+/**
+ * Computes the generalized accelerations under a forcing: as forwardDynamics with `tau`, where the applied force
+ * is `forcing.tau` plus each site force mapped through its site's Jacobian (written to `appliedForce`). The
+ * forcing's Jacobians are not used.
+ *
+ * @param model The model.
+ * @param state Coordinates and rates.
+ * @param forcing The external input.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or a fault, as forwardDynamics; InvalidInput also for a forcing of the wrong sizes or a site
+ *         force on a site that is not in the model.
+ */
+[[nodiscard]] std::expected<void, Fault> forwardDynamicsWithForcing(const Model& model, const State& state, const Forcing& forcing,
+                                                         Workspace& workspace) noexcept;
+
+/**
  * Projects a state onto its model's constraints (docs/MULTIBODY.md section 6): positions onto the loop closures and
  * the violated limits by Gauss-Newton in the mass metric, `dq = -M^-1 J^T (J M^-1 J^T)^-1 phi`, until the residual
  * meets ConstraintSettings::closureTolerance; coordinate limits still violated are then set to their bound; and
@@ -176,5 +207,19 @@ enum class ElementJacobians : std::uint8_t
  */
 [[nodiscard]] std::expected<void, Fault> computeReactions(const Model& model, const State& state,
                                                           std::span<const double> tau, Workspace& workspace) noexcept;
+
+/**
+ * Computes the joint reactions and constraint site loads under a forcing, as computeReactions with `tau`; each site
+ * force acts as an external wrench on its body where it is applied (not in the joints), so the reactions carry it
+ * through the tree as a contact load would.
+ *
+ * @param model The model.
+ * @param state Coordinates and rates.
+ * @param forcing The external input; its Jacobians are not used.
+ * @param workspace Workspace built for the model.
+ * @return Nothing, or the forwardDynamics fault.
+ */
+[[nodiscard]] std::expected<void, Fault> computeReactionsWithForcing(const Model& model, const State& state,
+                                                          const Forcing& forcing, Workspace& workspace) noexcept;
 
 } // namespace sub0physics::multibody

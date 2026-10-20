@@ -9,6 +9,7 @@
 #include <sub0math/units/quantities.hpp>
 
 #include "multibody_joint.hpp"
+#include "multibody_planar.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 
@@ -65,43 +66,101 @@ bool TendonElement<L>::evaluate(const ElementInputs& in, ElementOutputs& out) co
     const Workspace& ws = in.workspace;
     const std::size_t n = model.dofCount();
     const std::size_t m = support.size();
-    const sub0math::Vec3d p1 = sitePosition(model, ws, first);
-    const sub0math::Vec3d p2 = sitePosition(model, ws, second);
-    const sub0math::Vec3d d = p1 - p2;
-    const double l = std::sqrt(dot(d, d));
-    if (!(l > 0.0) || !std::isfinite(l))
-    {
-        return false;
-    }
-    const double inverseLength = 1.0 / l;
-    const sub0math::Vec3d u = d * inverseLength;
 
     // Over the support: the first site's Jacobian column J1, the difference Jd = J1 - J2, u x w for a
     // revolute joint's world axis w (zero for a prismatic one), and the length Jacobian Jl = u . Jd.
+    // The planar formulation stores these as (i, j, 0) in the plane's axes: every product below is a dot product
+    // between them, which a change of axes does not change.
     sub0math::Vec3d* j1 = out.vectors.data();
     sub0math::Vec3d* jd = j1 + n;
     sub0math::Vec3d* uw = jd + n;
     double* jl = out.scalars.data();
     double* g = jl + n;
     double* hessian = g + n;
-    const auto types = model.jointTypes();
-    const auto axes = model.jointAxes();
     const double* qd = in.state.values.data() + n;
     double rate = 0.0;
-    for (std::size_t a = 0; a < m; ++a)
+    double l = 0.0;
+    sub0math::Vec3d u{};      // in the axes the columns use
+    sub0math::Vec3d uWorld{}; // in world axes, for the site wrenches
+    if (in.planar)
     {
-        const std::size_t body = support[a];
-        const sub0math::PluckerTransformd& x = ws.worldToBody[body];
-        const sub0math::Vec3d w = detail::bodyToWorld(x.rotation, axes[body]);
-        const bool revolute = types[body] == JointType::Revolute;
-        const sub0math::Vec3d c1 = onFirst[a] != 0U ? (revolute ? cross(w, p1 - x.translation) : w) : sub0math::Vec3d{};
-        const sub0math::Vec3d c2 = onSecond[a] != 0U ? (revolute ? cross(w, p2 - x.translation) : w) : sub0math::Vec3d{};
-        j1[a] = c1;
-        jd[a] = c1 - c2;
-        uw[a] = revolute ? cross(u, w) : sub0math::Vec3d{};
-        jl[a] = dot(u, jd[a]);
-        rate += jl[a] * qd[supportCoordinates[a]];
+        const PlanarModel& pm = model.planar();
+        const detail::PlanarPoint p1 = detail::planarSitePoint(model, ws, first.value());
+        const detail::PlanarPoint p2 = detail::planarSitePoint(model, ws, second.value());
+        const double dx = p1.x - p2.x;
+        const double dy = p1.y - p2.y;
+        const double dk = pm.siteNormal[first.value()] - pm.siteNormal[second.value()];
+        l = std::sqrt(dx * dx + dy * dy + dk * dk);
+        if (!(l > 0.0) || !std::isfinite(l))
+        {
+            return false;
+        }
+        const double inverse = 1.0 / l;
+        u = {dx * inverse, dy * inverse, 0.0};
+        uWorld = detail::planarVectorToWorld(pm, dx * inverse, dy * inverse, dk * inverse);
+        for (std::size_t a = 0; a < m; ++a)
+        {
+            const std::size_t body = support[a];
+            const PlanarBody& b = pm.bodies[body];
+            const PlanarTransform& x = ws.planar.worldToBody[body];
+            sub0math::Vec3d c1{};
+            sub0math::Vec3d c2{};
+            if (b.revolute)
+            {
+                // w = sigma k: w x (p - o) = sigma (-(p - o).y, (p - o).x); u x w = sigma (u.y, -u.x).
+                if (onFirst[a] != 0U)
+                {
+                    c1 = {-b.axisSign * (p1.y - x.y), b.axisSign * (p1.x - x.x), 0.0};
+                }
+                if (onSecond[a] != 0U)
+                {
+                    c2 = {-b.axisSign * (p2.y - x.y), b.axisSign * (p2.x - x.x), 0.0};
+                }
+                uw[a] = {b.axisSign * u.y, -b.axisSign * u.x, 0.0};
+            }
+            else
+            {
+                const sub0math::Vec3d w{x.c * b.axisX - x.s * b.axisY, x.s * b.axisX + x.c * b.axisY, 0.0};
+                c1 = onFirst[a] != 0U ? w : sub0math::Vec3d{};
+                c2 = onSecond[a] != 0U ? w : sub0math::Vec3d{};
+                uw[a] = {};
+            }
+            j1[a] = c1;
+            jd[a] = c1 - c2;
+            jl[a] = u.x * jd[a].x + u.y * jd[a].y;
+            rate += jl[a] * qd[supportCoordinates[a]];
+        }
     }
+    else
+    {
+        const sub0math::Vec3d p1 = sitePosition(model, ws, first);
+        const sub0math::Vec3d p2 = sitePosition(model, ws, second);
+        const sub0math::Vec3d d = p1 - p2;
+        l = std::sqrt(dot(d, d));
+        if (!(l > 0.0) || !std::isfinite(l))
+        {
+            return false;
+        }
+        u = d * (1.0 / l);
+        uWorld = u;
+        const auto types = model.jointTypes();
+        const auto axes = model.jointAxes();
+        for (std::size_t a = 0; a < m; ++a)
+        {
+            const std::size_t body = support[a];
+            const sub0math::PluckerTransformd& x = ws.worldToBody[body];
+            const sub0math::Vec3d w = detail::bodyToWorld(x.rotation, axes[body]);
+            const bool revolute = types[body] == JointType::Revolute;
+            const sub0math::Vec3d c1 = onFirst[a] != 0U ? (revolute ? cross(w, p1 - x.translation) : w) : sub0math::Vec3d{};
+            const sub0math::Vec3d c2 = onSecond[a] != 0U ? (revolute ? cross(w, p2 - x.translation) : w) : sub0math::Vec3d{};
+            j1[a] = c1;
+            jd[a] = c1 - c2;
+            uw[a] = revolute ? cross(u, w) : sub0math::Vec3d{};
+            jl[a] = dot(u, jd[a]);
+            rate += jl[a] * qd[supportCoordinates[a]];
+        }
+    }
+    const double inverseLength = 1.0 / l;
 
     // The law sees s = sign (l - reference); F = sign * force is the force conjugate to l.
     const auto r = law.respond(sub0math::f64::Length::fromSi(sign * (l - reference)),
@@ -113,8 +172,8 @@ bool TendonElement<L>::evaluate(const ElementInputs& in, ElementOutputs& out) co
     }
     out.potential += r.potential.si();
     out.dissipationPower += r.dissipationPower.si();
-    out.siteWrenches[wrenchSlot] = {id, first, u * force, {}};
-    out.siteWrenches[wrenchSlot + 1] = {id, second, u * -force, {}};
+    out.siteWrenches[wrenchSlot] = {id, first, uWorld * force, {}};
+    out.siteWrenches[wrenchSlot + 1] = {id, second, uWorld * -force, {}};
     if (out.stiffness.empty())
     {
         return true;
@@ -199,7 +258,7 @@ namespace detail
 {
 
 std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const State& state, Workspace& ws,
-                                                     bool jacobians, bool geometricStiffness) noexcept
+                                                     bool jacobians, bool geometricStiffness, bool planar) noexcept
 {
     std::ranges::fill(ws.elementForce, 0.0);
     if (jacobians)
@@ -214,7 +273,7 @@ std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const S
                        .siteWrenches = ws.elementSiteWrenches,
                        .vectors = ws.elementVectors,
                        .scalars = ws.elementScalars};
-    const ElementInputs in{model, state, ws};
+    const ElementInputs in{model, state, ws, planar};
     bool inDomain = true;
     const auto evaluate = [&](const auto& element) { inDomain = element.evaluate(in, out) && inDomain; };
     forEachElement(model.coordinateElements(), evaluate);
@@ -237,12 +296,22 @@ std::expected<void, Fault> evaluateElements(const Model& model, const State& sta
     {
         return checked;
     }
+    const bool planar = detail::isPlanar(model);
     if (model.tendonCount() > 0)
     {
-        detail::updateTransforms<false>(model, state, workspace);
-        detail::composeWorldTransforms(model, workspace);
+        if (planar)
+        {
+            detail::planarTransforms<false>(model, state, workspace);
+            detail::planarWorldTransforms(model, workspace);
+        }
+        else
+        {
+            detail::updateTransforms<false>(model, state, workspace);
+            detail::composeWorldTransforms(model, workspace);
+        }
     }
-    return detail::evaluateElementsUnchecked(model, state, workspace, jacobians == ElementJacobians::Compute);
+    return detail::evaluateElementsUnchecked(model, state, workspace, jacobians == ElementJacobians::Compute, true,
+                                             planar);
 }
 
 } // namespace sub0physics::multibody

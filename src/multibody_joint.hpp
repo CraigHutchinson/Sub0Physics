@@ -14,6 +14,7 @@
 #include <sub0math/linear/vec.hpp>
 
 #include "sub0physics/fault.hpp"
+#include "sub0physics/multibody/implicit_euler.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/state.hpp"
 #include "sub0physics/multibody/stepper.hpp"
@@ -150,9 +151,11 @@ SUB0MATH_FORCE_INLINE void composeWorldTransforms(const Model& model, Workspace&
 // wrenches and, when asked, elementStiffness and elementDamping, with or without the tendons' geometric
 // terms). Needs worldToBody at the state when the model has tendons. OutsideDomain when a tendon's sites
 // coincide.
+// With `planar`, reads planar.worldToBody instead (a planar model's planar path).
 [[nodiscard]] std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const State& state,
                                                                    Workspace& ws, bool jacobians,
-                                                                   bool geometricStiffness = true) noexcept;
+                                                                   bool geometricStiffness = true,
+                                                                   bool planar = false) noexcept;
 
 // Kinetic and potential energy (gravity and elements) [J].
 struct EnergyTerms
@@ -170,16 +173,28 @@ struct EnergyTerms
 // (multibody_dynamics.cpp), so the formulas exist once.
 
 // Transforms, velocities, world transforms, bias forces (RNEA at zero qdd, so bodyAcceleration holds the bias and
-// gravity), the mass matrix and the elements, with Jacobians when asked.
+// gravity), the mass matrix and the elements, with Jacobians when asked. A planar model runs the planar path and then
+// fills the general fields from it (expandPlanarKinematics).
 [[nodiscard]] std::expected<void, Fault> prepareStepDynamics(const Model& model, const State& state, Workspace& ws,
-                                                             bool elementJacobians) noexcept;
+                                                             bool elementJacobians,
+                                                             ImplicitTerms terms = ImplicitTerms::Full) noexcept;
 
 // Forms and factorises the step matrix (M - h D - h^2 K~ when implicit, else M) and its right-hand side
-// h (tau + tau_e - c [+ h K~ qd]) in implicitRhs. Returns whether the factor is dense.
-[[nodiscard]] std::expected<bool, Fault> formStepMatrix(const Model& model, const State& state,
-                                                        std::span<const double> tau, const double* elementForce,
-                                                        Workspace& ws, double dt, bool implicit,
+// h (tau + tau_e - c [+ h K~ qd]) in implicitRhs; D and K include the forcing's Jacobians, and `terms` selects which
+// are implicit. `applied.tau` is the applied generalized force (site forces already mapped). Returns whether the
+// factor is dense.
+[[nodiscard]] std::expected<bool, Fault> formStepMatrix(const Model& model, const State& state, const Forcing& applied,
+                                                        const double* elementForce, Workspace& ws, double dt,
+                                                        bool implicit, ImplicitTerms terms,
                                                         bool allowFallback) noexcept;
+
+// Validates a forcing for a model: sizes and site ids.
+[[nodiscard]] std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forcing) noexcept;
+
+// ws.appliedForce := tau + sum over site forces of J^T [moment; force] at `state` (it updates the transforms it needs).
+// Returns the forcing the step runs: tau = ws.appliedForce, no site forces, the same Jacobians.
+[[nodiscard]] Forcing applyForcing(const Model& model, const State& state, const Forcing& forcing,
+                                   Workspace& ws) noexcept;
 
 // x := A^-1 x with the factor from formStepMatrix.
 void solveStepMatrix(const Model& model, const Workspace& ws, bool dense, double* x) noexcept;
@@ -194,8 +209,10 @@ void transmittedForces(const Model& model, const State& state, const double* qdd
 
 // The constrained step (multibody_constraints.cpp): semi-implicit (implicit = false) or linearly implicit Euler with
 // the model's closures and limits. The caller has checked the inputs.
+// `forcing` is what applyForcing returned.
 [[nodiscard]] std::expected<void, Fault> stepConstrained(const Model& model, const Forcing& forcing, double dt,
-                                                         State& state, Workspace& ws, bool implicit) noexcept;
+                                                         State& state, Workspace& ws, bool implicit,
+                                                         ImplicitTerms terms = ImplicitTerms::Full) noexcept;
 
 // Adds the constraint forces to the free accelerations in ws.qdd (acceleration level, closures and engaged limits),
 // after forwardDynamics' free solve: massFactor, bias accelerations and kinematics at `state` in the workspace.
