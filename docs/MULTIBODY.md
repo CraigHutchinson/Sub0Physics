@@ -198,6 +198,73 @@ are in `tests/test_multibody*.cpp` and `tests/bench_multibody.cpp`.
 - Gaps against hand-written planar code (CRBA 2.9x, forward dynamics 2.8x) are recorded in
   `docs/PERFORMANCE.md` with an M1d follow-up.
 
+### M1b contracts (2026-10-20)
+
+M1b builds on these contracts, which a cross-repository review fixed before more elements land.
+
+**Laws and elements.**
+
+- A **law** (`element/`) is a scalar constitutive function of one coordinate and its rate.
+  - It is a value type built by a validating `static create(const Spec&) -> std::expected<Law, Fault>`.
+  - It answers `respond(Coordinate q, Rate qd) -> LawResponse<Coordinate>`:
+
+    ```cpp
+    template<typename Coordinate>          // f64::Length (linear) or f64::Angle (rotational)
+    struct LawResponse
+    {
+        GeneralizedForce<Coordinate> force; // acts along +q: Force for Length, Torque for Angle
+        decltype(force / q) dForceDPosition; // exact partial derivative
+        decltype(force / qd) dForceDVelocity;
+        f64::Energy potential;               // stored energy, relative to the law's reference
+        f64::Power dissipationPower;         // removed power, never negative
+    };
+    ```
+  - **Sign:** `force` is the generalized force on the law's own coordinate. For conservative and dissipative
+    laws, `force · qd = −dV/dt − dissipationPower`, and a test checks this identity for every law. A
+    spring on a compression coordinate therefore reports a *negative* force when compressed.
+    `TravelBuffer` already follows this rule. `AxialSpringDamper` and `UnilateralSpringDamper`, which report
+    a positive "spreading" force, migrate to it, gain their exact Jacobians and rename `storedEnergy` and
+    `dissipationRate` to `potential` and `dissipationPower`. Extra diagnostic fields (`topForce`,
+    `springForce`) may stay alongside the common ones.
+- An **element** (`multibody/`, M1b) binds a law to the model.
+  - **Coordinate element:** the law on one joint coordinate, with an optional reference offset.
+  - **Tendon element:** the law on the distance `l(q)` between two sites. `tau = Jₗᵀ F`, and the stiffness is
+    `Jₗᵀ (dF/dl) Jₗ` plus the geometric term `F · d²l/dq²`. The geometric term is included, because
+    otherwise the implicit step loses its stability margin for preloaded tendons.
+  - Elements write `tau`, the `dtau/dq` and `dtau/dqd` blocks, energy, and the site wrenches into the
+    workspace (§4). They never allocate. The law exists once; elements never copy its formula.
+
+**Energy.**
+
+- One `EnergyAccount {kinetic, potential, dissipated, externalWork}` in `f64::Energy`.
+- `computeEnergy` fills `kinetic` and gravitational `potential`. Elements add their `potential`, and the
+  stepper integrates `dissipationPower` and external power into `dissipated` and `externalWork`.
+- `EnergyLedger` records an `EnergyAccount`, so there are no raw-double argument lists. Its scale policy is
+  unchanged. Stations that use it today migrate in the same change.
+
+**Stepping.**
+
+- Every public stepper has the shape
+  `step(const Model&, const Forcing&, std::uint64_t tick, f64::Time h, State&, Workspace&) -> std::expected<void, Fault>`.
+  - It is **transactional**: on a fault, `State` is unchanged.
+  - Time is `tick · h`, derived inside the stepper, never passed separately.
+- `State` stores `[q; qd]` in one contiguous buffer and exposes the `q()` and `qd()` spans. Integrators work
+  on spans of it.
+- The explicit Runge–Kutta family keeps its fixed-size form for small station systems, which are measured
+  and perf-tuned. It gains `f64::Time h` at its public boundary and a span-based form that can drive a
+  `Model` (the RK reference run moves from the tests into the library).
+- The semi-implicit Euler step, the linearly implicit Euler step (§5) and RK all satisfy one `Stepper`
+  concept, so `FidelitySelector` can switch between them. The planned fused small-system RK is a
+  `Stepper`, not a separate family.
+
+**One pose pipeline.**
+
+- Each joint's motion is evaluated once per call: one sin/cos pair of q (Rodrigues) builds
+  `parentToBody`.
+- World `bodyPose` is composed from those transforms through Sub0Math `toRigidTransform(PluckerTransform)`.
+- The quaternion half-angle path is removed, so kinematics, Jacobians, energy and dynamics all come from
+  one representation.
+
 ## 10. Open questions, to be answered by measurement
 
 - **Higher-order implicit scheme:** whether one is needed, and which, for the tyre ring (M2).
