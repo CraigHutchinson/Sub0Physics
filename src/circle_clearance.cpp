@@ -47,7 +47,10 @@ CircleClearance measureCircleClearance(const PolylineProfile& profile, const Cir
     const ProfilePoint c = query.circle.centre;
     const Length r = query.circle.radius;
     CircleClearance result{ClearanceStatus::Available, Length{}, Length{}, {}};
-    if (!(sub0math::abs(c.y) <= PolylineProfile::CoordinateLimit) || !(r > Length{}) || c.x - r < profile.minX()
+    // Negated comparisons so that NaN fails every test; the limits also exclude infinities.
+    const Length limit = PolylineProfile::CoordinateLimit;
+    if (!(sub0math::abs(c.x) <= limit) || !(sub0math::abs(c.y) <= limit) || !(r > Length{}) || !(r <= limit)
+        || !(query.tieTolerance >= Length{}) || !(query.tieTolerance <= limit) || c.x - r < profile.minX()
         || c.x + r > profile.maxX())
     {
         result.status = ClearanceStatus::OutsideDomain;

@@ -16,7 +16,8 @@ namespace sub0physics
 enum class ClearanceStatus : std::uint8_t
 {
     Available,     ///< Distance, gap and witnesses are valid.
-    OutsideDomain, ///< The footprint leaves the profile (never extrapolated), or the query is not finite.
+    OutsideDomain, ///< The footprint leaves the profile (never extrapolated), or a query value is non-finite, beyond
+                   ///< `PolylineProfile::CoordinateLimit`, or (the tolerance) negative.
     OnBoundary,    ///< The centre lies on the surface within tolerance; the normal is undefined.
     CentreInside   ///< The centre is inside the solid; buried contact is unsupported.
 };

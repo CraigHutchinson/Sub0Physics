@@ -123,3 +123,26 @@ TEST_CASE("Pruned search agrees with brute force on random terrain")
         CHECK_FALSE(c.witnesses.empty());
     }
 }
+
+TEST_CASE("Non-finite or out-of-range query values are outside the domain, never available")
+{
+    const auto flat = *PolylineProfile::create(metresPoints({{-1.0, 0.0}, {1.0, 0.0}}));
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    const auto status = [&](double cx, double cy, double radius, double tie) {
+        return measureCircleClearance(flat, {{at(cx, cy), metres(radius)}, metres(tie)}).status;
+    };
+    REQUIRE(status(0.0, 0.5, 0.1, 1e-10) == ClearanceStatus::Available);
+    CHECK(status(nan, 0.5, 0.1, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(inf, 0.5, 0.1, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(-inf, 0.5, 0.1, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(1e101, 0.5, 0.1, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, nan, 0.1, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, inf, 0.1, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, 0.5, nan, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, 0.5, inf, 1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, 0.5, 0.1, nan) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, 0.5, 0.1, inf) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, 0.5, 0.1, -1e-10) == ClearanceStatus::OutsideDomain);
+    CHECK(status(0.0, 0.5, 0.1, 0.0) == ClearanceStatus::Available); // zero tolerance is allowed
+}
