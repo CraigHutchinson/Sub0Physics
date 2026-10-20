@@ -255,3 +255,122 @@ TEST_CASE("Linearly implicit Euler is stable far beyond the explicit limit and n
     CHECK(std::abs(x[0]) < 1e-6);
     CHECK(stepper.jacobians() == 200U);
 }
+
+namespace
+{
+
+// A ball dropped from 1 m onto a stiff penalty floor at x = 0: x'' = -g, plus -k x below the floor. The force law
+// has a kink at x = 0, the event; first contact is at sqrt(2 / g).
+struct DroppedBall
+{
+    double stiffness = 1e5;
+
+    std::expected<void, Fault> evaluate(double, const StateVector<2>& x, StateVector<2>& dxdt) const
+    {
+        dxdt[0] = x[1];
+        dxdt[1] = -9.81 + (x[0] < 0.0 ? -stiffness * x[0] : 0.0);
+        return {};
+    }
+};
+
+} // namespace
+
+TEST_CASE("Event location ends a step on the switch, to the event tolerance")
+{
+    const double contact = std::sqrt(2.0 / 9.81);
+    for (const bool locate : {false, true})
+    {
+        CAPTURE(locate);
+        DroppedBall system;
+        EmbeddedRungeKutta<2, DormandPrince54> stepper;
+        StateVector<2> x{1.0, 0.0};
+        const ErrorTolerance<2> tolerance{{1e-6, 1e-4}, 0.0};
+        const StepSizeController controller{.minStep = 1e-9, .maxStep = 0.05};
+        AdaptiveCounters counters;
+        double h = 1e-3;
+        double stopped = 0.0;
+        double firstBelow = -1.0;
+        const auto onAccepted = [&](double t, const StateVector<2>& s) -> std::expected<void, Fault> {
+            if (firstBelow < 0.0 && s[0] <= 0.0)
+            {
+                firstBelow = t;
+            }
+            return {};
+        };
+        const auto floor = [](double, const StateVector<2>& s) { return s[0]; };
+        for (int tick = 0; tick < 10; ++tick)
+        {
+            if (locate)
+            {
+                REQUIRE(advanceAdaptively<2>(stepper, system, tick * 0.05, (tick + 1) * 0.05, x, h, tolerance, controller, counters,
+                                             onAccepted, stopped, floor, 1e-6));
+            }
+            else
+            {
+                REQUIRE(advanceAdaptively<2>(stepper, system, tick * 0.05, (tick + 1) * 0.05, x, h, tolerance, controller, counters,
+                                             onAccepted, stopped));
+            }
+        }
+        if (locate)
+        {
+            CHECK(firstBelow - contact >= 0.0);
+            CHECK(firstBelow - contact <= 1e-6);
+            CHECK(counters.eventRetries > 0U);
+        }
+        else
+        {
+            CHECK(firstBelow - contact > 1e-6); // the step that crosses ends well past the switch
+            CHECK(counters.eventRetries == 0U);
+        }
+    }
+}
+
+namespace
+{
+
+// x'' = -w^2 x with the integral of x^2 in slot 2 (a quadrature: nothing depends on it).
+struct OscillatorWithIntegral
+{
+    double omega = 3.0;
+
+    std::expected<void, Fault> evaluate(double, const StateVector<3>& x, StateVector<3>& dxdt) const
+    {
+        dxdt[0] = x[1];
+        dxdt[1] = -omega * omega * x[0];
+        dxdt[2] = x[0] * x[0];
+        return {};
+    }
+
+    std::expected<void, Fault> jacobian(double, const StateVector<3>& x, JacobianMatrix<3>& j) const
+    {
+        j = {{{0.0, 1.0, 0.0}, {-omega * omega, 0.0, 0.0}, {2.0 * x[0], 0.0, 0.0}}};
+        return {};
+    }
+};
+
+} // namespace
+
+TEST_CASE("A quadrature slot is integrated by the trapezoid rule from the endpoint derivatives")
+{
+    OscillatorWithIntegral system;
+    LinearlyImplicitEuler<3> plain;
+    LinearlyImplicitEuler<3> trapezoid;
+    trapezoid.setQuadrature(2);
+    StateVector<3> a{1.0, 0.0, 0.0};
+    StateVector<3> b = a;
+    std::vector<double> xs{1.0};
+    for (std::uint64_t tick = 0; tick < 100U; ++tick)
+    {
+        REQUIRE(plain.stepTick(system, tick, sub0math::seconds(0.01), a));
+        REQUIRE(trapezoid.stepTick(system, tick, sub0math::seconds(0.01), b));
+        CHECK(b[0] == a[0]); // the trajectory is the same
+        xs.push_back(b[0]);
+    }
+    double trapezoidSum = 0.0;
+    for (std::size_t i = 1; i < xs.size(); ++i)
+    {
+        trapezoidSum += 0.005 * (xs[i - 1U] * xs[i - 1U] + xs[i] * xs[i]);
+    }
+    CHECK(b[2] == doctest::Approx(trapezoidSum).epsilon(1e-12));
+    CHECK(a[2] != doctest::Approx(trapezoidSum).epsilon(1e-6));
+}

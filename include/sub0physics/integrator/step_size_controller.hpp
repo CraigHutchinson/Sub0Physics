@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <expected>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 #include "sub0physics/fault.hpp"
@@ -98,8 +99,14 @@ struct StepSizeController
 /** What an adaptive advance spent. */
 struct AdaptiveCounters
 {
-    std::uint64_t accepted = 0U; ///< Accepted steps.
-    std::uint64_t rejected = 0U; ///< Attempts rejected for error or refused by the system, then retried smaller.
+    std::uint64_t accepted = 0U;      ///< Accepted steps.
+    std::uint64_t rejected = 0U;      ///< Attempts rejected for error or refused by the system, then retried smaller.
+    std::uint64_t eventRetries = 0U;  ///< Attempts shortened to end on an event (a sign change of the event function).
+};
+
+/** The event function of an advance without events. */
+struct NoEvent
+{
 };
 
 /**
@@ -120,10 +127,17 @@ concept ErrorEstimatingStepper = requires(T& stepper, S& system, double t, doubl
  * a tolerance target (docs/LOD.md, "Levers").
  *
  * The outer interval is a fixed tick of the caller (a recording interval or a frame), so the caller's grid and
- * replay are unchanged; inside it, steps shrink where the estimate is large (contact onset, impacts) and grow
- * where it is small (flight, steady rolling). The last sub-step is shortened to land on `t1`; `h` carries the
- * controller's step to the next tick. A system refusal (a fault) on an attempt is treated as an unbounded error
- * and retried smaller, until `minStep`, where the fault is returned and the system observes `(t, x)` again.
+ * replay are unchanged; inside it, steps shrink where the estimate is large and grow where it is small. The last
+ * sub-step is shortened to land on `t1`; `h` carries the controller's step to the next tick. A system refusal (a
+ * fault) on an attempt is treated as an unbounded error and retried smaller, until `minStep`, where the fault is
+ * returned and the system observes `(t, x)` again.
+ *
+ * **Events.** A local error estimate cannot see a switch in the model (a contact closing or releasing, a damper
+ * changing branch): the derivative has a kink there, and a step across it loses the method's order however small
+ * its estimate. With an event function `g(t, x)` whose sign marks the branch, a step whose end has the other sign
+ * is retried to end just past the zero (secant on the step length), until the zero lies within `eventTolerance` of
+ * the step's end, so every step integrates one smooth branch and the switch is located to that time.
+ *
  * Decisions depend only on the state, the configuration and the times, so the result is deterministic.
  *
  * @tparam N Number of state variables.
@@ -135,36 +149,50 @@ concept ErrorEstimatingStepper = requires(T& stepper, S& system, double t, doubl
  * @param h In: the step to try first; out: the controller's step for the next call. Positive.
  * @param tolerance Error tolerance per step.
  * @param controller Step-size rules.
- * @param counters Accumulates accepted and rejected steps.
+ * @param counters Accumulates accepted, rejected and event-shortened attempts.
  * @param onAccepted Called as `onAccepted(t, x)` after each accepted sub-step (`std::expected<void, Fault>`); a
  *        fault stops the advance and is returned.
  * @param stoppedAt Receives the time of the last accepted state.
+ * @param event `double event(double t, const StateVector<N>& x)`, or NoEvent.
+ * @param eventTolerance Time within which an event is located, s.
  * @return Nothing, or the first fault.
  */
-template<std::size_t N, typename Stepper, typename S, typename OnAccepted>
+template<std::size_t N, typename Stepper, typename S, typename OnAccepted, typename Event = NoEvent>
     requires ErrorEstimatingStepper<Stepper, S, N>
 [[nodiscard]] std::expected<void, Fault> advanceAdaptively(Stepper& stepper, S& system, double t0, double t1,
                                                            StateVector<N>& x, double& h,
                                                            const ErrorTolerance<N>& tolerance,
                                                            const StepSizeController& controller,
                                                            AdaptiveCounters& counters, OnAccepted&& onAccepted,
-                                                           double& stoppedAt)
+                                                           double& stoppedAt, Event&& event = Event{},
+                                                           double eventTolerance = 1e-6)
 {
+    constexpr bool HasEvent = !std::is_same_v<std::remove_cvref_t<Event>, NoEvent>;
     double t = t0;
     stoppedAt = t0;
+    double eventAtStart = 0.0;
+    if constexpr (HasEvent)
+    {
+        eventAtStart = event(t, std::as_const(x));
+    }
+    double eventStep = 0.0; // when positive, the next attempt's length, chosen to end just past an event
     while (t < t1)
     {
+        const double wanted = eventStep > 0.0 ? eventStep : h;
+        const bool shortenedForEvent = eventStep > 0.0;
+        eventStep = 0.0;
         // A remainder shorter than a millionth of the step joins it, so no sliver step follows.
-        const bool reachesEnd = t + h >= t1 || t1 - (t + h) <= 1e-6 * h;
-        const double end = reachesEnd ? t1 : t + h;
+        const bool reachesEnd = t + wanted >= t1 || t1 - (t + wanted) <= 1e-6 * wanted;
+        const double end = reachesEnd ? t1 : t + wanted;
         const double step = end - t;
-        const auto attempted = stepper.attempt(system, t, end - t, std::as_const(x));
+        const auto attempted = stepper.attempt(system, t, step, std::as_const(x));
         double ratio = std::numeric_limits<double>::infinity();
         if (attempted)
         {
             ratio = errorRatio(stepper.error(), x, stepper.proposal(), tolerance);
         }
-        const bool atMinimum = step <= controller.minStep;
+        // The requested step, since end - t can round just above the floor.
+        const bool atMinimum = wanted <= controller.minStep || step <= controller.minStep;
         if (!attempted && atMinimum)
         {
             StateVector<N> scratch{};
@@ -173,13 +201,31 @@ template<std::size_t N, typename Stepper, typename S, typename OnAccepted>
         }
         if (attempted && (ratio <= 1.0 || atMinimum))
         {
+            double eventAtEnd = 0.0;
+            if constexpr (HasEvent)
+            {
+                eventAtEnd = event(end, stepper.proposal());
+                const bool crosses = (eventAtStart > 0.0) != (eventAtEnd > 0.0);
+                if (crosses && step > eventTolerance && eventAtStart != eventAtEnd)
+                {
+                    const double crossing = step * std::clamp(eventAtStart / (eventAtStart - eventAtEnd), 0.0, 1.0);
+                    const double retry = crossing + 0.5 * eventTolerance;
+                    if (step - crossing > eventTolerance && retry < step)
+                    {
+                        ++counters.eventRetries;
+                        eventStep = std::max(retry, controller.minStep);
+                        continue; // the step-size controller's h is untouched
+                    }
+                }
+            }
             stepper.accept(x);
             t = end;
             stoppedAt = t;
+            eventAtStart = eventAtEnd;
             ++counters.accepted;
             const double proposed = controller.next(step, ratio, Stepper::ErrorOrder);
-            // A step shortened to land on t1 says nothing about longer ones: keep h unless it must shrink.
-            h = reachesEnd && proposed >= step ? h : proposed;
+            // A step shortened to land on t1 or on an event says nothing about longer ones: keep h unless it must shrink.
+            h = (reachesEnd || shortenedForEvent) && proposed >= step ? h : proposed;
             if (auto r = onAccepted(t, std::as_const(x)); !r)
             {
                 return r;

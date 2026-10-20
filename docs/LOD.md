@@ -80,6 +80,23 @@ A product that switches models must show, per mechanism:
   - A profile is not a global LOD integer: within a profile, a `FidelitySelector` can still raise one mechanism on
     physical demand.
 
+## Levers provided
+
+Each is deterministic (a function of configuration, state and tick) and its default reproduces the existing result
+bit for bit. *Discrete* levers select between models; *continuous* ones are driven toward a target, so compute is
+spent only where it is needed.
+
+| Lever | Kind | Where | Target and controller |
+|---|---|---|---|
+| Norm arithmetic (`NormArithmetic::Compensated` or `Fast`) | Discrete | `geometry/norm.hpp`, `PreparedProfile` | None: `Fast` is a guarded `sqrt(a^2 + b^2)`, safe for every finite input |
+| Chain solver (`solveBoundedPeriodicTridiagonal` or `...ActiveSet`) | Discrete | `solver/` | The active-set solve is exact to rounding: no tolerance to tune |
+| Chain residual tolerance | Continuous | `BoundedPeriodicOptions::tolerance` | A residual target; with node stiffness `a` it bounds every node's error by about `tolerance / a` |
+| Warm start | Discrete (on or off) | `BoundedPeriodicOptions::warmStart`, `BoundedPeriodicActiveSetOptions::warmStart` | Start from the caller's guess (the previous solution of a slowly changing problem) |
+| Integrator (RK4, midpoint, embedded 3(2) or 5(4), linearly implicit Euler) | Discrete | `integrator/` | Selected per mechanism; linearly implicit Euler needs the system's Jacobian (`OdeSystemWithJacobian`) |
+| Step size | Continuous | `advanceAdaptively` | An error tolerance per component (`ErrorTolerance`); a deterministic controller (`StepSizeController`) sets each sub-step inside the caller's fixed tick |
+| Event location | Discrete (on or off) | `advanceAdaptively` event function | Steps end on a sign change of the event function (a contact or branch switch) within a time tolerance, so no step crosses a kink in the force law |
+| Quadrature slots | Discrete (per slot) | `LinearlyImplicitEuler::setQuadrature` | Integrals nothing depends on use the trapezoid rule on the endpoint derivatives, so energy ledgers measure the method, not the bookkeeping |
+
 ## Not provided yet
 
 Shadow references running beside the live model, asynchronous comparison windows, and state

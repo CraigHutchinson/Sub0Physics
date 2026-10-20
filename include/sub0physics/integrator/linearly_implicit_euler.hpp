@@ -30,6 +30,11 @@ namespace sub0physics
  * difference, so `advanceAdaptively` can control the step. Both derivatives are evaluated anyway (the first is
  * the previous step's endpoint), so a step costs two evaluations and one Jacobian.
  *
+ * **Quadratures.** Slots marked with `setQuadrature` (integrals nothing depends on, such as accumulated work and
+ * dissipation) are integrated by the trapezoid rule from the step's two endpoint derivatives, which the step has
+ * anyway, instead of the linearised update: second order and consistent with the committed trajectory, so an
+ * energy ledger built on them measures the method's own energy error rather than the bookkeeping's lag.
+ *
  * `attempt` leaves the caller's state alone; `accept` commits. `stepTick` does both on a fixed tick grid.
  *
  * @tparam N Number of state variables.
@@ -43,6 +48,17 @@ public:
     static constexpr int Order = 1;
     /** Order of the error estimate's method (the controller's exponent is 1/(ErrorOrder + 1)). */
     static constexpr int ErrorOrder = 1;
+
+    /**
+     * Marks a slot as a quadrature: an integral that no derivative depends on, integrated by the trapezoid rule.
+     *
+     * @param index The slot; less than N.
+     * @param quadrature True to integrate it by the trapezoid rule, false for the linearised update (the default).
+     */
+    void setQuadrature(std::size_t index, bool quadrature = true) noexcept
+    {
+        quadrature_[index] = quadrature;
+    }
 
     /**
      * Computes a step from `(t, x)` of size `h`, and its error estimate.
@@ -107,6 +123,10 @@ public:
         for (std::size_t i = 0; i < N; ++i)
         {
             error_[i] = 0.5 * h * (endDerivative_[i] - start_[i]);
+            if (quadrature_[i])
+            {
+                proposal_[i] = x[i] + 0.5 * h * (start_[i] + endDerivative_[i]);
+            }
         }
         proposalTime_ = end;
         return {};
@@ -248,6 +268,7 @@ private:
     }
 
     JacobianMatrix<N> matrix_{};
+    std::array<bool, N> quadrature_{};
     StateVector<N> start_{};
     StateVector<N> rhs_{};
     StateVector<N> proposal_{};
