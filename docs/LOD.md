@@ -58,9 +58,25 @@ A product that switches models must show, per mechanism:
   - An energy balance at every setting (`EnergyLedger`).
   - Determinism across compilers.
   - Whether the lever can switch in-run (`decide`/`commit` with a state transfer) or only at setup.
+- **Continuous before discrete: pay for what you need.**
+  - Discrete LOD switches a model (a tier). Continuous LOD varies a lever smoothly: step size, solver
+    tolerance or iteration count, resolution, decimation.
+  - Prefer a continuous lever driven by a *target* over a fixed setting:
+    - an **error estimator** (embedded Runge–Kutta pair, step doubling, solver residual, a certified clearance
+      bound);
+    - a deterministic **controller** that sets the lever each step to meet a requested tolerance, or to
+      spend a compute budget where the marginal error per unit cost is highest.
+  - Compute then concentrates where the physics demands it (contact onset, impacts, stiff transients) and
+    falls away where it does not (flight, steady rolling).
+  - Discrete models remain for genuinely different formulations, and a `FidelitySelector` switches them on
+    demand.
+  - **Evidence for a controlled lever:** the achieved error meets the requested target across the scenario set
+    (measured against the reference); cost falls smoothly as the target loosens; and decisions depend only on
+    state, configuration and tick, so a replay reproduces them.
 - **Quality profiles.**
   - A product names profiles (for example offline reference, engineering analysis, interactive, ambient). Each maps
-    every mechanism to a model and its lever values, validated together as a compatible combination.
+    every mechanism to a model and, preferably, an error target or compute budget for its controlled levers,
+    rather than fixed lever values. The combination is validated together as compatible.
   - A profile is not a global LOD integer: within a profile, a `FidelitySelector` can still raise one mechanism on
     physical demand.
 
