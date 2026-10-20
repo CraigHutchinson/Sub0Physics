@@ -135,6 +135,22 @@ std::expected<EnergyAccount, Fault> computeEnergy(const Model& model, const Stat
         return std::unexpected(checked.error());
     }
     updateUnchecked(model, state, workspace);
+    const auto terms = detail::energyTerms(model, state, workspace);
+    if (!terms)
+    {
+        return std::unexpected(terms.error());
+    }
+    return EnergyAccount{.kinetic = sub0math::f64::Energy::fromSi(terms->kinetic),
+                         .potential = sub0math::f64::Energy::fromSi(terms->potential),
+                         .dissipated = state.dissipated,
+                         .externalWork = state.externalWork};
+}
+
+namespace detail
+{
+
+std::expected<EnergyTerms, Fault> energyTerms(const Model& model, const State& state, Workspace& workspace) noexcept
+{
     const auto inertias = model.inertias();
     const sub0math::Vec3d g = model.baseAcceleration().linear * -1.0;
     double kinetic = 0.0;
@@ -155,10 +171,9 @@ std::expected<EnergyAccount, Fault> computeEnergy(const Model& model, const Stat
         }
         potential += workspace.elementPotential;
     }
-    return EnergyAccount{.kinetic = sub0math::f64::Energy::fromSi(kinetic),
-                         .potential = sub0math::f64::Energy::fromSi(potential),
-                         .dissipated = state.dissipated,
-                         .externalWork = state.externalWork};
+    return EnergyTerms{kinetic, potential};
 }
+
+} // namespace detail
 
 } // namespace sub0physics::multibody

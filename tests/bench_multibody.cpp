@@ -564,6 +564,260 @@ void benchImplicitStep(sub0bench::BenchRunner& runner)
     });
 }
 
+// The twin of a constrained stepLinearlyImplicitEuler on testmodels::sliderCrankBuilder() (no elements, so the step
+// matrix is M): the same algorithm written for this one mechanism. Closed-form planar mass matrix, bias forces and
+// closure Jacobian (two independent rows, where the library assembles three and drops the dependent one), the free
+// step, the 2 x 2 velocity-level solve, Gauss-Newton projection in the metric M^-1 to the same tolerance, the
+// velocity projection, the closure impulse work and the projection's energy change.
+struct HandSliderCrank
+{
+    double a = 0.1;
+    double b = 0.3;
+    double m1 = 1.0;
+    double m2 = 0.5;
+    double m3 = 2.0;
+    double i1 = 0.0;
+    double i2 = 0.0;
+    double g = 9.81;
+    double tolerance = 1e-10;
+    unsigned maxIterations = 8;
+    double closureWork = 0.0;
+    double projectionEnergy = 0.0;
+    double externalWork = 0.0;
+
+    explicit HandSliderCrank(const sub0physics::multibody::Model& model)
+    {
+        i1 = model.inertias()[0].rotational(2, 2) - m1 * 0.25 * a * a; // stored about the joint
+        i2 = model.inertias()[1].rotational(2, 2) - m2 * 0.25 * b * b;
+        tolerance = model.constraintSettings().closureTolerance;
+        maxIterations = model.constraintSettings().maxProjectionIterations;
+    }
+
+    // Upper 2 x 2 block of M (crank, rod); the slider's entry is m3.
+    void mass(const double* q, double& m11, double& m12, double& m22) const
+    {
+        const double c2 = std::cos(q[1]);
+        m22 = m2 * 0.25 * b * b + i2;
+        m12 = m22 + m2 * 0.5 * a * b * c2;
+        m11 = i1 + m1 * 0.25 * a * a + m2 * (a * a + 0.25 * b * b + a * b * c2) + i2;
+    }
+
+    // x := M^-1 x with the 2 x 2 block's inverse.
+    static void solve(double m11, double m12, double m22, double m33, double* x)
+    {
+        const double det = m11 * m22 - m12 * m12;
+        const double x0 = (m22 * x[0] - m12 * x[1]) / det;
+        const double x1 = (m11 * x[1] - m12 * x[0]) / det;
+        x[0] = x0;
+        x[1] = x1;
+        x[2] /= m33;
+    }
+
+    double energy(const double* q, const double* qd) const
+    {
+        double m11 = 0.0;
+        double m12 = 0.0;
+        double m22 = 0.0;
+        mass(q, m11, m12, m22);
+        const double kinetic = 0.5 * (m11 * qd[0] * qd[0] + 2.0 * m12 * qd[0] * qd[1] + m22 * qd[1] * qd[1] +
+                                      m3 * qd[2] * qd[2]);
+        const double phi = q[0] + q[1];
+        const double potential = g * (m1 * 0.5 * a * std::sin(q[0]) + m2 * (a * std::sin(q[0]) + 0.5 * b * std::sin(phi)));
+        return kinetic + potential;
+    }
+
+    // Closure residual and Jacobian (rows x, y) at q.
+    void closure(const double* q, double* phi, double* jx, double* jy) const
+    {
+        const double s1 = std::sin(q[0]);
+        const double c1 = std::cos(q[0]);
+        const double sp = std::sin(q[0] + q[1]);
+        const double cp = std::cos(q[0] + q[1]);
+        phi[0] = a * c1 + b * cp - q[2];
+        phi[1] = a * s1 + b * sp;
+        jx[0] = -a * s1 - b * sp;
+        jx[1] = -b * sp;
+        jx[2] = -1.0;
+        jy[0] = a * c1 + b * cp;
+        jy[1] = b * cp;
+        jy[2] = 0.0;
+    }
+
+    // y_r = M^-1 J_r^T and G = J M^-1 J^T.
+    static void delassus(double m11, double m12, double m22, double m33, const double* jx, const double* jy,
+                         double* yx, double* yy, double& gxx, double& gxy, double& gyy)
+    {
+        std::copy_n(jx, 3, yx);
+        std::copy_n(jy, 3, yy);
+        solve(m11, m12, m22, m33, yx);
+        solve(m11, m12, m22, m33, yy);
+        gxx = jx[0] * yx[0] + jx[1] * yx[1] + jx[2] * yx[2];
+        gxy = jx[0] * yy[0] + jx[1] * yy[1] + jx[2] * yy[2];
+        gyy = jy[0] * yy[0] + jy[1] * yy[1] + jy[2] * yy[2];
+    }
+
+    bool step(double* q, double* qd, const double* tau, double h)
+    {
+        double m11 = 0.0;
+        double m12 = 0.0;
+        double m22 = 0.0;
+        mass(q, m11, m12, m22);
+        const double s2 = std::sin(q[1]);
+        const double hh = m2 * 0.5 * a * b * s2;
+        const double c1 = std::cos(q[0]);
+        const double cp = std::cos(q[0] + q[1]);
+        const double bias0 = -hh * (2.0 * qd[0] * qd[1] + qd[1] * qd[1]) + g * (m1 * 0.5 * a * c1 + m2 * (a * c1 + 0.5 * b * cp));
+        const double bias1 = hh * qd[0] * qd[0] + g * m2 * 0.5 * b * cp;
+        std::array<double, 3> v{h * (tau[0] - bias0), h * (tau[1] - bias1), h * tau[2]};
+        solve(m11, m12, m22, m3, v.data());
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            v[i] += qd[i];
+        }
+        // Velocity level at the start: J v+ = 0.
+        std::array<double, 2> phi{};
+        std::array<double, 3> jx{};
+        std::array<double, 3> jy{};
+        std::array<double, 3> yx{};
+        std::array<double, 3> yy{};
+        double gxx = 0.0;
+        double gxy = 0.0;
+        double gyy = 0.0;
+        closure(q, phi.data(), jx.data(), jy.data());
+        delassus(m11, m12, m22, m3, jx.data(), jy.data(), yx.data(), yy.data(), gxx, gxy, gyy);
+        const double rx = jx[0] * v[0] + jx[1] * v[1] + jx[2] * v[2];
+        const double ry = jy[0] * v[0] + jy[1] * v[1] + jy[2] * v[2];
+        double det = gxx * gyy - gxy * gxy;
+        const double px = -(gyy * rx - gxy * ry) / det;
+        const double py = -(gxx * ry - gxy * rx) / det;
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            v[i] += px * yx[i] + py * yy[i];
+        }
+        closureWork += 0.5 * (px * (rx + (jx[0] * v[0] + jx[1] * v[1] + jx[2] * v[2])) +
+                              py * (ry + (jy[0] * v[0] + jy[1] * v[1] + jy[2] * v[2])));
+        std::array<double, 3> q1{q[0] + h * v[0], q[1] + h * v[1], q[2] + h * v[2]};
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            if (!std::isfinite(v[i]) || !std::isfinite(q1[i]))
+            {
+                return false;
+            }
+        }
+        // Projection in the metric M(q0)^-1.
+        const double before = energy(q1.data(), v.data());
+        for (unsigned iteration = 0;; ++iteration)
+        {
+            closure(q1.data(), phi.data(), jx.data(), jy.data());
+            if (std::max(std::abs(phi[0]), std::abs(phi[1])) <= tolerance)
+            {
+                break;
+            }
+            if (iteration == maxIterations)
+            {
+                return false;
+            }
+            delassus(m11, m12, m22, m3, jx.data(), jy.data(), yx.data(), yy.data(), gxx, gxy, gyy);
+            det = gxx * gyy - gxy * gxy;
+            const double lx = (gyy * phi[0] - gxy * phi[1]) / det;
+            const double ly = (gxx * phi[1] - gxy * phi[0]) / det;
+            for (std::size_t i = 0; i < 3; ++i)
+            {
+                q1[i] -= lx * yx[i] + ly * yy[i];
+            }
+        }
+        // Velocities onto the tangent space at the projected positions.
+        delassus(m11, m12, m22, m3, jx.data(), jy.data(), yx.data(), yy.data(), gxx, gxy, gyy);
+        det = gxx * gyy - gxy * gxy;
+        const double ux = jx[0] * v[0] + jx[1] * v[1] + jx[2] * v[2];
+        const double uy = jy[0] * v[0] + jy[1] * v[1] + jy[2] * v[2];
+        const double lx = (gyy * ux - gxy * uy) / det;
+        const double ly = (gxx * uy - gxy * ux) / det;
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            v[i] -= lx * yx[i] + ly * yy[i];
+        }
+        projectionEnergy += energy(q1.data(), v.data()) - before;
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            externalWork += tau[i] * (q1[i] - q[i]);
+            q[i] = q1[i];
+            qd[i] = v[i];
+        }
+        return true;
+    }
+};
+
+void benchConstrainedStep(sub0bench::BenchRunner& runner)
+{
+    using namespace sub0physics::multibody;
+    const Model model = *testmodels::sliderCrankBuilder().build();
+    Workspace ws(model);
+    const State start = testmodels::sliderCrankState({}, 0.7, 4.0);
+    const std::array<double, 3> tau{0.3, 0.0, -0.5};
+    const double h = 1e-3;
+    HandSliderCrank hand(model);
+
+    // The reference must agree with the library before its time means anything: 500 steps from the start.
+    {
+        State s = start;
+        std::array<double, 3> q{};
+        std::array<double, 3> qd{};
+        std::copy_n(start.values.begin(), 3, q.begin());
+        std::copy_n(start.values.begin() + 3, 3, qd.begin());
+        for (std::uint64_t tick = 0; tick < 500U; ++tick)
+        {
+            if (!stepLinearlyImplicitEuler(model, {tau}, tick, sub0math::seconds(h), s, ws) ||
+                !hand.step(q.data(), qd.data(), tau.data(), h))
+            {
+                std::fprintf(stderr, "constrained step failed\n");
+                std::exit(1);
+            }
+        }
+        for (std::size_t i = 0; i < 3; ++i)
+        {
+            if (std::abs(q[i] - s.q()[i]) > 1e-10 || std::abs(qd[i] - s.qd()[i]) > 1e-8)
+            {
+                std::fprintf(stderr, "hand-written constrained step disagrees at %zu: %.17g vs %.17g\n", i, q[i], s.q()[i]);
+                std::exit(1);
+            }
+        }
+        if (std::abs(hand.closureWork - s.closureWork.si()) > 1e-9 ||
+            std::abs(hand.projectionEnergy - s.projectionEnergy.si()) > 1e-9 ||
+            std::abs(hand.externalWork - s.externalWork.si()) > 1e-9)
+        {
+            std::fprintf(stderr, "hand-written constrained step energy disagrees: %.17g vs %.17g, %.17g vs %.17g\n",
+                         hand.closureWork, s.closureWork.si(), hand.projectionEnergy, s.projectionEnergy.si());
+            std::exit(1);
+        }
+    }
+
+    State s = start;
+    std::array<double, 3> q{};
+    std::array<double, 3> qd{};
+    runner.bench().minEpochIterations(5000);
+    runner.run("slider-crank constrained implicit Euler step, hand-written planar", [&] {
+        std::copy_n(start.values.begin(), 3, q.begin());
+        std::copy_n(start.values.begin() + 3, 3, qd.begin());
+        ankerl::nanobench::doNotOptimizeAway(q);
+        if (!hand.step(q.data(), qd.data(), tau.data(), h))
+        {
+            std::abort();
+        }
+        ankerl::nanobench::doNotOptimizeAway(qd);
+    });
+    runner.run("slider-crank constrained implicit Euler step, stepLinearlyImplicitEuler", [&] {
+        std::copy(start.values.begin(), start.values.end(), s.values.begin());
+        s.tick = 0;
+        ankerl::nanobench::doNotOptimizeAway(s.values.data());
+        if (!stepLinearlyImplicitEuler(model, {tau}, 0U, sub0math::seconds(h), s, ws))
+        {
+            std::abort();
+        }
+        ankerl::nanobench::doNotOptimizeAway(s.values.data());
+    });
+}
+
 } // namespace
 
 void benchMultibody(sub0bench::BenchRunner& runner)
@@ -644,5 +898,6 @@ void benchMultibody(sub0bench::BenchRunner& runner)
         ankerl::nanobench::doNotOptimizeAway(ws.qdd.data());
     });
     benchImplicitStep(runner);
+    benchConstrainedStep(runner);
 }
 

@@ -171,8 +171,9 @@ Vec3d orientationError(const Mat3d& r1, const Mat3d& r2) noexcept
 // The rows of a constraint set, assembled at the kinematics in the workspace.
 struct Rows
 {
-    std::size_t count = 0;     // assembled rows
-    std::size_t bilateral = 0; // of which closure rows (the first)
+    std::size_t count = 0;         // assembled rows
+    std::size_t bilateral = 0;     // of which closure rows (the first)
+    double closureResidual = 0.0;  // max |phi| over every closure component, dropped rows included
 };
 
 // Distance between a distance limit's sites: direction and length. False when they coincide.
@@ -293,7 +294,31 @@ Rows assembleRows(const Model& model, Workspace& ws, const std::uint8_t* include
             }
         }
     }
-    rows.bilateral = rows.count;
+    // Drop the closure rows that no coordinate moves (a planar mechanism's out-of-plane rows): they would only be
+    // dropped again as dependent by every solve. Their residual still counts.
+    std::size_t kept = 0;
+    for (std::size_t r = 0; r < rows.count; ++r)
+    {
+        rows.closureResidual = std::max(rows.closureResidual, std::abs(sc.residual[r]));
+        const double* row = jacobian + r * n;
+        if (std::all_of(row, row + n, [](double e) { return e == 0.0; }))
+        {
+            continue;
+        }
+        if (kept != r)
+        {
+            std::copy_n(row, n, jacobian + kept * n);
+            layoutRow[kept] = layoutRow[r];
+            sc.residual[kept] = sc.residual[r];
+            if (bias != nullptr)
+            {
+                bias[kept] = bias[r];
+            }
+        }
+        ++kept;
+    }
+    rows.count = kept;
+    rows.bilateral = kept;
     if (include == nullptr)
     {
         return rows;
@@ -358,16 +383,18 @@ Rows assembleRows(const Model& model, Workspace& ws, const std::uint8_t* include
 std::size_t solvePivoted(std::size_t m, const double* g, std::size_t ld, const std::size_t* subset, const double* r,
                          double* x, ConstraintScratch& sc, double tolerance) noexcept
 {
+    // The pivot order is kept as indices into `work`, so a pivot swaps two indices rather than two rows and columns.
     double* work = sc.factor.data();
-    std::size_t* perm = sc.permutation.data();
+    std::size_t* order = sc.permutation.data();
     double* y = sc.vector.data();
     double largest = 0.0;
     for (std::size_t i = 0; i < m; ++i)
     {
-        perm[i] = subset[i];
+        order[i] = i;
+        const double* source = g + subset[i] * ld;
         for (std::size_t j = 0; j < m; ++j)
         {
-            work[i * m + j] = g[subset[i] * ld + subset[j]];
+            work[i * m + j] = source[subset[j]];
         }
         largest = std::max(largest, work[i * m + i]);
     }
@@ -378,68 +405,63 @@ std::size_t solvePivoted(std::size_t m, const double* g, std::size_t ld, const s
         std::size_t p = k;
         for (std::size_t i = k + 1; i < m; ++i)
         {
-            if (work[i * m + i] > work[p * m + p])
+            if (work[order[i] * m + order[i]] > work[order[p] * m + order[p]])
             {
                 p = i;
             }
         }
-        if (!(work[p * m + p] > floor))
+        const std::size_t kk = order[p];
+        const double d = work[kk * m + kk];
+        if (!(d > floor))
         {
             break;
         }
-        if (p != k)
-        {
-            for (std::size_t j = 0; j < m; ++j)
-            {
-                std::swap(work[k * m + j], work[p * m + j]);
-            }
-            for (std::size_t i = 0; i < m; ++i)
-            {
-                std::swap(work[i * m + k], work[i * m + p]);
-            }
-            std::swap(perm[k], perm[p]);
-        }
-        const double d = work[k * m + k];
+        order[p] = order[k];
+        order[k] = kk;
+        // PERF: index permutation and one reciprocal beat row swaps and divisions.
+        const double inverse = 1.0 / d;
         for (std::size_t i = k + 1; i < m; ++i)
         {
-            work[i * m + k] /= d;
-        }
-        for (std::size_t i = k + 1; i < m; ++i)
-        {
-            const double lik = work[i * m + k] * d;
+            const std::size_t ii = order[i];
+            const double lik = work[ii * m + kk] * inverse;
+            work[ii * m + kk] = lik;
+            const double scaled = lik * d;
             for (std::size_t j = k + 1; j <= i; ++j)
             {
-                work[i * m + j] -= lik * work[j * m + k];
-                work[j * m + i] = work[i * m + j];
+                const std::size_t jj = order[j];
+                const double value = work[ii * m + jj] - scaled * work[jj * m + kk];
+                work[ii * m + jj] = value;
+                work[jj * m + ii] = value;
             }
         }
         rank = k + 1;
     }
+    // L D L^T y = P r over the first `rank` pivots; L_ik is work[order[i] m + order[k]] for i > k.
     for (std::size_t k = 0; k < rank; ++k)
     {
-        double sum = r[perm[k]];
+        double sum = r[subset[order[k]]];
         for (std::size_t j = 0; j < k; ++j)
         {
-            sum -= work[k * m + j] * y[j];
+            sum -= work[order[k] * m + order[j]] * y[j];
         }
         y[k] = sum;
     }
     for (std::size_t k = 0; k < rank; ++k)
     {
-        y[k] /= work[k * m + k];
+        y[k] /= work[order[k] * m + order[k]];
     }
     for (std::size_t k = rank; k-- > 0;)
     {
         double sum = y[k];
         for (std::size_t i = k + 1; i < rank; ++i)
         {
-            sum -= work[i * m + k] * y[i];
+            sum -= work[order[i] * m + order[k]] * y[i];
         }
         y[k] = sum;
     }
     for (std::size_t k = 0; k < m; ++k)
     {
-        x[perm[k]] = k < rank ? y[k] : 0.0;
+        x[subset[order[k]]] = k < rank ? y[k] : 0.0;
     }
     return rank;
 }
@@ -483,6 +505,17 @@ std::expected<std::uint32_t, Fault> solveMixedLcp(const Rows& rows, ConstraintSc
     double* q = sc.rhs.data();
     double* p = sc.impulse.data();
     double* w = sc.slack.data();
+    if (rows.bilateral == m)
+    {
+        // Equalities only: one solve.
+        for (std::size_t i = 0; i < m; ++i)
+        {
+            sc.subset[i] = i;
+            sc.target[i] = -q[i];
+        }
+        solvePivoted(m, sc.delassus.data(), m, sc.subset.data(), sc.target.data(), p, sc, tolerance);
+        return 0U;
+    }
     double* negativeQ = sc.target.data(); // reused: the right-hand side -q
     double scaleQ = 0.0;
     for (std::size_t i = 0; i < m; ++i)
@@ -578,15 +611,16 @@ bool hasDistanceLimits(const Model& model) noexcept
     return std::ranges::any_of(model.limits(), [](const UnilateralLimit& l) { return l.kind == LimitKind::Distance; });
 }
 
-// Energy of a state: kinetic, gravitational and the elements' potential.
+// Energy of a state: kinetic, gravitational and the elements' potential. Updates the kinematics at the state.
 std::expected<double, Fault> mechanicalEnergy(const Model& model, const State& state, Workspace& ws) noexcept
 {
-    const auto energy = computeEnergy(model, state, ws);
+    kinematicsAt(model, state, ws, true);
+    const auto energy = detail::energyTerms(model, state, ws);
     if (!energy)
     {
         return std::unexpected(energy.error());
     }
-    return energy->mechanical().si();
+    return energy->kinetic + energy->potential;
 }
 
 // Projects a state onto the constraints (docs/MULTIBODY.md section 6): Gauss-Newton on the closures and on the
@@ -595,7 +629,7 @@ std::expected<double, Fault> mechanicalEnergy(const Model& model, const State& s
 // velocities are projected onto the closures' tangent space, qd -= W J^T (J W J^T)^-1 J qd. Writes the achieved
 // residuals and the iteration count to the report.
 std::expected<void, Fault> project(const Model& model, State& state, Workspace& ws, const Metric& metric,
-                                   const std::uint8_t* includeLimits) noexcept
+                                   const std::uint8_t* includeLimits, bool kinematicsReady) noexcept
 {
     ConstraintScratch& sc = ws.constraintScratch;
     ConstraintReport& report = ws.constraintReport;
@@ -608,7 +642,10 @@ std::expected<void, Fault> project(const Model& model, State& state, Workspace& 
     Rows rows;
     for (std::uint32_t iteration = 0;; ++iteration)
     {
-        kinematicsAt(model, state, ws, false);
+        if (iteration > 0 || !kinematicsReady)
+        {
+            kinematicsAt(model, state, ws, false);
+        }
         if (auto gaps = limitGaps(model, state.q(), ws); !gaps)
         {
             return gaps;
@@ -622,17 +659,12 @@ std::expected<void, Fault> project(const Model& model, State& state, Workspace& 
         }
         rows = assembleRows(model, ws, anyViolated ? violated : nullptr, sc.jacobian.data(),
                             sc.layoutRow.data(), nullptr);
-        residual = 0.0;
-        double closureResidual = 0.0;
-        for (std::size_t r = 0; r < rows.count; ++r)
+        residual = rows.closureResidual;
+        for (std::size_t r = rows.bilateral; r < rows.count; ++r)
         {
             residual = std::max(residual, std::abs(sc.residual[r]));
-            if (r < rows.bilateral)
-            {
-                closureResidual = std::max(closureResidual, std::abs(sc.residual[r]));
-            }
         }
-        report.closureResidual = closureResidual;
+        report.closureResidual = rows.closureResidual;
         if (residual <= settings.closureTolerance || settings.maxProjectionIterations == 0U)
         {
             break;
@@ -732,7 +764,8 @@ std::expected<double, Fault> projectMeasured(const Model& model, State& state, W
         }
         before = *energy;
     }
-    if (auto projected = project(model, state, ws, metric, includeLimits); !projected)
+    // The energy before leaves the kinematics at the state, so the projection's first iteration reuses them.
+    if (auto projected = project(model, state, ws, metric, includeLimits, measure); !projected)
     {
         return std::unexpected(projected.error());
     }

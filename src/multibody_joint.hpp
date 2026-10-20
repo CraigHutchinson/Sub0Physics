@@ -154,6 +154,18 @@ SUB0MATH_FORCE_INLINE void composeWorldTransforms(const Model& model, Workspace&
                                                                    Workspace& ws, bool jacobians,
                                                                    bool geometricStiffness = true) noexcept;
 
+// Kinetic and potential energy (gravity and elements) [J].
+struct EnergyTerms
+{
+    double kinetic;
+    double potential;
+};
+
+// The energy of a state whose transforms, velocities and world transforms are in the workspace (the formula of
+// computeEnergy, which calls it). Evaluates the elements' energy terms.
+[[nodiscard]] std::expected<EnergyTerms, Fault> energyTerms(const Model& model, const State& state,
+                                                            Workspace& workspace) noexcept;
+
 // The pieces of a step that the constraint solver (multibody_constraints.cpp) shares with the steppers
 // (multibody_dynamics.cpp), so the formulas exist once.
 

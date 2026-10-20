@@ -1,6 +1,6 @@
 # Multibody core (design, step M1 of ADR 0003)
 
-- **Status:** M1a and M1b landed (2026-10-20); M1c next
+- **Status:** M1a, M1b and M1c landed (2026-10-20); M1d next
 - **Decision:** [ADR 0003](https://github.com/CraigHutchinson/.github/blob/main/docs/decisions/0003-dynamics-engine.md).
   Sub0Physics owns the dynamics core; MuJoCo 3.16.0 is a test-only reference.
 
@@ -379,10 +379,130 @@ M1b builds on these contracts, which a cross-repository review fixed before more
   entry (1.4x on the element evaluation).
 - **M is not differentiated** (as in MuJoCo's `implicitfast`): the step is implicit in the elements only.
 
+### M1c status (2026-10-20)
+
+**Landed** (the M1c gate, section 9):
+
+- **Description** (`multibody/constraint.hpp`): `LoopClosureDescription` (point or frame equality between two sites),
+  `CoordinateLimitDescription` (lower and/or upper stop on a joint coordinate) and `DistanceLimitDescription` (minimum
+  and/or maximum distance between two sites), each with a restitution coefficient for limits; `ConstraintSettings`
+  holds the solver's targets. `ModelBuilder::addConstraint` and `setConstraintSettings`; `build` validates (resolved
+  sites on two different bodies, ordered finite bounds, restitution in [0, 1], positive tolerances, unique names) and
+  compiles a fixed **constraint layout**: every closure's rows (3 or 6), then one row per one-sided limit. Per-row
+  results (`Workspace::constraintImpulse`, `constraintForce`) follow it.
+- **Velocity-level solve with the step's own matrix.** The free step is the stepper's (`A = M` for semi-implicit
+  Euler, `A = M - h D - h^2 K~` for linearly implicit Euler, already factorised). The rows `J` of the closures and of
+  the limits engaged at the start give `G = J A^-1 J^T` (a few rows, dense), and a mixed LCP gives the impulses `p`:
+  closure rows `J qd+ = 0`; limit rows `J qd+ >= -e min(J qd-, 0)`, `p >= 0`, complementary. `qd+ = qd_free + A^-1 J^T p`.
+  The LCP is solved by principal pivoting (Murty's least-index rule) over an LDL^T with symmetric diagonal pivoting
+  that drops dependent rows, so a planar mechanism's out-of-plane closure rows need no mask (rows that no coordinate
+  moves are dropped at assembly, the rest by the pivot tolerance). Exact for a few rows; equality-only sets take one
+  solve.
+- **Projection, every accepted step:** Gauss-Newton on the closures (and on engaged limits that are violated),
+  `dq = -A^-1 J^T (J A^-1 J^T)^-1 phi`, until `max |phi| <= closureTolerance`; coordinate limits still violated are set
+  to their bound; then the velocities onto the closures' tangent space. No Baumgarte terms. `projectConstraints` does
+  the same in the mass metric, for assembling a mechanism from an approximate configuration and for the RK stepper.
+- **Strict limits and event location.** A limit is engaged when its gap is within `eventTolerance`. A trial step that
+  leaves a limit that was not engaged with a negative gap is split: the sub-step size is found by Illinois regula
+  falsi on the smallest free gap, re-running the stepper's own trial (its matrix depends on the sub-step size), until
+  the gap lands in `[0, eventTolerance]`; the rest of the tick then runs with the limit engaged, where the LCP gives
+  the impact impulse. An accepted state is inside its limits (coordinate limits exactly, distance limits within
+  `closureTolerance`); a state given outside them is refused (InvalidInput), and failing a target within its guard
+  rejects the step (OutsideDomain), state unchanged.
+- **Ticks.** A split step still advances exactly one tick, from `tick h` to `(tick + 1) h`. Its sub-steps divide the
+  integration only: their sizes sum to h (the last is what remains), nothing between them is exposed, and time is
+  still derived from the integer tick. `ConstraintReport::substeps` and `engagementGap` report what happened.
+- **Steppers.** `stepLinearlyImplicitEuler` (default) and `stepSemiImplicitEuler` honour closures and limits.
+  `Rk4Stepper`/`MidpointStepper` honour closures (acceleration level in every stage through `forwardDynamics`, then
+  `projectConstraints`; the cached endpoint derivative is dropped, so RK4 with closures costs 5 evaluations per step)
+  and refuse limits (InvalidInput: an impact needs event location and an impulse). `forwardDynamics` adds the
+  acceleration-level forces of the closures and of engaged, non-separating limits (`J qdd + Jdot qd = 0`, with
+  `Jdot qd` from the zero-acceleration RNEA's body accelerations) and writes them to `constraintForce`.
+  `inverseDynamics` stays the tree's (constraint forces are an input there).
+- **Reactions** (`computeReactions`): the constrained accelerations from `forwardDynamics`, then RNEA with every
+  force: gravity, applied forces, elements (coordinate elements in their joints, tendon site wrenches), constraint
+  forces (closure and distance-limit site wrenches, coordinate limits in their joints). It writes `jointReactions`
+  (the wrench each joint transmits to its body, world axes, about the joint origin) and `constraintSiteWrenches`;
+  a joint reaction's component on its motion axis equals the generalized force on that coordinate (tested).
+- **Energy.** Limit impulses' work (never positive) is dissipation and goes to `State::dissipated`. The closures'
+  impulse work (`State::closureWork`, zero for an exact ideal constraint) and the projection's energy change
+  (`State::projectionEnergy`, measured with two energy evaluations when `measureProjectionEnergy`) are reported
+  apart from the balance, so a ledger's residual can be read against them.
+- **Allocation:** constrained implicit and semi-implicit steps with closures, an LCP row and split steps, RK4 with
+  closures, `projectConstraints` and `computeReactions` allocate nothing (`Sub0Physics_MultibodyAllocationTests`).
+
+**Gate evidence** (`tests/test_multibody_constraints.cpp`, GCC 16 and Clang 22 `-march=x86-64-v3`):
+
+- *Slider-crank closure residual:* 10 s at 1 ms with implicit and semi-implicit Euler (3 s with RK4): worst residual
+  9.998e-11 m against the requested 1e-10, velocity residual 1.8e-15 m/s, the second half no worse than the first.
+  With projection off (`maxProjectionIterations = 0`) the velocity-level closure alone drifts to 7.1e-3 m in 5 s.
+- *A limit never overshot:* a 1 m pendulum released from 1.2 rad onto a stop at -0.5 rad never goes below it (exact
+  comparison every step; implicit Euler at 1 ms, semi-implicit at 0.5 ms). Engagement located to a gap in
+  [0, 1e-9] in 3 or 4 trials. Impact rate -3.903 rad/s against the exact -3.894 (the step's own error); rebound 0 for
+  restitution 0 and -0.499 of the impact rate for 0.5; impact dissipation 2.529 J against the exact 2.527 J
+  (restitution 0) and 1.896 J against 1.895 J (`(1 - e^2)` of it); ledger relative residual 1.8e-3 and 1.3e-3. A rope
+  (maximum-distance limit) on a falling point mass never exceeds 0.5 m. Split steps are deterministic (two runs
+  identical) and keep integer ticks.
+- *Reactions match independent statics:* a slider-crank held against its end stop by a crank torque and a slider
+  force: the closure force, the stop force and all three joint reactions match planar free-body statics to 1e-9
+  relative (closure 19.2687, -1.2401 N; stop -40.7313 N), and the accelerations are below 1e-9.
+- *The energy ledger closes:* RK4 with the closure, 2 s at 1 ms with applied forces: relative residual 2.1e-8, the
+  projection's energy -3.4e-10 J. Linearly implicit Euler, 2 s without forcing at 2, 1 and 0.5 ms: balance residual
+  -0.250, -0.135, -0.073 J; closure work -0.139, -0.069, -0.033 J; projection -0.289, -0.153, -0.081 J (initial kinetic
+  energy 0.16 J, peak about 0.4 J). Every channel is first order (each halves with h), so it is the scheme's own
+  error, measured and attributed, not a leak.
+
+**Target-driven levers** (docs/LOD.md, "Continuous before discrete"). Every lever is deterministic (state,
+`ConstraintSettings` and tick only) and is set at model build; a model built with other settings is another model, so
+switching in-run means a `decide`/`commit` with a state copy, which needs no transfer (the state shape is the same).
+
+| Lever | Target | Achieved against requested | Cost against target |
+|---|---|---|---|
+| `closureTolerance` | max closure residual after projection | 1e-5 and 1e-8 requested: 1.7e-9 achieved; 1e-11 and 1e-14: 5.6e-17 (assembling from 2 cm off) | 3, 3, 4, 4 Gauss-Newton iterations (quadratic convergence: cost grows with log log of the target); a step typically needs 1 |
+| `eventTolerance` | gap at engagement (and the engagement distance) | 1e-3 and 1e-6: 1.8e-9; 1e-9 and 1e-12: 0 | 3, 3, 4, 4 trial sub-steps per engagement |
+| `solverTolerance` | relative pivot and sign tolerance of the small solves | dependent rows dropped (planar closures); LCP sign tests | none measurable at a few rows |
+| `maxProjectionIterations`, `maxEventIterations`, `maxEventsPerStep` | guards, not targets | a target missed within its guard rejects the step | - |
+| `measureProjectionEnergy` | observability | - | about 70 ns of a 550 ns slider-crank step |
+
+**Deviations and decisions:**
+
+- **The velocity-level solve uses the step matrix `A`, not `M`.** For semi-implicit Euler they are the same; for
+  linearly implicit Euler `J A^-1 J^T` is what keeps the impulses consistent with the implicit elements (a stiff
+  element and a closure on the same coordinates do not fight). The projection uses the same factor as its metric.
+- **Reactions are instantaneous, at a state** (acceleration level), not the step's impulses: a step's impulses include
+  impacts and are reported per row in `constraintImpulse`. "The same numbers that moved the bodies" holds for the
+  forces at that state; a step-consistent reaction would need the implicit elements' effective forces too.
+- **Active set and warm start are not stored in `State`:** engagement is recomputed from the gap each step (direct
+  pivoting needs no warm start), so a snapshot needs nothing more.
+- **Missed grazes:** a limit entered and left within one (sub-)step is not detected; event location looks only at the
+  end of each trial.
+- **First-order energy loss with closures.** The velocity-level solve plus projection is a first-order constrained
+  Euler method: on the slider-crank about 0.07 J/s at 1 ms (against a peak kinetic energy of about 0.4 J) leaves
+  through the closures' impulse work and the projection. Evaluating the rows at the predicted end of the step instead moved the
+  loss from the projection into the closure work without reducing it (measured, not kept). See the post-parity ideas.
+- **Frame closures** use the orientation error `vee(skew(R1 R2^T))`, whose rate is `w1 - w2` on the manifold; the
+  projection converges quadratically near it. A straight chain welded at both ends is a singular configuration (the
+  along-chain row vanishes); the pivoted solve drops it and the chain settles by about 1e-5 rad.
+
+**Post-parity improvement ideas** (docs/LOD.md; none is needed for the M1c gate):
+
+- A constrained symplectic scheme (SHAKE/RATTLE-type: the impulse chosen to satisfy the position constraint at the end
+  of the step, then a velocity projection), as another stepper behind the same interface, to remove the first-order
+  energy loss above. Judge it on the rig's ledger and its cost.
+- The Delassus matrix from the factor's first triangular sweep (`G = Y D^-1 Y^T`, `Y = L^-T J^T`) and one full solve
+  to apply `J^T p`, instead of a full solve per row: fewer tree sweeps once closures have more rows.
+- Projection with a reused `J A^-1 J^T` across the Gauss-Newton iterations (a quasi-Newton lever: cheaper per
+  iteration, linear convergence), selected by the same residual target.
+- An `eventTolerance` and `closureTolerance` scaled from the step's own error estimate, so a coarse step does not pay
+  for a fine target.
+
 ## 10. Open questions, to be answered by measurement
 
 - **Higher-order implicit scheme:** whether one is needed, and which, for the tyre ring (M2).
 - **LCP method:** direct pivoting against projected Gauss-Seidel once contacts or limits outnumber a
-  handful (expected never for one bike).
+  handful (expected never for one bike). M1c uses principal pivoting (Murty) over a pivoted LDL^T; its cost at a
+  few rows is not measurable against the rest of the step.
+- **Constrained energy behaviour:** whether the first-order loss of the velocity-level solve with projection (M1c
+  status) matters for the rig's closures at its step size, or a RATTLE-type stepper is needed (M1d).
 - **Transcendentals:** whether `std::sin`/`std::cos` are good enough for cross-platform hashes, or
   whether we need our own (M3 gate).
