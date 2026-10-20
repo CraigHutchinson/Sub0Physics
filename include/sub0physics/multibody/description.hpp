@@ -61,7 +61,7 @@ struct BodyDescription
     std::string_view name;                                 ///< Unique, non-empty; copied by the builder.
     sub0math::f64::Mass mass;                              ///< Positive.
     sub0math::Point3<sub0math::f64::Length> centreOfMass;  ///< In the body frame.
-    RotationalInertia inertia;                             ///< About the centre of mass; positive definite.
+    RotationalInertia inertia;                             ///< About the centre of mass; positive definite, principal moments obeying the triangle inequality.
     JointDescription joint;                                ///< Connection to the parent.
 };
 

@@ -139,8 +139,9 @@ Model spatialTree(const std::array<sub0math::Quatd, 6>& frameTurn = {})
                        {metres(0.1 * f), metres(-0.3), metres(0.05 * f)}};
         sub0math::Vec3d com{0.05 * f, -0.2, 0.1 - 0.03 * f};
         sub0math::Vec3d axis = sub0math::normalized(axes[k]);
-        RotationalInertia inertia{{sub0math::kilogramMetresSquared(0.04 + 0.01 * f), sub0math::kilogramMetresSquared(0.05),
-                                   sub0math::kilogramMetresSquared(0.06 - 0.005 * f)},
+        // Principal moments near these diagonal values obey the triangle inequality (a real body).
+        RotationalInertia inertia{{sub0math::kilogramMetresSquared(0.05 + 0.004 * f), sub0math::kilogramMetresSquared(0.06),
+                                   sub0math::kilogramMetresSquared(0.07 - 0.003 * f)},
                                   {sub0math::kilogramMetresSquared(0.003), sub0math::kilogramMetresSquared(-0.002),
                                    sub0math::kilogramMetresSquared(0.001 * f)}};
         // The same physical body, described in a body frame turned by frameTurn[k] (see the invariance test).
@@ -171,7 +172,7 @@ Model spatialTree(const std::array<sub0math::Quatd, 6>& frameTurn = {})
     const Pose siteInBody = offset(0.1, -0.2, 0.3);
     builder.addSite({.name = "end", .body = BodyId{4},
                      .frame = Pose{sub0math::conjugate(frameTurn[4]), {}} * siteInBody});
-    return *builder.build();
+    return builder.build().value();
 }
 
 State spatialState(const Model& model)
@@ -598,6 +599,24 @@ TEST_CASE("Model builder validates the description")
         CHECK(faultOf(b) == "body inertia must be positive definite");
     }
     {
+        // Ixx > Iyy + Izz: positive definite, but no mass distribution has these moments.
+        ModelBuilder b;
+        BodyDescription d = body("a");
+        d.inertia = diagonalInertia(0.05, 0.01, 0.01);
+        b.addBody(d);
+        CHECK(faultOf(b) == "body inertia violates the triangle inequality (a principal moment exceeds the sum of the other two)");
+    }
+    {
+        // The same violation in a rotated frame: the products hide it from the diagonal.
+        ModelBuilder b;
+        BodyDescription d = body("a");
+        // Principal moments 0.01, 0.01, 0.05: in-plane eigenvalues 0.03 +- 0.02 from Ixy, Izz = 0.01.
+        d.inertia = diagonalInertia(0.03, 0.03, 0.01);
+        d.inertia.products.x = sub0math::kilogramMetresSquared(0.02);
+        b.addBody(d);
+        CHECK(faultOf(b) == "body inertia violates the triangle inequality (a principal moment exceeds the sum of the other two)");
+    }
+    {
         ModelBuilder b;
         b.addBody(body("a"));
         b.addBody(body("a"));
@@ -758,4 +777,33 @@ TEST_CASE("Mass matrix entries outside ancestor pairs are zero")
             }
         }
     }
+}
+
+TEST_CASE("Model builder accepts inertias on the edge of the triangle inequality")
+{
+    const auto build = [](const RotationalInertia& inertia) {
+        ModelBuilder b;
+        b.addBody({.name = "a",
+                   .mass = sub0math::kilograms(1.0),
+                   .centreOfMass = {metres(0.0), metres(0.0), metres(0.0)},
+                   .inertia = inertia,
+                   .joint = {}});
+        return b.build();
+    };
+    // Thin rod along x: Ixx ~ 0, Iyy = Izz. Valid down to a small relative Ixx.
+    CHECK(build(diagonalInertia(1e-9, 0.1, 0.1)));
+    // Thin disc in the xy plane: Izz = Ixx + Iyy exactly (a planar lamina), in any axis order.
+    CHECK(build(diagonalInertia(0.02, 0.02, 0.04)));
+    CHECK(build(diagonalInertia(0.04, 0.02, 0.02)));
+    CHECK(build(diagonalInertia(0.02, 0.04, 0.02)));
+    // Rounding in how a user computed a lamina's moments must not reject it.
+    CHECK(build(diagonalInertia(0.02, 0.02, 0.04 * (1.0 + 1e-12))));
+    // A product-of-inertia tensor with principal moments 0.01, 0.05, 0.04 (lamina in a turned frame).
+    RotationalInertia turned = diagonalInertia(0.03, 0.03, 0.04);
+    turned.products.x = sub0math::kilogramMetresSquared(0.02);
+    CHECK(build(turned));
+    // Just beyond the edge is rejected.
+    CHECK_FALSE(build(diagonalInertia(0.02, 0.02, 0.04 * (1.0 + 1e-6))));
+    // A sphere and a cube are comfortably inside.
+    CHECK(build(diagonalInertia(0.1, 0.1, 0.1)));
 }

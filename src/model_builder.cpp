@@ -1,8 +1,11 @@
 #include <atomic>
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -74,6 +77,41 @@ bool isPositiveDefinite(const sub0math::Mat3d& m)
     return m(0, 0) > 0.0 && minor2 > 0.0 && det > 0.0;
 }
 
+// Eigenvalues of a symmetric 3x3 matrix in ascending order (the trigonometric solution of the
+// characteristic cubic). For an inertia tensor these are the principal moments.
+std::array<double, 3> principalMoments(const sub0math::Mat3d& m)
+{
+    const double p1 = m(0, 1) * m(0, 1) + m(0, 2) * m(0, 2) + m(1, 2) * m(1, 2);
+    if (p1 == 0.0)
+    {
+        std::array<double, 3> diagonal{m(0, 0), m(1, 1), m(2, 2)};
+        std::ranges::sort(diagonal);
+        return diagonal;
+    }
+    const double q = (m(0, 0) + m(1, 1) + m(2, 2)) / 3.0;
+    const double d0 = m(0, 0) - q;
+    const double d1 = m(1, 1) - q;
+    const double d2 = m(2, 2) - q;
+    const double p = std::sqrt((d0 * d0 + d1 * d1 + d2 * d2 + 2.0 * p1) / 6.0);
+    // det((m - q I) / p) / 2, expanded along the first row.
+    const double det = d0 * (d1 * d2 - m(1, 2) * m(1, 2)) - m(0, 1) * (m(0, 1) * d2 - m(1, 2) * m(0, 2)) +
+                       m(0, 2) * (m(0, 1) * m(1, 2) - d1 * m(0, 2));
+    const double r = std::clamp(det / (2.0 * p * p * p), -1.0, 1.0);
+    const double phi = std::acos(r) / 3.0;
+    const double largest = q + 2.0 * p * std::cos(phi);
+    const double smallest = q + 2.0 * p * std::cos(phi + 2.0 * std::numbers::pi / 3.0);
+    return {smallest, 3.0 * q - largest - smallest, largest};
+}
+
+// A physical rigid body's principal moments obey I1 <= I2 + I3 for every permutation (the mass
+// distribution is non-negative); equality is a planar lamina, so the test is relative.
+bool satisfiesTriangleInequality(const sub0math::Mat3d& inertia)
+{
+    constexpr double RelativeTolerance = 1e-9;
+    const std::array<double, 3> i = principalMoments(inertia);
+    return i[2] <= (i[0] + i[1]) * (1.0 + RelativeTolerance);
+}
+
 std::optional<Fault> checkBody(const BodyDescription& body, std::uint32_t index, const std::vector<std::string>& names)
 {
     if (body.name.empty())
@@ -99,6 +137,10 @@ std::optional<Fault> checkBody(const BodyDescription& body, std::uint32_t index,
     if (!isPositiveDefinite(inertiaMatrix(body.inertia)))
     {
         return Fault{FaultKind::InvalidInput, "body inertia must be positive definite"};
+    }
+    if (!satisfiesTriangleInequality(inertiaMatrix(body.inertia)))
+    {
+        return Fault{FaultKind::InvalidInput, "body inertia violates the triangle inequality (a principal moment exceeds the sum of the other two)"};
     }
     const JointDescription& joint = body.joint;
     if (joint.parent != WorldBody && joint.parent.value() >= index)

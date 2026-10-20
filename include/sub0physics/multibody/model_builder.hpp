@@ -20,7 +20,8 @@ namespace sub0physics::multibody
  *
  * Bodies are numbered in the order they are added, and a joint's parent must already exist, so the
  * numbering is a topological order of the tree. Nothing is checked until `build`, which validates the
- * whole description at once: positive mass, positive definite inertia, unit axes and rotations, finite
+ * whole description at once: positive mass, positive definite inertia whose principal moments obey the
+ * triangle inequality, unit axes and rotations, finite
  * values, unique non-empty names and resolved references.
  *
  * ```cpp
