@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstddef>
@@ -251,6 +252,58 @@ private:
         previousX = x;
     }
     return PolylineProfile::create(std::move(points));
+}
+
+/**
+ * Samples the Hausdorff distance between two profiles inside an x range: every segment of each is sampled at a
+ * fixed step, and each sample's distance to the other profile (the nearest point of any of its segments) is
+ * taken; the result is the largest. The distance from a point to a set moves by at most this much between the
+ * two profiles, so it bounds how far any clearance query can differ.
+ *
+ * @param a One profile.
+ * @param b The other.
+ * @param xMin Samples left of this x are ignored [m].
+ * @param xMax Samples right of this x are ignored [m].
+ * @param step Sampling step along each segment [m].
+ * @return The largest sampled distance [m].
+ */
+[[nodiscard]] inline double sampledHausdorff(const PolylineProfile& a, const PolylineProfile& b, double xMin, double xMax,
+                                             double step = 0.00025)
+{
+    const auto distanceTo = [](const PolylineProfile& profile, double x, double z) {
+        double best = std::numeric_limits<double>::infinity();
+        const auto points = profile.points();
+        for (std::size_t i = 0; i + 1U < points.size(); ++i)
+        {
+            const double ax = points[i].x.si(), az = points[i].y.si();
+            const double dx = points[i + 1U].x.si() - ax, dz = points[i + 1U].y.si() - az;
+            const double t = std::clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0.0, 1.0);
+            best = std::min(best, std::hypot(x - (ax + t * dx), z - (az + t * dz)));
+        }
+        return best;
+    };
+    double worst = 0.0;
+    for (const bool forward : {true, false})
+    {
+        const PolylineProfile& from = forward ? a : b;
+        const PolylineProfile& to = forward ? b : a;
+        const auto points = from.points();
+        for (std::size_t i = 0; i + 1U < points.size(); ++i)
+        {
+            const double ax = points[i].x.si(), az = points[i].y.si();
+            const double dx = points[i + 1U].x.si() - ax, dz = points[i + 1U].y.si() - az;
+            const auto steps = static_cast<int>(std::max(1.0, std::hypot(dx, dz) / step));
+            for (int k = 0; k <= steps; ++k)
+            {
+                const double x = ax + dx * k / steps;
+                if (x >= xMin && x <= xMax)
+                {
+                    worst = std::max(worst, distanceTo(to, x, az + dz * k / steps));
+                }
+            }
+        }
+    }
+    return worst;
 }
 
 } // namespace sub0physics::terrain::testing

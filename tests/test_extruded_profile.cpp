@@ -99,46 +99,6 @@ std::vector<Query> queries()
     return out;
 }
 
-// Distance from a point to a polyline, by trying every segment.
-double distanceTo(const PolylineProfile& profile, double x, double z)
-{
-    double best = std::numeric_limits<double>::infinity();
-    const auto points = profile.points();
-    for (std::size_t i = 0; i + 1U < points.size(); ++i)
-    {
-        const double ax = points[i].x.si(), az = points[i].y.si(), dx = points[i + 1U].x.si() - ax, dz = points[i + 1U].y.si() - az;
-        const double t = std::clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0.0, 1.0);
-        best = std::min(best, std::hypot(x - (ax + t * dx), z - (az + t * dz)));
-    }
-    return best;
-}
-
-// Sampled Hausdorff distance between two profiles inside |x| <= 0.97 (every segment sampled at 0.25 mm, both directions).
-double hausdorff(const PolylineProfile& a, const PolylineProfile& b)
-{
-    double worst = 0.0;
-    for (const auto* pair : {&a, &b})
-    {
-        const PolylineProfile& from = *pair;
-        const PolylineProfile& to = pair == &a ? b : a;
-        const auto points = from.points();
-        for (std::size_t i = 0; i + 1U < points.size(); ++i)
-        {
-            const double ax = points[i].x.si(), az = points[i].y.si(), dx = points[i + 1U].x.si() - ax, dz = points[i + 1U].y.si() - az;
-            const auto steps = static_cast<int>(std::max(1.0, std::hypot(dx, dz) / 0.00025));
-            for (int k = 0; k <= steps; ++k)
-            {
-                const double x = ax + dx * k / steps;
-                if (std::abs(x) <= 0.97) // away from the ends, where the bake's authored range stops a cell short
-                {
-                    worst = std::max(worst, distanceTo(to, x, az + dz * k / steps));
-                }
-            }
-        }
-    }
-    return worst;
-}
-
 CircleQuery circle(const Query& q)
 {
     return {{{Length::fromSi(q.cx), Length::fromSi(q.cz)}, Length::fromSi(q.radius)}, Length::fromSi(1e-10)};
@@ -267,7 +227,7 @@ TEST_CASE("Extruded profile: the baked page plus its faces answers clearance wit
         auto rebuilt = profileFromPageRow(bakeGrid(), *baked.page, 128, source.features());
         if (!rebuilt) { MESSAGE(std::string(rebuilt.error().detail)); }
         REQUIRE(rebuilt);
-        const double deviation = hausdorff(c.profile, *rebuilt); // sampled Hausdorff distance of the bake
+        const double deviation = sampledHausdorff(c.profile, *rebuilt, -0.97, 0.97); // sampled Hausdorff distance of the bake
         CHECK(deviation <= c.maxDeviation);
         MESSAGE(std::string(c.name), ": Hausdorff distance ", deviation, " m");
         // The distance from a point to a set moves by at most the Hausdorff distance between the sets.
