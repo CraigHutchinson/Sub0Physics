@@ -49,4 +49,29 @@ concept OdeSystem =
         { system.evaluate(t, x, dxdt) } -> std::same_as<std::expected<void, Fault>>;
     });
 
+/**
+ * Jacobian of a fixed-size system, row-major: `jacobian[i][j]` is the partial derivative of `dx_i/dt` with
+ * respect to `x_j`.
+ *
+ * @tparam N Number of state variables.
+ */
+template<std::size_t N>
+using JacobianMatrix = std::array<std::array<double, N>, N>;
+
+/**
+ * A fixed-size system that also provides its Jacobian `d f / d x` at `(t, x)`, for linearly implicit methods.
+ *
+ * The Jacobian may be approximate (any matrix keeps a W-method at its order); exact stiff terms are what make
+ * large steps stable. Like `evaluate`, `jacobian` may refuse a state outside the model's domain.
+ *
+ * @tparam S The system type.
+ * @tparam N Number of state variables.
+ */
+template<typename S, std::size_t N>
+concept OdeSystemWithJacobian =
+    OdeSystem<S, N> && N != std::dynamic_extent &&
+    requires(S& system, double t, const StateVector<N>& x, JacobianMatrix<N>& jacobian) {
+        { system.jacobian(t, x, jacobian) } -> std::same_as<std::expected<void, Fault>>;
+    };
+
 } // namespace sub0physics

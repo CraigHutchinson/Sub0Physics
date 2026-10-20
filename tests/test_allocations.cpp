@@ -163,6 +163,42 @@ TEST_CASE("The bounded periodic solver allocates nothing once the solution has c
     CHECK(count.since() == 0U);
 }
 
+TEST_CASE("Warm-started and active-set chain solves allocate nothing once the solution has capacity")
+{
+    std::vector<double> lower(512, 0.0);
+    for (std::size_t i = 200; i < 260; ++i)
+    {
+        lower[i] = 0.015;
+    }
+    BoundedPeriodicSolution solution;
+    solution.reserveActiveSet(512);
+    const AllocationCount count;
+    CHECK(solveBoundedPeriodicTridiagonalActiveSet(lower, 300000.0 * 0.0044, 30.0 / 0.0044, solution));
+    CHECK(solveBoundedPeriodicTridiagonalActiveSet(lower, 300000.0 * 0.0044, 30.0 / 0.0044, solution, {.warmStart = true}));
+    CHECK(solveBoundedPeriodicTridiagonal(lower, 300000.0 * 0.0044, 30.0 / 0.0044, solution, {.warmStart = true}));
+    CHECK(solution.converged);
+    CHECK(count.since() == 0U);
+}
+
+TEST_CASE("Adaptive and linearly implicit steps never allocate")
+{
+    Contact system;
+    EmbeddedRungeKutta<2, DormandPrince54> stepper;
+    StateVector<2> x{0.4, 0.0};
+    const ErrorTolerance<2> tolerance{{1e-6, 1e-4}, 0.0};
+    AdaptiveCounters counters;
+    double h = 1e-3;
+    double stopped = 0.0;
+    const AllocationCount count;
+    for (int tick = 0; tick < 100; ++tick)
+    {
+        REQUIRE(advanceAdaptively<2>(stepper, system, tick * 0.01, (tick + 1) * 0.01, x, h, tolerance, StepSizeController{},
+                                     counters, [](double, const StateVector<2>&) -> std::expected<void, Fault> { return {}; },
+                                     stopped));
+    }
+    CHECK(count.since() == 0U);
+}
+
 TEST_CASE("Corridor rasterising and grid lookups never allocate")
 {
     using namespace sub0physics::terrain;

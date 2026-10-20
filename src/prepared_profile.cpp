@@ -17,28 +17,6 @@ namespace
 
 constexpr double Infinity = std::numeric_limits<double>::infinity();
 
-// Length of (a, b) by scaling with the larger magnitude and summing the squares with Kahan compensation: the
-// arithmetic of V8's Math.hypot. It does not depend on the C library, and ported goldens rely on its rounding.
-double scaledNorm(double a, double b) noexcept
-{
-    const double largest = std::max(std::abs(a), std::abs(b));
-    if (largest == 0.0)
-    {
-        return 0.0;
-    }
-    double sum = 0.0;
-    double compensation = 0.0;
-    for (const double v : {a, b})
-    {
-        const double scaled = std::abs(v) / largest;
-        const double summand = scaled * scaled - compensation;
-        const double preliminary = sum + summand;
-        compensation = (preliminary - sum) - summand;
-        sum = preliminary;
-    }
-    return std::sqrt(sum) * largest;
-}
-
 bool finite(double a, double b) noexcept
 {
     return std::isfinite(a) && std::isfinite(b);
@@ -56,7 +34,7 @@ std::size_t upperIndex(const std::vector<double>& xs, double value) noexcept
 
 } // namespace
 
-PreparedProfile::PreparedProfile(const PolylineProfile& profile)
+PreparedProfile::PreparedProfile(const PolylineProfile& profile, NormArithmetic arithmetic) : arithmetic_(arithmetic)
 {
     const auto points = profile.points();
     const std::size_t segments = points.size() - 1U;
@@ -76,7 +54,7 @@ PreparedProfile::PreparedProfile(const PolylineProfile& profile)
         const double dx = x_[i + 1U] - x_[i];
         const double dy = y_[i + 1U] - y_[i];
         const double sumSquares = dx * dx + dy * dy;
-        const double norm = scaledNorm(dx, dy);
+        const double norm = sub0physics::norm(arithmetic_, dx, dy);
         dx_.push_back(dx);
         dy_.push_back(dy);
         sumSquares_.push_back(sumSquares);
@@ -174,7 +152,7 @@ RayHit PreparedProfile::castFrom(Point2<Length> origin, Vec2d direction, double 
         }
         if (std::abs(r - distance) < tieTolerance)
         {
-            if (scaledNorm(snx[feature] - snx[j], snz[feature] - snz[j]) > DistinctNormal)
+            if (sub0physics::norm(arithmetic_, snx[feature] - snx[j], snz[feature] - snz[j]) > DistinctNormal)
             {
                 ambiguous = true;
             }

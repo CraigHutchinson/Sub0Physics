@@ -15,6 +15,7 @@ add_executable(Sub0Physics_Tests
     test_fidelity_selector.cpp
     test_id.cpp
     test_integrators.cpp
+    test_levers.cpp
     test_multibody.cpp
     test_multibody_constraints.cpp
     test_multibody_elements.cpp

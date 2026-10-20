@@ -8,6 +8,7 @@
 #include <sub0math/units/quantities.hpp>
 #include <vector>
 
+#include "sub0physics/geometry/norm.hpp"
 #include "sub0physics/geometry/polyline_profile.hpp"
 #include "sub0physics/geometry/witness.hpp"
 
@@ -91,8 +92,9 @@ struct ContourIntrusion
  * Exactness. Each query uses the same operand order as the straightforward formulation it replaces
  * (origin subtracted first, `x * dy - z * dx` cross products, divisions where the formula divides), so results
  * are reproducible bit for bit across compilers when floating-point contraction is off, which this library
- * enforces. Unit normals use a scaled, compensated norm (the arithmetic of V8's `Math.hypot`, which the
- * ported goldens rely on), not `std::hypot`, so they do not depend on the C library. Projection parameters are
+ * enforces. Unit normals use a scaled, compensated norm by default (the arithmetic of V8's `Math.hypot`, which the
+ * ported goldens rely on), not `std::hypot`, so they do not depend on the C library; NormArithmetic::Fast is the
+ * cheaper lever (segment lengths, normals and the tie test then differ in the last place). Projection parameters are
  * divided by the squared length, not multiplied by its reciprocal: the reciprocal measured about 10% faster in
  * the clearance query but changes the last bit of distances and parameters, and with them witness classification
  * at a vertex, so the prepared and unprepared clearance queries would no longer agree bit for bit.
@@ -115,8 +117,16 @@ public:
      * Prepares a profile. Allocates the arrays.
      *
      * @param profile A profile validated by `PolylineProfile::create`.
+     * @param arithmetic How segment lengths, unit normals and the ray tie test compute norms; Compensated (the
+     *        default) reproduces ported results bit for bit.
      */
-    explicit PreparedProfile(const PolylineProfile& profile);
+    explicit PreparedProfile(const PolylineProfile& profile, NormArithmetic arithmetic = NormArithmetic::Compensated);
+
+    /** @return The norm arithmetic the profile was prepared with. */
+    [[nodiscard]] NormArithmetic arithmetic() const noexcept
+    {
+        return arithmetic_;
+    }
 
     /** @return Vertices; segments number one fewer. */
     [[nodiscard]] std::size_t vertexCount() const noexcept
@@ -291,10 +301,11 @@ private:
     std::vector<double> x_, y_;              ///< Vertices, m.
     std::vector<double> dx_, dy_;            ///< Segment extents `vertex[i + 1] - vertex[i]`, m.
     std::vector<double> sumSquares_;         ///< `dx * dx + dy * dy`, m^2.
-    std::vector<double> norm_;               ///< Segment length by the scaled, compensated norm, m.
+    std::vector<double> norm_;               ///< Segment length in `arithmetic_`, m.
     std::vector<double> normSquared_;        ///< `norm * norm`, m^2.
     std::vector<double> nx_, ny_;            ///< Outward unit normal `(-dy, dx) / norm` (solid below).
     double longestSegment_ = 0.0;            ///< Largest `norm`, m: bounds the x reach of a parameter overshoot.
+    NormArithmetic arithmetic_ = NormArithmetic::Compensated; ///< Norms of lengths, normals and ray ties.
 };
 
 } // namespace sub0physics
