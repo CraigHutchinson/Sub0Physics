@@ -68,7 +68,11 @@ should ask `pageCorner(key)` to be offset inward.
 ### Pages
 
 `HeightPage` is a 256-cell, node-registered page with a fixed layout, so its `heightAt` has constant strides
-and no page size to load. `buildHeightPage` refuses a grid with another cell count or cell-centre
+and no page size to load. `heightsAt` is the same lookup over many positions (structure-of-arrays in and out), and
+`nodeRow`, `knownWords` and `maxSecondDifference` give extraction loops the raw rows, the authored bits and the
+page's curvature bound. Each page quantises against its *own* height origin, so the two copies of a node on a
+shared edge can differ by one step (0.1 mm); extraction reads such a node from one page (below) so cells meet
+exactly at a seam. `buildHeightPage` refuses a grid with another cell count or cell-centre
 registration, and a key outside the grid.
 
 **Why not runtime-sized.** A runtime cell count costs the lookup: with the count read at run time instead of
@@ -169,11 +173,79 @@ reaction), the energy, the residual and the sweep count; reuse one and the solve
 capacity. Tests: the unconstrained minimiser, a single active bound against its closed-form decaying solution on a
 ring, the KKT conditions and optimality against feasible perturbations on random problems, and the allocation gate.
 
-## Test surfaces: `terrain/testing/`
+## Tile cache: `SourceTileCache<Tile>`
 
-`sub0physics/terrain/testing.hpp` (not in the `sub0physics.hpp` umbrella) is the analytic-surface catalogue:
-`Plane`, `Ramp`, `Step`, `RoundedBlock`, `Bridge`, `Berm`, `Rut`. Each has `height(x, y)` and an exact unit
-`normal(x, y)`; pieces are half-open on their low side. `Step` and `Bridge` also give their vertical and
-under faces (`Step::riserNormal`, `Bridge::spansAt`, `Bridge::undersideNormal`). `sampleSurface` fills a
-page's samples at its registration's positions. These are the tier-C fixtures: the frozen ports stay the
-oracles (tier A), and adapters feed the same scenarios into the generic components (tier B).
+`sub0physics/terrain/source_tile_cache.hpp`. A bounded cache of immutable tiles keyed by `TileKey`, with the
+lifecycle of an asynchronous source made deterministic.
+
+| Property | Rule |
+|---|---|
+| Source | A `TileSource<Tile>` builds a tile into a slot the cache hands it and answers `Ready`, `Waiting` or `Failed`. The cache asks only inside `pump`, so *when* a tile becomes available is decided at a synchronisation point; a replay that reproduces the answers reproduces the cache |
+| Loads | `access(key)` on a resident tile is a hit and makes it the most recently used; on a tile already loading it is a hit and joins the load; otherwise it starts one (a miss), or is `Refused` when `pendingLoads` are in flight. Nothing is silently dropped |
+| Residency | At most `residentTiles`; a finished load evicts the least recently *accessed* tiles to make room. Loads are decided oldest first, and `pump` calls back for each one before it decides the next, so a reader can pin a tile before a later load evicts it |
+| Pins | `pin`/`unpin` (or the move-only `Lease`) keep a slot's storage valid after eviction, and the slot is not reused until released. `extraSlots` is how many evicted-but-pinned tiles to afford; one more slot is always kept, because a tile is built before the one it replaces is evicted |
+| Accounting | `CacheStats` (hits, misses, loads, evictions) and `bytes()` (resident tiles times the caller's `tileBytes`); `resident()` lists keys in `TileKey` order, independent of use order |
+| Allocation | None after `create`. The key map is open addressing with backward-shift deletion (no tombstones) and the recency list is intrusive, so access is O(1). A *load* allocates only if the source does: a fixed-size tile is built in place |
+
+The cache is generic over the tile type, so one pool holds `HeightPage`s, R0a-style 40-cell tiles or a product's
+own. It owns no request lifecycle (identity, supersession, budgets across requests): that is `TerrainService` (G5).
+
+## Extraction
+
+`sub0physics/terrain/column_extract.hpp` and `height_extract.hpp`. The sample layout is the consumer's choice; two
+are provided. Both write into caller-owned buffers sized once (`ColumnBuffer<T>`: fixed capacity, uninitialised
+`resize`, and a `false` return instead of truncation), never alias a tile, and never allocate when refilled.
+
+**Columns (`extractColumns`).** One column per cell of a cell-centre grid, row by row: identity (`j * cellsAcross +
+i`, 64-bit), centre, top surface, normal and the spans beneath, for any tile type that models `ColumnTile`
+(`known`, `top`, `normal`, `spanCount`, `span`). It reads in runs of cells that share a page, so the page lookup and
+index arithmetic are paid per run. Unauthored cells decide the outcome first: any makes the result `Partial` with
+their identities and *no* columns, so unknown ground is never delivered as flat. Over-capacity blocks are refused
+(`ColumnBudget`, `SpanBudget`), and a missing page is `MissingTile`.
+
+**Heights (`extractHeights`, `extractCorridor`).** Node rows and triangles from `HeightPage`s over the block a
+`PageWindow` (the caller's pinned pages, in a rectangle) covers, optionally only the cells of a mask, so the corridor
+coverage of `CorridorBuilder` is the request. The result (`HeightExtract`) is in a **patch-local** float frame with a
+double `origin()` as the only way back to the terrain frame. Each requested cell is `Delivered` (two triangles on the
+page's fixed diagonal, counter-clockwise from above, with unit normals derived from those triangles), `Unknown`
+(an unauthored node, an absent page, off the grid) or `NotRequested`. Triangles take their corner heights from the
+node array, and a seam node is read from the page on the positive side (the page below where that one is absent), so
+neighbouring cells meet exactly across pages. A step is a ramp across one cell here, which is why a vertical face is a
+feature (`BoxFeature`, below) and not a height. `castRay` walks the cells a ray crosses and intersects only their
+triangles (Sub0Math `intersect`), returning a `Witness3` of kind `Face` (index = triangle) whose normal faces the ray;
+`castRayBruteForce` tests every triangle and is the reference it is checked against.
+
+**Features.** `BoxFeature` is a box in the terrain frame; a vertical face is a box of zero thickness with its
+outward normal. `featuresMeeting` lists those whose plan bounds meet a box. Contact queries against features are R1.
+
+## Levers (continuous, target-driven first)
+
+Defaults reproduce the reference (stride 1 and the source's own resolution) bit for bit.
+
+| Lever | Kind | Target and controller | Evidence |
+|---|---|---|---|
+| Extraction resolution (`HeightRequest::stride`, power of two) | Continuous | `strideForTolerance(curvatureBound(window), tolerance)`: the coarsest stride whose estimated height error `M s^2 / 4` stays within the tolerance, `M` being the page's largest second difference | Achieved error against the stride-1 extract on a plane, ramp, berm, rut and a rough field: always inside the estimate, by a factor of 2 to 5 on smooth surfaces (the bound uses the page-wide worst case). Cost falls with `s^2` (triangles; 6x in time at s = 4). A coarse cell needs every finer node authored, so it never interpolates across nodata; a riser gives a large `M` and so stride 1 |
+| Corridor tightness (`tightCorridor`) | Continuous | Doubles the sub-interval count until a doubling would save less than a target fraction of the cells | Cells never rise with the count; a straight axis-aligned motion stays at 1 box; a turning one needs 4 to 64 depending on the target. Containment holds for every count (the bound of `CorridorBuilder`) |
+
+Both are decided from configuration and state alone, so a replay reproduces them. Whether either can switch in-run
+(extracts are rebuilt per request, so a stride change takes effect on the next one) is the service's question (G5).
+
+## Test fixtures: three tiers
+
+The frozen ports stay the oracles (**tier A**); adapters feed the same scenarios into the generic components (**tier
+B**); one catalogue of analytic surfaces covers what no port does (**tier C**).
+
+**Tier C: `terrain/testing/`.** `sub0physics/terrain/testing.hpp` (not in the `sub0physics.hpp` umbrella) is the
+analytic-surface catalogue: `Plane`, `Ramp`, `Step`, `RoundedBlock`, `Bridge`, `Berm`, `Rut`. Each has `height(x, y)`
+and an exact unit `normal(x, y)`; pieces are half-open on their low side. `Step` and `Bridge` also give their vertical
+and under faces (`Step::riserNormal`, `Bridge::spansAt`, `Bridge::undersideNormal`). `sampleSurface` fills a page's
+samples at its registration's positions.
+
+**Tier B: `ExtrudedProfileSource`.** A `PolylineProfile` extruded along y, served as a `TileSource` of baked
+`HeightPage`s. (1) The slice at any y inside the extrusion *is* `measureCircleClearance` on the profile: the same call,
+checked bit for bit. (2) Pages are samples of `surfaceHeight` at the grid's sample positions; a node outside the profile
+or the extrusion is unknown. (3) Every vertical segment is a zero-thickness `BoxFeature`. `profileFromPageRow` rebuilds a
+profile from a baked row plus the faces, and `sampledHausdorff` measures how far it is from the original; the distance from
+a point to a set moves by at most the Hausdorff distance, so a clearance query on the bake may differ by no more. On
+1 cm nodes: flat and a square block are exact to float rounding (6e-9 m, because the block's edges are features);
+rounded and bridge fixtures 2.5 mm (the chord of a 0.1 m radius at 1 cm).

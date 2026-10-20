@@ -89,6 +89,17 @@
         "include/sub0physics/geometry/prepared_profile.hpp",
         "src/prepared_profile.cpp"
       ]
+    },
+    {
+      "source": "dist/terrain-request.js",
+      "blob": "92a5fc38199d57570bec25a678e8737fb12fa5c8",
+      "driftOwner": false,
+      "what": "Generic mechanisms of the terrain request experiment: de-duplicated tile loads, least-recently-used residency with pins and a pending-load budget (the tile cache), owned structure-of-arrays column extraction in page runs with uninitialised fixed-capacity buffers, and the unknown-cell-first outcome (the request lifecycle itself is not here)",
+      "targets": [
+        "include/sub0physics/core/column_buffer.hpp",
+        "include/sub0physics/terrain/source_tile_cache.hpp",
+        "include/sub0physics/terrain/column_extract.hpp"
+      ]
     }
   ]
 }

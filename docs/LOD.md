@@ -95,6 +95,8 @@ spent only where it is needed.
 | Integrator (RK4, midpoint, embedded 3(2) or 5(4), linearly implicit Euler) | Discrete | `integrator/` | Selected per mechanism; linearly implicit Euler needs the system's Jacobian (`OdeSystemWithJacobian`) |
 | Step size | Continuous | `advanceAdaptively` | An error tolerance per component (`ErrorTolerance`); a deterministic controller (`StepSizeController`) sets each sub-step inside the caller's fixed tick |
 | Event location | Discrete (on or off) | `advanceAdaptively` event function | Steps end on a sign change of the event function (a contact or branch switch) within a time tolerance, so no step crosses a kink in the force law |
+| Extraction resolution (`HeightRequest::stride`) | Continuous | `terrain/height_extract.hpp` | A height-error tolerance; `strideForTolerance` picks the coarsest power-of-two stride whose estimated error `M s^2 / 4` meets it (docs/TERRAIN.md Levers) |
+| Corridor tightness (`tightCorridor`) | Continuous | `terrain/corridor_builder.hpp` | A relative cell-saving target; doubles the sub-interval count until a doubling gains less. Containment holds at every count |
 | Quadrature slots | Discrete (per slot) | `LinearlyImplicitEuler::setQuadrature` | Integrals nothing depends on use the trapezoid rule on the endpoint derivatives, so energy ledgers measure the method, not the bookkeeping |
 
 ## Not provided yet
