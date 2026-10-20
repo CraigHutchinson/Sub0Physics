@@ -47,6 +47,11 @@ conventions on every physical quantity.
 
 - SI units internally. Signs, axes and frames are stated where a quantity is declared.
 - Errors are values: `std::expected<T, Fault>`. No exceptions, no `assert` on physical input.
+- Hot-path results are status aggregates (`{value, known}` or a struct with a `status` field), not
+  `std::optional` or `std::expected`: measured slower, because the optional keeps the result in memory.
+  `std::expected` is for setup and anywhere else off the hot path. A query that returns a variable number
+  of results (witnesses, cells) writes them to a caller-owned fixed-capacity buffer and reports the count
+  and an `overflowed` flag; it never allocates.
 - Stepping paths never allocate; scratch belongs to the integrator or the caller.
 - Every model is checked against something independent: a closed form, a finer step, a brute-force
   search or a conserved quantity.
