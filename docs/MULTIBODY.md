@@ -1,6 +1,6 @@
 # Multibody core (design, step M1 of ADR 0003)
 
-- **Status:** M1a, M1b and M1c landed (2026-10-20); M1d next
+- **Status:** M1a to M1d landed (M1d 2026-10-21); M2 next
 - **Decision:** [ADR 0003](https://github.com/CraigHutchinson/.github/blob/main/docs/decisions/0003-dynamics-engine.md).
   Sub0Physics owns the dynamics core; MuJoCo 3.16.0 is a test-only reference.
 
@@ -33,7 +33,7 @@ same description to `mjSpec`.
 | Item | Contents |
 |---|---|
 | `Body` | Name, mass, centre of mass, inertia about the COM (positive definite), parent joint |
-| `Joint` | Type (`Prismatic`, `Revolute`; later `Planar`, `Spherical`, `Free`), parent body, frame in the parent, axis, optional spring reference; generalized coordinates are ordered by the tree |
+| `Joint` | Type (`Prismatic`, `Revolute`; later `Spherical`, `Free`), parent body, frame in the parent, axis, optional spring reference; generalized coordinates are ordered by the tree. A body with several joints is a chain with massless outer bodies (M1d). A planar mechanism needs no planar joint type: the model is evaluated in planar algebra when it qualifies (M1d, `Formulation`) |
 | `Site` | A named frame on a body, for attachments, element endpoints and load reporting |
 | `ForceElement` | One of the element kinds in §4, attached to coordinates or sites |
 | `Constraint` | Loop closure between two sites (point or frame equality), or a unilateral limit on a coordinate or distance |
@@ -55,7 +55,8 @@ and no runtime parsing.
   - ABA only if measurement ever asks for it.
 - **Spatial algebra:** spatial vectors, spatial inertias and Plücker transforms, in double, through a
   6D vocabulary added to Sub0Math when M1a first needs it, following ADR 0002's "grow by use".
-  Planar models use the same 3D formulation with planar joints; there is no separate 2D engine.
+  Planar models use the same model description; when a model qualifies, the same algorithms run in three-component
+  planar algebra (M1d, `Formulation::Planar`). There is no separate 2D engine or description.
 
 ## 4. Force elements: the extension point
 
@@ -496,13 +497,122 @@ switching in-run means a `decide`/`commit` with a state copy, which needs no tra
 - An `eventTolerance` and `closureTolerance` scaled from the step's own error estimate, so a coarse step does not pay
   for a fine target.
 
+### M1d status (2026-10-21)
+
+**Landed** (the M1d gate, section 9). The consumer is a bicycle rig (a frame on heave and pitch, a fork, a swingarm with
+a shock between two eyes, a guided rider, progressive end buffers, two vertical tyre springs over moving platens), built
+by its consumer with `ModelBuilder` from typed descriptions; nothing here names it.
+
+- **Planar formulation** (`Formulation`, `PlanarModel`, `multibody/planar.hpp`). `build` selects it automatically when
+  every revolute axis lies along one coordinate axis k (either sense), every prismatic axis and placement rotation is
+  in its plane, and gravity has no k component; the tests are exact, so a model built from in-plane numbers qualifies.
+  `ModelBuilder::setFormulation` forces `General` (or requires `Planar`). Transforms, RNEA, CRBA, the tendons with their
+  exact Jacobians, energy, site kinematics and site forces then run in three-component planar algebra (RBDA 2.15) and
+  write `Workspace::planar`; out-of-plane offsets are kept (a tendon's length includes the constant k separation of its
+  sites). The constraint solver and `computeReactions` still read the general fields, which the planar path fills from
+  its own results without trigonometry (`expandPlanarKinematics`). One set of algorithms per formulation, chosen per
+  call; there is still no separate 2D engine or model description.
+- **Massless bodies.** A body with mass and inertia exactly zero only carries a joint: a body with several joints in
+  MJCF is a chain of them (the rig's frame: heave, then pitch). `build` checks that the mass matrix at the zero
+  configuration still factorises.
+- **Site forces and forcing Jacobians** (`Forcing::siteForces`, `Forcing::stiffness`, `Forcing::damping`). External
+  forces at sites, held over the step: mapped through `J^T` at the start of the step in every stepper
+  (`computeAppliedForce`), and applied where they act in `computeReactionsWithForcing`, so a tyre load reaches the
+  joints through the bodies. A state-dependent input (a contact computed by the consumer) may supply its generalized
+  Jacobians, which the linearly implicit steps treat like an element's. `forwardDynamicsWithForcing`.
+- **Implicit-term lever** (`ImplicitTerms`: `Full`, `MaterialStiffness`, `DampingOnly`). `DampingOnly` is MuJoCo's
+  `implicitfast` structure (only the dampers implicit); with the forces held at the start of the step it reproduces
+  MuJoCo's scheme, which is how the consumer's engine-parity reference runs.
+- **Linearly implicit midpoint** (`stepLinearlyImplicitMidpoint`, `LinearlyImplicitMidpoint`): the same linearisation
+  with weight 1/2 (the trapezoid rule on velocities), sharing the implicit Euler code path, which stays bit for bit.
+  A-stable, no numerical damping on a linear oscillator (energy kept to 1e-12 where backward Euler loses it), order 2
+  measured for constant M. Constraints are refused (InvalidInput) until a RATTLE-type form exists.
+- **Two-phase step** (`prepareLinearlyImplicitStep`, `computePreparedSiteKinematics`, `computePreparedSiteMotion`,
+  `completeLinearlyImplicitStep`): a consumer that forms its forcing from the state reads sites and energy from the
+  step's own kinematics pass instead of a second and third one. prepare then complete equals the one-call step bit for
+  bit (tested, both formulations, both schemes); any other entry point withdraws a preparation, and complete refuses a
+  different state. `computeSiteKinematics` also has a batch form that can return the energy from the same pass.
+
+**Gate evidence.**
+
+- *Parity with the M0 MuJoCo reference and BikeLab's goldens* (the consumer's parity tests and its MuJoCo
+  reference documentation): with `DampingOnly` and forces held, all six golden scenarios
+  (hardtail, full suspension, compliant rider with buffers, rider stops, and the two travel-limit terminations)
+  agree on every one of 60 channels, the settled state and the run summary to 1.7e-12 of the channel's scale (worst:
+  a near-zero fixture load against its 1 N floor; typically 1e-16 to 1e-13), with identical termination instants, under
+  M0's 1e-10 bounds. The native MuJoCo reference run with the same MJCF at 0.5, 2 and 10 ms agrees with the core at the
+  same steps to 2.8e-12.
+- *Timestep advantage, measured* (the consumer's fidelity study): against a converged run, MuJoCo's scheme is
+  already stable to 10 ms on these scenarios (5 ms with the weak shock buffer; checked on native MuJoCo), so making the
+  springs implicit buys no stability here: the stiffest mode, the wheel on its tyre, has `w h` = 1.7 at 10 ms. It buys
+  accuracy only with the midpoint step: BikeLab's own accuracy at 4 to 8 times its step on the smooth scenarios
+  (whole runs 1.9 to 3.7 times faster), none where buffers engage (their law kinks; event location is the lever, as for
+  the stations). Linearly implicit Euler is never as accurate as BikeLab's scheme at the same step: it damps the
+  tyre mode at about `w^2 h / 2` per second.
+- *Planar formulation agrees with the general one*: every query (mass matrix, bias, forward and inverse dynamics,
+  element force and Jacobians, energy, site kinematics, reactions) to 1e-13 relative, stepped trajectories to 1e-11
+  (implicit, semi-implicit, constrained), on the 10-DOF tree, the tree with elements, the slider-crank and a rig-like
+  tree in the xz plane with a massless carrier, rotated placements, a -y axis and out-of-plane offsets
+  (`tests/test_multibody_planar.cpp`).
+- *Determinism*: the consumer's whole-run digest over every channel of the six scenarios and all three steppers is
+  identical from GCC 16, GCC 16 `-march=x86-64-v3` and Clang 22 `-march=x86-64-v3`.
+- *Allocation*: site forces, forcing Jacobians, the midpoint and prepared steps, the site-motion query and reactions
+  with forcing allocate nothing, in both formulations (`Sub0Physics_MultibodyAllocationTests`).
+
+**Performance** (docs/PERFORMANCE.md). On the 10-DOF tree, GCC 16, three interleaved rounds against the previous
+build: mass matrix 2.5-3.0x to 1.16-1.22x of the hand-written planar twin, forward dynamics 2.5-2.7x to 1.20-1.24x,
+implicit step 1.9-2.1x to 1.1-1.5x, elements 2.0-2.4x to 1.5-1.6x; Clang 22: mass matrix 0.9x, forward dynamics 1.35x,
+implicit step 1.5x, elements 1.8-2.1x. The constrained step is unchanged (about 6.8x): its general constraint
+machinery dominates, not the transforms. On the consumer's whole rig run against a hand-written twin of the same
+run: first 3.0x, now about 2.0x (GCC; Clang 2.4-2.6x).
+
+**Deviations and decisions:**
+
+- **The rig needs no loop closure.** BikeLab's linkage is a single pivot with the shock as a spatial tendon between two
+  eyes, so the consumer uses a tendon element, whose length is checked against its linkage oracle to 1e-15. The
+  closures of M1c are not exercised by the rig; their energy question (below) stays open for four-bar linkages.
+- **No fixed joint.** A welded body (the hardtail's rear, `fusestatic="false"` in MJCF) is merged into its parent by
+  the consumer, which reports the weld's load from the parent's acceleration. A fixed joint would break one coordinate
+  per body; not added for one consumer.
+- **The general kinematic fields are not written by a planar model's dynamics** (documented on `Workspace`); the
+  functions that read them (constraints, reactions) fill them. Bit-identity between the formulations is not a goal:
+  each is deterministic, and they agree to rounding.
+- **Forcing Jacobians take the dense factorisation**: they may couple any coordinates. At the rig's 4 or 5 DOF this
+  costs nothing measurable; a sparsity hint can come with a larger consumer.
+- **Site forces are mapped at the start of the step** (like MuJoCo's `xfrc_applied`), so a time-dependent input is the
+  consumer's to evaluate at the time its scheme needs (the rig's improved steppers take the platen at the end or the
+  middle of the step; held at the start, the midpoint step was first order).
+- **Midpoint keeps `M` and `c` at the start of the step**, like the Euler form: second order only while M is constant;
+  on the rig the configuration-dependent terms are below the converged truth's own agreement (3e-4 mm).
+
+**Energy (the open question of M1c).** On the rig, implicit Euler's numerical damping is material: the run's ledger
+residual over its energy scale is 6.6e-5 to 5.3e-3 at 125 us, against 3.3e-6 to 6.5e-4 for MuJoCo's scheme and
+5.6e-7 to 2.6e-4 for the midpoint step (the consumer's fidelity study data). The midpoint step is the
+energy-better model for unconstrained mechanisms; with closures, a RATTLE-type midpoint (impulse chosen to satisfy the
+position constraint at the end of the step) is the next prototype, to be judged on a four-bar linkage. It does not
+block M1d.
+
+**Post-parity levers this unit exposes** (docs/LOD.md):
+
+| Lever | Kind | Status |
+|---|---|---|
+| Formulation (planar or general) | Not a fidelity lever | Same results to rounding; chosen at build |
+| Implicit terms (`Full`, `MaterialStiffness`, `DampingOnly`) | Discrete | Measured on the rig: DampingOnly (MuJoCo's) is more accurate than Full at equal step for lightly damped modes; Full matters only past the explicit stability limit |
+| Implicit Euler or midpoint | Discrete | Midpoint dominates on smooth phases (4-8x step); equal at buffer kinks |
+| Step size with error control | Continuous | Not yet for multibody: the midpoint and Euler steps form an embedded pair (their difference estimates Euler's error at no extra solve), the natural controller; with event location at the buffers' and tyres' switches |
+| Jacobian and factorisation reuse across steps | Continuous | Not yet: the W-method keeps first order with a stale Jacobian, so `prepare` could be skipped for k steps in Interactive and Ambient profiles |
+| Geometric stiffness on or off | Discrete | `MaterialStiffness`; no measurable effect on the rig (its one tendon is a linear shock) |
+
 ## 10. Open questions, to be answered by measurement
 
 - **Higher-order implicit scheme:** whether one is needed, and which, for the tyre ring (M2).
 - **LCP method:** direct pivoting against projected Gauss-Seidel once contacts or limits outnumber a
   handful (expected never for one bike). M1c uses principal pivoting (Murty) over a pivoted LDL^T; its cost at a
   few rows is not measurable against the rest of the step.
-- **Constrained energy behaviour:** whether the first-order loss of the velocity-level solve with projection (M1c
-  status) matters for the rig's closures at its step size, or a RATTLE-type stepper is needed (M1d).
+- **Constrained energy behaviour:** the rig has no closures (M1d status); implicit Euler's own numerical damping is
+  material on it, and the linearly implicit midpoint step removes it for unconstrained mechanisms. Whether a
+  RATTLE-type midpoint is needed for closures is to be measured on a four-bar linkage when one is modelled.
+- **Error control for multibody steps:** the Euler and midpoint steps share their solve and form an embedded pair; a
+  controller and event location at force-law switches (as for the stations) are the next continuous lever.
 - **Transcendentals:** whether `std::sin`/`std::cos` are good enough for cross-platform hashes, or
   whether we need our own (M3 gate).

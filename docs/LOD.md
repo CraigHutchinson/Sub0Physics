@@ -98,6 +98,9 @@ spent only where it is needed.
 | Extraction resolution (`HeightRequest::stride`) | Continuous | `terrain/height_extract.hpp` | A height-error tolerance; `strideForTolerance` picks the coarsest power-of-two stride whose estimated error `M s^2 / 4` meets it (docs/TERRAIN.md Levers) |
 | Corridor tightness (`tightCorridor`) | Continuous | `terrain/corridor_builder.hpp` | A relative cell-saving target; doubles the sub-interval count until a doubling gains less. Containment holds at every count |
 | Quadrature slots | Discrete (per slot) | `LinearlyImplicitEuler::setQuadrature` | Integrals nothing depends on use the trapezoid rule on the endpoint derivatives, so energy ledgers measure the method, not the bookkeeping |
+| Multibody implicit terms (`ImplicitTerms::Full`, `MaterialStiffness`, `DampingOnly`) | Discrete | `multibody/implicit_euler.hpp` | None. `DampingOnly` is MuJoCo's `implicitfast` structure and the more accurate at equal step for lightly damped modes; `Full` is needed only past the explicit stability limit (docs/MULTIBODY.md, M1d status) |
+| Multibody step (linearly implicit Euler or midpoint) | Discrete | `stepLinearlyImplicitEuler`, `stepLinearlyImplicitMidpoint` | None yet. The midpoint step has no numerical damping and order 2 for constant M; the two share their solve, so they are an embedded pair for a future step-size controller |
+| Multibody formulation (planar or general) | Not a fidelity lever | `ModelBuilder::setFormulation` | Same results to rounding; the planar one is cheaper and chosen automatically |
 
 ## Not provided yet
 
