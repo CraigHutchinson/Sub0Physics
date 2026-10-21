@@ -319,7 +319,10 @@ times the planar figure at W = 3.
 
 ## 10. Proposed changes to the multibody contracts
 
-These are proposals for MULTIBODY.md, to be decided before M2 builds on them:
+**Accepted by the architect, 2026-10-21.** Each item lands in the delivery step that first needs it: substructures
+and block storage in M2a; contact elements in M2c; bounded velocity rows in M3b and M3c; velocity-only rows in the
+midpoint step when a constrained midpoint run is first needed. Owner decisions: planar first with 3D-ready storage,
+and an Interactive budget of 2 ms per 16.7 ms frame.
 
 1. **Substructures.** A model may attach structured substructures (first kind: the deformable ring) to a body. Their
    coordinates are generalized coordinates; the step eliminates them before the tree factorisation.
