@@ -56,3 +56,10 @@ conventions on every physical quantity.
 - Every model is checked against something independent: a closed form, a finer step, a brute-force
   search or a conserved quantity.
 - Fault details are string literals so faults are free to create and copy.
+
+## Portability across the CI compilers
+
+- **Don't iterate a view of a temporary in a range-for** (`for (x : make().view())`). C++23 (P2718) extends the
+  temporary's lifetime, but GCC 14 in CI does not implement that yet, so the view dangles there. Name the
+  result first: `const auto tiles = make(); for (x : tiles.view())`. This was caught by ASan
+  (stack-use-after-scope) on 2026-10-21; GCC 16 passed locally.
