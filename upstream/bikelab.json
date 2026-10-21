@@ -1,7 +1,7 @@
 {
   "name": "BikeLab",
   "repository": "https://github.com/CraigHutchinson/BikeLab",
-  "commit": "a9afcd5e1752452d14457df22a01bf81b3161809",
+  "commit": "e73f6cc9d5bd130ec632bcb4d890ad7286ddb4cf",
   "driftOwner": false,
   "watch": [
     "dist/"
