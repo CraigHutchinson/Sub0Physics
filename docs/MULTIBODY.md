@@ -1,6 +1,6 @@
 # Multibody core (design, step M1 of ADR 0003)
 
-- **Status:** M1a to M1d landed (M1d 2026-10-21); M2 next
+- **Status:** M1a to M1d landed (M1d 2026-10-21); M2 next, designed in [WHEEL.md](WHEEL.md) (proposed)
 - **Decision:** [ADR 0003](https://github.com/CraigHutchinson/.github/blob/main/docs/decisions/0003-dynamics-engine.md).
   Sub0Physics owns the dynamics core; MuJoCo 3.16.0 is a test-only reference.
 
@@ -602,6 +602,36 @@ block M1d.
 | Step size with error control | Continuous | Not yet for multibody: the midpoint and Euler steps form an embedded pair (their difference estimates Euler's error at no extra solve), the natural controller; with event location at the buffers' and tyres' switches |
 | Jacobian and factorisation reuse across steps | Continuous | Not yet: the W-method keeps first order with a stale Jacobian, so `prepare` could be skipped for k steps in Interactive and Ambient profiles |
 | Geometric stiffness on or off | Discrete | `MaterialStiffness`; no measurable effect on the rig (its one tendon is a linear shock) |
+
+### M2–M3 plan (proposed, 2026-10-21)
+
+**Design only; nothing implemented.** The deformable wheel and its assembly under a moving tree are designed in
+[WHEEL.md](WHEEL.md). In brief:
+
+- **Casing:** a ring of material nodes with two displacement coordinates each, attached to a host body as a
+  structured *substructure*. Its coordinates are generalized coordinates; the step eliminates them first (periodic
+  block-tridiagonal, a Schur complement onto the host's motion), then factorises the tree as now. Two rings of 64
+  nodes make n ≈ 264, beyond §1's dense sizing: a throwaway prototype measured 4.9 µs for the condensed solve against
+  1.4 ms for a dense `LDLᵀ`. Generic bodies and tendons (the same description expanded) remain the test oracle at small
+  N. Cheaper casing models (rigid ring with an enveloping footprint, modal, quasi-static) are further models of the
+  same mechanism.
+- **Contact:** the reference engine's soft-constraint law as the parity model (ADR 0003, decision 4); a compliant
+  contact element with exact Jacobians and exact Coulomb friction as bounded rows as the improved model; event-located
+  onset with a certified swept bound.
+- **Drive and brakes:** a generalized torque, and a bounded row that gives an exact wheel lock.
+
+| Step | Delivers | Gate |
+|---|---|---|
+| M2a | Ring substructure, condensation, expanded oracle | Oracle agreement to rounding; mass and inertia; free flight; Jacobians; allocation; paired benchmark |
+| M2b | Capsule-edge contact geometry and witnesses | Contact lists against the reference engine on its own states |
+| M2c | Soft-constraint law; the moving wheel | Open-loop force parity, then whole runs within bounds set by the reference's own sensitivity |
+| M2d | Improved contact, swept certification, error-controlled midpoint | Converged-run comparison, ledgers, no tunnelling |
+| M3a–M3d | Connected vehicle frictionless, traction, drive and brakes, profiles | As M2c and M2d on the connected scenarios; cross-compiler digest |
+
+**Proposed contract changes, for decision before M2 builds on them** (WHEEL.md §10): substructures; bounded
+velocity rows (brakes, friction against rigid surfaces), which amends §1's "contact is force elements only" for
+friction while normal contact and soil stay elements; a contact element (a law on a signed gap); block storage for
+element Jacobians when substructures are present; velocity-only rows admitted in the midpoint step.
 
 ## 10. Open questions, to be answered by measurement
 
