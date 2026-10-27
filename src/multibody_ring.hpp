@@ -2,7 +2,11 @@
 
 #include <cstddef>
 
+#include <array>
+#include <span>
+
 #include "sub0physics/multibody/model.hpp"
+#include "sub0physics/multibody/ring_contact.hpp"
 #include "sub0physics/multibody/state.hpp"
 #include "sub0physics/multibody/workspace.hpp"
 
@@ -54,6 +58,33 @@ void ringMotionEnergy(const Model& model, const Workspace& ws, double& kinetic, 
 // from the element blocks (skipped when thetaStep is zero). `tau` may be empty; `elementForce` may be null.
 void ringStepRhs(const Model& model, const State& state, const Workspace& ws, const double* tau,
                  const double* elementForce, double dt, double thetaStep, double* b) noexcept;
+
+// A ring load in generalized coordinates over the coordinates it touches (the host chain, then the edge's four node
+// coordinates): force, stiffness and damping (row-major, Capacity stride). `structured`: the rate transport through the
+// chain's curvature only on the chain's rows (the rest does not factor through the host's motion; the steps drop it).
+struct RingLoadBlocks
+{
+    static constexpr std::size_t MaxChain = 8;
+    static constexpr std::size_t Capacity = MaxChain + 4;
+    static constexpr std::size_t Size = Capacity * Capacity;
+    std::size_t chain = 0;
+    std::size_t count = 0;
+    std::array<std::size_t, Capacity> index{};
+    std::array<double, Capacity> force{};
+    std::array<double, Size> stiffness{};
+    std::array<double, Size> damping{};
+};
+
+// Needs the host Jacobians (ringHostJacobians) and the transforms at the state; the chain at most MaxChain long.
+void ringLoadBlocks(const Model& model, const State& state, const Workspace& ws, const RingContactLoad& load,
+                    bool structured, RingLoadBlocks& out) noexcept;
+
+// The ring loads' Jacobians in a linearly implicit step `-hd D - h2 K~` (Forcing::ringLoads; their force is in the
+// applied force): the host chain's block into the tree's matrix `tree` (lower triangle), the nodes' blocks and the
+// border into each touched ring's contact blocks, which condenseRings adds for the step system, and
+// `dt thetaStep K~ qd` into the right-hand side `b` (when h2 is not zero). Call after ringStepRhs.
+void ringLoadStepTerms(const Model& model, const State& state, Workspace& ws, std::span<const RingContactLoad> loads,
+                       double hd, double h2, double dt, double thetaStep, double* tree, double* b) noexcept;
 
 // Before the tree solve: eliminates the ring rows of x (dofCount entries) onto the tree rows.
 void ringForward(const Model& model, const Workspace& ws, RingSystem system, double* x) noexcept;

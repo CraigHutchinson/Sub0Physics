@@ -379,6 +379,9 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
             // The ring rows, and the rings condensed onto their hosts (block storage, docs/WHEEL.md section 2.3).
             detail::ringStepRhs(model, state, ws, tau.empty() ? nullptr : tau.data(), elementForce, dt,
                                 withStiffness ? thetaStep : 0.0, b);
+            // Contact loads' Jacobians (their force is already in tau), or none: clears last step's terms.
+            detail::ringLoadStepTerms(model, state, ws, implicit ? applied.ringLoads : std::span<const RingContactLoad>{},
+                                      hd, h2, dt, thetaStep, a, b);
             return detail::condenseRings(model, ws, detail::RingSystem::Step, hd,
                                          withStiffness ? thetaStep * thetaStep : 0.0, a);
         }
@@ -854,7 +857,15 @@ std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forci
     }
     if (!model.rings().empty() && (!forcing.stiffness.empty() || !forcing.damping.empty()))
     {
-        return invalidInput("forcing Jacobians are not supported with ring substructures yet (contact elements, M2c)");
+        return invalidInput("dense forcing Jacobians are not supported with ring substructures: use Forcing::ringLoads");
+    }
+    for (const RingContactLoad& load : forcing.ringLoads)
+    {
+        if (!isPlanar(model) || load.ring >= model.rings().size() || load.edge >= model.rings()[load.ring].nodeCount ||
+            model.rings()[load.ring].hostChain.size() > RingLoadBlocks::MaxChain)
+        {
+            return invalidInput("a ring load names a ring or edge that is not in the model, or its host chain is too long");
+        }
     }
     for (const SiteForce& f : forcing.siteForces)
     {
@@ -869,7 +880,7 @@ std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forci
 Forcing applyForcing(const Model& model, const State& state, const Forcing& forcing, Workspace& ws,
                      bool transformsCurrent) noexcept
 {
-    if (forcing.siteForces.empty())
+    if (forcing.siteForces.empty() && forcing.ringLoads.empty())
     {
         return forcing; // nothing to map: the caller's tau runs as given
     }
@@ -880,7 +891,16 @@ Forcing applyForcing(const Model& model, const State& state, const Forcing& forc
         out[i] = forcing.tau.empty() ? 0.0 : forcing.tau[i];
     }
     const auto parents = model.parents();
-    if (isPlanar(model))
+    if (forcing.siteForces.empty())
+    {
+        // Ring loads only (a planar model, checked): through the host's motion.
+        if (!transformsCurrent)
+        {
+            planarTransforms<false>(model, state, ws);
+            ringHostJacobians(model, ws);
+        }
+    }
+    else if (isPlanar(model))
     {
         if (!transformsCurrent)
         {
@@ -942,7 +962,15 @@ Forcing applyForcing(const Model& model, const State& state, const Forcing& forc
             }
         }
     }
-    return Forcing{ws.appliedForce, {}, forcing.stiffness, forcing.damping};
+    if (!forcing.ringLoads.empty())
+    {
+        if (!transformsCurrent && !forcing.siteForces.empty())
+        {
+            ringHostJacobians(model, ws);
+        }
+        (void)multibody::ringLoadsToGeneralized(model, state, ws, forcing.ringLoads, ws.appliedForce, {}, {});
+    }
+    return Forcing{ws.appliedForce, {}, forcing.stiffness, forcing.damping, forcing.ringLoads};
 }
 
 std::expected<void, Fault> prepareStepDynamics(const Model& model, const State& state, Workspace& ws,

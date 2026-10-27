@@ -37,6 +37,8 @@ add_library(Sub0Physics STATIC
     src/multibody_elements.cpp
     src/multibody_kinematics.cpp
     src/multibody_ring.cpp
+    src/multibody_ring_contact.cpp
+    src/multibody_soft_constraint.cpp
     src/polyline_profile.cpp
     src/prepared_profile.cpp
 )

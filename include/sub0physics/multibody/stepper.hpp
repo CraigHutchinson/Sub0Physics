@@ -10,6 +10,7 @@
 
 #include "sub0physics/fault.hpp"
 #include "sub0physics/multibody/model.hpp"
+#include "sub0physics/multibody/ring_contact.hpp"
 #include "sub0physics/multibody/state.hpp"
 #include "sub0physics/multibody/workspace.hpp"
 
@@ -47,6 +48,12 @@ struct Forcing
     std::span<const SiteForce> siteForces{}; ///< External forces at sites; empty for none.
     std::span<const double> stiffness{};     ///< d(applied)/dq, row-major dofCount x dofCount, or empty.
     std::span<const double> damping{};       ///< d(applied)/dqd, row-major dofCount x dofCount, or empty.
+    /**
+     * Loads of contact elements on rings (ringContactLoad), held over the step like `tau`: their force enters the
+     * applied force, and the linearly implicit steps take their Jacobians through the ring's block storage and the
+     * host's chain (docs/WHEEL.md, "M2c status"). Their work is external work. Empty for none.
+     */
+    std::span<const RingContactLoad> ringLoads{};
 };
 
 /**

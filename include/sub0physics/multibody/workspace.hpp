@@ -115,7 +115,7 @@ struct RingCondensation
      * @param nodes Ring nodes.
      */
     explicit RingCondensation(std::size_t nodes)
-        : inversePivot(nodes), next(nodes), wrap(nodes), coupling(nodes)
+        : inversePivot(nodes), next(nodes), wrap(nodes), coupling(nodes), border(nodes)
     {
     }
 
@@ -130,6 +130,7 @@ struct RingCondensation
     std::vector<Block<PlanarRingComponents>> wrap;         ///< Multipliers onto the last node.
     std::vector<BlockColumns<PlanarRingComponents, 3>> coupling; ///< Z = A_ww^-1 B, per node (2 x 3: w, x, y of the host's motion).
     std::array<double, 9> hostMatrix{};                    ///< B^T Z, row-major 3 x 3 in the host frame (w, x, y).
+    std::vector<BlockColumns<PlanarRingComponents, 3>> border; ///< The border B this condensation used: the mass coupling, plus the contact loads' terms for a step.
 };
 
 /**
@@ -148,7 +149,8 @@ struct RingWorkspace
           stiffnessDiagonal(ring.nodeCount), stiffnessUpper(ring.nodeCount), dampingDiagonal(ring.nodeCount),
           dampingUpper(ring.nodeCount), border(ring.nodeCount), hostJacobian(ring.hostChain.size()),
           stepDiagonal(ring.nodeCount), stepUpper(ring.nodeCount), solution(ring.nodeCount), mass(ring.nodeCount),
-          step(ring.nodeCount)
+          step(ring.nodeCount), contactDiagonal(ring.nodeCount), contactUpper(ring.nodeCount),
+          contactBorder(ring.nodeCount)
     {
     }
 
@@ -173,6 +175,12 @@ struct RingWorkspace
     mutable std::vector<BlockColumns<PlanarRingComponents, 1>> solution; ///< Scratch: one right-hand side (a solve with a const workspace uses it).
     RingCondensation mass; ///< The mass matrix's condensation (forward dynamics, solveMassMatrix).
     RingCondensation step; ///< The step matrix's condensation (linearly implicit steps).
+
+    // The contact loads' terms of the last step matrix (Forcing::ringLoads), already scaled: `-h D - h^2 K~`.
+    std::vector<Block<PlanarRingComponents>> contactDiagonal; ///< Per node.
+    std::vector<Block<PlanarRingComponents>> contactUpper;    ///< Per edge: the block (e, e + 1); its transpose is (e + 1, e).
+    std::vector<BlockColumns<PlanarRingComponents, 3>> contactBorder; ///< Per node: added to the border.
+    bool contactBlocks = false; ///< Whether the contact terms are set (they are zero otherwise).
 };
 
 /**

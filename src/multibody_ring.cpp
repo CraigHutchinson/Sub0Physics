@@ -435,6 +435,7 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
         RingWorkspace& rw = ws.rings[r];
         RingCondensation& cond = system == RingSystem::Mass ? rw.mass : rw.step;
         const std::size_t nodes = ring.nodeCount;
+        const bool contact = system == RingSystem::Step && rw.contactBlocks;
         for (std::size_t i = 0; i < nodes; ++i)
         {
             const double m = ring.mass[i];
@@ -450,8 +451,25 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
                     upper[k] = -(hd * rw.dampingUpper[i][k] + h2 * ku[k]);
                 }
             }
+            if (contact)
+            {
+                for (std::size_t k = 0; k < C * C; ++k)
+                {
+                    diagonal[k] += rw.contactDiagonal[i][k];
+                    upper[k] += rw.contactUpper[i][k];
+                }
+            }
             rw.stepDiagonal[i] = diagonal;
             rw.stepUpper[i] = upper;
+            BlockColumns<C, 3>& border = cond.border[i];
+            border = rw.border[i];
+            if (contact)
+            {
+                for (std::size_t k = 0; k < 3 * C; ++k)
+                {
+                    border[k] += rw.contactBorder[i][k];
+                }
+            }
         }
         if (!factorPeriodicBlockTridiagonal<C>(rw.stepDiagonal, rw.stepUpper, cond.factor()))
         {
@@ -460,14 +478,14 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
         std::span<BlockColumns<C, 3>> z = cond.coupling;
         for (std::size_t i = 0; i < nodes; ++i)
         {
-            z[i] = rw.border[i];
+            z[i] = cond.border[i];
         }
         solvePeriodicBlockTridiagonal<C, 3>(cond.inversePivot, cond.next, cond.wrap, z);
         // B^T Z, symmetric.
         std::array<double, 9> h{};
         for (std::size_t i = 0; i < nodes; ++i)
         {
-            const BlockColumns<C, 3>& b = rw.border[i];
+            const BlockColumns<C, 3>& b = cond.border[i];
             for (std::size_t a = 0; a < 3; ++a)
             {
                 for (std::size_t c = a; c < 3; ++c)
@@ -570,7 +588,7 @@ void ringForward(const Model& model, const Workspace& ws, RingSystem system, dou
         double g2 = 0.0;
         for (std::size_t i = 0; i < nodes; ++i)
         {
-            const BlockColumns<C, 3>& b = rw.border[i];
+            const BlockColumns<C, 3>& b = cond.border[i];
             xw[C * i] = y[i][0];
             xw[C * i + 1U] = y[i][1];
             g0 += b[0] * y[i][0] + b[3] * y[i][1];
