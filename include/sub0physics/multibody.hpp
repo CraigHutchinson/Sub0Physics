@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sub0physics/multibody/constraint.hpp"
+#include "sub0physics/multibody/deformable_ring.hpp"
 #include "sub0physics/multibody/description.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/force_element.hpp"

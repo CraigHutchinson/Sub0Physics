@@ -105,10 +105,12 @@
       "source": "dist/moving-wheel.js",
       "blob": "64d1df88877ec3a090c64e0cdd3b4a4ca2e33876",
       "driftOwner": true,
-      "what": "Collision terrain construction: collinear merging of the profile (canonicalProfile: turn below 1e-12 of the hypot product and no reversal) and one convex prism per non-vertical canonical segment down to a floor one metre below the lowest vertex (terrainParts), so vertical faces are neighbours' sides and contact multiplicity is one per (casing edge, piece)",
+      "what": "Collision terrain construction: collinear merging of the profile (canonicalProfile: turn below 1e-12 of the hypot product and no reversal) and one convex prism per non-vertical canonical segment down to a floor one metre below the lowest vertex (terrainParts), so vertical faces are neighbours' sides and contact multiplicity is one per (casing edge, piece). Also the canonical ring geometry and flex ring conventions: canonical ring geometry (quarter-sine table, reflection, chord ratios) and the flex ring's conventions: node rest positions, foundation k ds per slide, edge EA/L0 and c/L0, node mass and inertia (wheelParts, shared by the trail bike)",
       "targets": [
         "include/sub0physics/geometry/convex_terrain.hpp",
-        "src/convex_terrain.cpp"
+        "src/convex_terrain.cpp",
+        "src/multibody_ring.cpp",
+        "include/sub0physics/multibody/deformable_ring.hpp"
       ]
     }
   ]

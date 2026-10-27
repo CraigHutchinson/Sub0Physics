@@ -3,7 +3,8 @@
 - **Status:** design, 2026-10-21. M2b (contact geometry, §3.1, and the certified skip of §3.4) is implemented
   (2026-10-27): casing edges against canonical convex pieces with exact witnesses and the rotation-aware clearance
   bound, in `geometry/convex_terrain.hpp` on Sub0Math's closed-form capsule contacts; see
-  [TERRAIN.md](TERRAIN.md#casing-contact-convexterrain). The rest fixes the core-side contracts for the
+  [TERRAIN.md](TERRAIN.md#casing-contact-convexterrain). M2a (the ring substructure, its condensation and its oracle) landed
+  2026-10-27, see [M2a status](#m2a-status-2026-10-27). The rest fixes the core-side contracts for the
   spatial deformable wheel (M2) and for assembling several of them under a moving tree (M3), so the steps can
   be delegated and reviewed against one specification.
 - **Builds on:** [MULTIBODY.md](MULTIBODY.md) (tree, elements, constraints, steppers), [LOD.md](LOD.md)
@@ -346,3 +347,87 @@ and an Interactive budget of 2 ms per 16.7 ms frame.
 - Whether `f_n` must be iterated for the friction bound, or the start-of-step value is within budget.
 - Whether the hierarchy pays for itself at N = 64.
 - The cost and accuracy of the rigid-ring model's state transfer at contact onset (the most demanding switch).
+
+## M2a status (2026-10-27)
+
+**Landed:** the ring substructure (section 10, items 1 and 4), planar, with its oracle.
+
+- **Description** (`multibody/deformable_ring.hpp`): `DeformableRingDescription` on a host body: rest positions (3D,
+  host frame, one out-of-plane offset), two orthonormal in-plane displacement axes, per-node mass and inertia, a
+  foundation law per node (on each coordinate), an edge law and rest length per edge, skin radius, material ids per
+  node and edge and a topology revision. `ModelBuilder::addRing` validates it (`std::expected`). The laws are
+  `LinearSpringDamper<Length>` and are evaluated through `respond`, so the formula exists once. `uniformRing` builds
+  the reference's ring from the canonical tables (`canonicalRingDirection`, `canonicalChordRatio`: the quarter-sine
+  table, reflected, and the 128-node chord; N a divisor of 128, so the oracle sizes 8 and 16 come from the same table).
+- **Conventions transcribed from the reference MJCF** (BikeLab `e73f6cc`, `wheelParts` in `dist/moving-wheel.js`, shared
+  by `dist/trail-bike.js`): node i rests at `R (sin t_i, -cos t_i)` along (x, z) of the hub, `t_i = 2 pi i / N`
+  (node 0 at the bottom); slides along the hub's x then z; foundation = joint stiffness `k ds` (no joint damping),
+  relaxed at zero displacement; edges = flex edge `stiffness EA/L` and `damping c/L` with `L = R chordRatio(N)`, a
+  linear spring on `l - l0` plus a dashpot on the edge rate (MuJoCo's flex edge passive force); node mass `M/N`, inertia
+  `(M/N) skin^2/2` (it rotates with the hub). The law's reference `l0` defaults to the distance between the canonical
+  rest nodes; MuJoCo computes `flexedge_length0` from world positions at `qpos0`, which may differ by an ulp, so the
+  description takes it per edge and M2c can supply MuJoCo's.
+- **Storage.** The ring's coordinates follow the tree's in `State` (`Model::dofCount` = `treeDofCount` + 2 per node).
+  The Workspace's dense matrices are `treeDofCount` square; ring Jacobians live in `RingWorkspace` blocks (2 x 2
+  diagonal and neighbour blocks of dtau/dw and dtau/dwd, exact, including the edges' geometric and rate-transport
+  terms), the mass coupling to the host's planar motion in a per-node 2 x 3 border. Blocks are templated on the
+  component count (`Block<Dim>`), so the spatial ring adds Dim = 3.
+- **Dynamics.** Hooks in the planar algorithms: node kinematics after the tree's transforms, Newton-Euler over the
+  nodes between the tree's passes (the nodes' force reaches the host), the ring's rigid inertia added to the host's
+  composite and its border, the host's motion Jacobian over its chain. **Condensation:** per ring the step matrix's
+  block `A_ww = m I - h D - h^2 K~` is factorised by the periodic block LDL^T (`solver/periodic_block_tridiagonal.hpp`,
+  one fill column for the wrap), `Z = A_ww^-1 B` and `B^T Z` (3 x 3) are formed, `J^T (B^T Z) J` is removed from the tree's
+  matrix over the host's ancestors (so the tree factorisation keeps its sparsity), the right-hand side is condensed the
+  same way, the tree is solved, and `w = y - Z J dqd_tree`. The mass matrix's condensation serves forward dynamics,
+  `solveMassMatrix`, semi-implicit Euler and RK; the step matrix's serves both linearly implicit steps, all three
+  `ImplicitTerms`, the geometric fallback and the prepared step. Reactions add the nodes' inertia and weight to their
+  host as an external wrench.
+- **Not yet with rings** (refused, `InvalidInput`): constraints (build), the general formulation (build), forcing
+  Jacobians (step). Contact elements and their border terms are M2c.
+
+**Gate evidence** (`tests/test_multibody_ring.cpp`, GCC 16, GCC 16 and Clang 22 `-march=x86-64-v3`):
+
+- *Oracle agreement at N = 8 and 16* (the same description as massless carriers, node bodies, coordinate elements and
+  tendons, factorised densely): inverse dynamics (M and c) and forward dynamics to 1e-15 relative, `solveMassMatrix`,
+  kinetic and potential energy (identical bits at these states), element forces, potential and dissipation to 1e-15,
+  stiffness and damping Jacobians (block against dense) to 1e-16, joint reactions at every tree joint to 1e-13
+  relative; one step to 1e-13 and 300 steps of implicit Euler (Full, DampingOnly), the implicit midpoint step and
+  semi-implicit Euler to 1e-10, RK4 100 steps to 1e-10; prepared and one-call steps bit for bit.
+- *Mass properties:* spin inertia `hub + m (R^2 + skin^2/2)` and the slide's mass to 1e-14; zero rest first moment.
+- *Free flight:* (no gravity, no viscosity, midpoint at 20 us, 40 ms): linear momentum drift 1.6e-5 N s (the step
+  holds M at the start, first order), energy 3.3e-5 relative.
+- *Energy ledger with ring damping:* RK4 (dissipation integrated as a state) at 10 us over 20 ms: 4.16 J dissipated,
+  residual 6.5e-10 J; the midpoint step's residual 1.6e-3, 4.4e-4, 1.3e-4 J at 40, 20, 10 us (order 1.7; the
+  dissipation is integrated at the start of each step).
+- *Modal frequency against the closed form:* uniform 16-node ring on a fixed hub, mode j = 3 of the edge branch
+  `w^2 = (kf + ke (s^2 |1+z|^2 + c^2 |1-z|^2)) / m`: 859.542 rad/s closed form and measured (zero crossings, midpoint
+  step at `w h` = 0.002) to 1e-5.
+- *Allocation:* every step, forward and inverse dynamics, `solveMassMatrix`, elements, energy and reactions with two
+  64-node rings allocate nothing (`Sub0Physics_MultibodyAllocationTests`).
+- *Determinism:* the digest of three 2000-step runs (two 64-node rings, each implicit scheme) is `761d96d625139bc2`
+  on all three builds.
+- *Benchmark* (docs/PERFORMANCE.md): two 64-node rings on a five-coordinate tree, one implicit Euler step: library
+  10.3-14.1 us against 8.0-9.1 us for the hand-written twin (GCC 16, five interleaved rounds, loaded host: about 1.3x),
+  Clang 22 `-march=x86-64-v3` 11.2-17.6 against 8.2-12.7 us (about 1.35x); the expanded bodies take the dense path at
+  0.8-1.4 ms, about 100 times the condensed step. The whole step is inside the section 8 estimate (12-25 us with
+  contact and rows still to come).
+
+**Deviations and decisions:**
+
+- **No shared scalar sweep.** Section 2.3 asked for one periodic elimination over a block type shared with the scalar
+  solver in `solver/`; the existing chain solvers (projected Gauss-Seidel, and an active-set method whose free runs are
+  open chains) contain no periodic direct elimination, so the block solver is the one implementation and its scalar
+  instantiation (Dim = 1) is tested for when a periodic scalar solve is needed.
+- **Laws on the nodes are `LinearSpringDamper` only.** Other length laws can join through the same `respond` when a
+  model needs them.
+- **The step uses the symmetric part of the ring's K**, as for the tree (a W-method); the exact blocks stay in the
+  workspace.
+- **The border is the mass coupling only.** The ring's own elements do not depend on the host's pose; contact (M2c)
+  will add its host-motion terms to the same border.
+- **Levers recorded, not studied:** node count and a non-uniform spacing are levers of the nodal ring (per-node and
+  per-edge coefficients already allow a non-uniform ring; the section 2.5 mass, first-moment and spin-inertia checks
+  apply); the quasi-static, modal and rigid-ring models of section 2.4 are future cheaper models behind the same
+  substructure (docs/LOD.md).
+- **Not done here:** the MuJoCo adapter's ring (consumer side, test-only) and Jacobian checks by finite differences of
+  the ring alone (the blocks are checked against the expanded tendons, whose Jacobians are checked against central
+  differences in M1b).

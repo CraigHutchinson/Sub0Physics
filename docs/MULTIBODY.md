@@ -1,6 +1,7 @@
 # Multibody core (design, step M1 of ADR 0003)
 
-- **Status:** M1a to M1d landed (M1d 2026-10-21); M2 next, designed in [WHEEL.md](WHEEL.md) (proposed)
+- **Status:** M1a to M1d landed (M1d 2026-10-21); M2 designed in [WHEEL.md](WHEEL.md); M2a (ring substructure,
+  condensation, expanded oracle) landed 2026-10-27, see [WHEEL.md, M2a status](WHEEL.md#m2a-status-2026-10-27)
 - **Decision:** [ADR 0003](https://github.com/CraigHutchinson/.github/blob/main/docs/decisions/0003-dynamics-engine.md).
   Sub0Physics owns the dynamics core; MuJoCo 3.16.0 is a test-only reference.
 
@@ -646,3 +647,11 @@ element Jacobians when substructures are present; velocity-only rows admitted in
   controller and event location at force-law switches (as for the stations) are the next continuous lever.
 - **Transcendentals:** whether `std::sin`/`std::cos` are good enough for cross-platform hashes, or
   whether we need our own (M3 gate).
+
+### M2a status (2026-10-27)
+
+**Landed:** substructures (WHEEL.md section 10, item 1) and block storage (item 4). A model may attach deformable rings
+to bodies; their coordinates follow the tree's (`Model::dofCount` = `treeDofCount` + 2 per node), the Workspace's dense
+matrices are `treeDofCount` square, and every step, forward and inverse dynamics, energy and reactions condense the
+rings onto their hosts before the tree factorisation. Models without rings are unchanged bit for bit (the consumer's
+parity tests pass unchanged). Details, gate evidence and deviations: [WHEEL.md, M2a status](WHEEL.md#m2a-status-2026-10-27).
