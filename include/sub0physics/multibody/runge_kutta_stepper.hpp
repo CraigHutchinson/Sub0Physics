@@ -107,7 +107,7 @@ public:
         std::copy(workspace_->qdd.begin(), workspace_->qdd.end(), dxdt.begin() + static_cast<std::ptrdiff_t>(n));
         if (withEnergy)
         {
-            dxdt[2 * n] = model_->elementCount() > 0 ? workspace_->elementDissipationPower : 0.0;
+            dxdt[2 * n] = model_->hasForceElements() ? workspace_->elementDissipationPower : 0.0;
         }
         return {};
     }

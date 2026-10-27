@@ -12,6 +12,7 @@
 
 #include "multibody_joint.hpp"
 #include "multibody_planar.hpp"
+#include "multibody_ring.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/implicit_euler.hpp"
 #include "sub0physics/multibody/stepper.hpp"
@@ -36,7 +37,7 @@ void recursiveNewtonEuler(const Model& model, const State& state, const double* 
     const auto types = model.jointTypes();
     const auto axes = model.jointAxes();
     const std::size_t n = parents.size();
-    const double* qd = state.values.data() + n;
+    const double* qd = state.values.data() + model.dofCount();
     for (std::size_t i = 0; i < n; ++i)
     {
         const std::size_t p = parents[i];
@@ -130,8 +131,14 @@ bool factorTree(const Model& model, double* h) noexcept
 
 std::expected<void, Fault> factorUnchecked(const Model& model, Workspace& workspace) noexcept
 {
-    const std::size_t n = model.dofCount();
+    const std::size_t n = model.treeDofCount();
     std::copy_n(workspace.massMatrix.data(), n * n, workspace.massFactor.data());
+    // A ring's block is eliminated onto its host first (its border and host Jacobians come with the mass matrix).
+    if (!model.rings().empty() &&
+        !detail::condenseRings(model, workspace, detail::RingSystem::Mass, 0.0, 0.0, workspace.massFactor.data()))
+    {
+        return invalidInput("a ring's mass block is not positive definite");
+    }
     if (!factorTree(model, workspace.massFactor.data()))
     {
         return invalidInput("mass matrix is not positive definite");
@@ -166,7 +173,16 @@ void solveTree(const Model& model, const double* h, double* x) noexcept
 
 void solveUnchecked(const Model& model, const Workspace& workspace, std::span<double> x) noexcept
 {
+    const bool rings = !model.rings().empty();
+    if (rings)
+    {
+        detail::ringForward(model, workspace, detail::RingSystem::Mass, x.data());
+    }
     solveTree(model, workspace.massFactor.data(), x.data());
+    if (rings)
+    {
+        detail::ringBackward(model, workspace, detail::RingSystem::Mass, x.data());
+    }
 }
 
 // Dense A = L D L^T of the lower triangle of a row-major n x n matrix, in place (L below the diagonal, D on
@@ -284,7 +300,7 @@ std::expected<void, Fault> prepareStep(const Model& model, const State& state, W
         recursiveNewtonEuler<false>(model, state, nullptr, ws.bias.data(), ws);
         compositeRigidBody(model, ws);
     }
-    if (model.elementCount() > 0)
+    if (model.hasForceElements())
     {
         return addElements(model, state, ws, jacobians, geometricStiffness);
     }
@@ -302,8 +318,8 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
                                           const double* elementForce, Workspace& ws, double dt, bool implicit,
                                           ImplicitTerms terms, bool allowFallback, double theta = 1.0) noexcept
 {
-    const std::size_t n = model.dofCount();
-    const double* qd = state.values.data() + n;
+    const std::size_t n = model.treeDofCount();
+    const double* qd = state.values.data() + model.dofCount();
     const double* m = ws.massMatrix.data();
     const double* k = ws.elementStiffness.data();
     const double* d = ws.elementDamping.data();
@@ -312,7 +328,8 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
     const std::span<const double> tau = applied.tau;
     double* a = ws.implicitMatrix.data();
     double* b = ws.implicitRhs.data();
-    const bool hasElements = model.elementCount() > 0;
+    const bool hasElements = model.hasForceElements();
+    const bool rings = !model.rings().empty();
     // theta = 1: backward Euler linearised; theta = 1/2: the linearised trapezoid (implicit midpoint).
     const double thetaStep = theta * dt;
     const double hd = implicit ? thetaStep : 0.0;
@@ -357,15 +374,24 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
             const double element = elementForce == nullptr ? 0.0 : elementForce[i];
             b[i] = dt * (force + element - ws.bias[i] + thetaStep * stiffnessRate);
         }
+        if (rings)
+        {
+            // The ring rows, and the rings condensed onto their hosts (block storage, docs/WHEEL.md section 2.3).
+            detail::ringStepRhs(model, state, ws, tau.empty() ? nullptr : tau.data(), elementForce, dt,
+                                withStiffness ? thetaStep : 0.0, b);
+            return detail::condenseRings(model, ws, detail::RingSystem::Step, hd,
+                                         withStiffness ? thetaStep * thetaStep : 0.0, a);
+        }
+        return true;
     };
     // Forcing Jacobians may couple any coordinates: they take the dense factorisation.
     const bool dense = implicit && (!model.elementsFollowTree() || fk != nullptr || fd != nullptr);
     const auto factor = [&]() { return dense ? factorDense(n, a, ws.elementScalars.data()) : factorTree(model, a); };
     // Without elements, K and D are zero from the workspace's construction and never written.
     const bool stiffness = implicit && (hasElements || fk != nullptr) && terms != ImplicitTerms::DampingOnly;
-    assemble(stiffness);
+    const bool condensed = assemble(stiffness);
     ws.geometricStiffnessDropped = false;
-    if (!factor())
+    if (!condensed || !factor())
     {
         if (!stiffness || !hasElements || !allowFallback || terms != ImplicitTerms::Full)
         {
@@ -380,8 +406,7 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
         {
             return std::unexpected(material.error());
         }
-        assemble(true);
-        if (!factor())
+        if (!assemble(true) || !factor())
         {
             return invalidInput("implicit step matrix is not positive definite, even without geometric stiffness");
         }
@@ -392,13 +417,22 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
 // Solves the factorised step matrix in place.
 void solveStepSystem(const Model& model, const Workspace& ws, bool dense, double* x) noexcept
 {
+    const bool rings = !model.rings().empty();
+    if (rings)
+    {
+        detail::ringForward(model, ws, detail::RingSystem::Step, x);
+    }
     if (dense)
     {
-        solveDense(model.dofCount(), ws.implicitMatrix.data(), x);
+        solveDense(model.treeDofCount(), ws.implicitMatrix.data(), x);
     }
     else
     {
         solveTree(model, ws.implicitMatrix.data(), x);
+    }
+    if (rings)
+    {
+        detail::ringBackward(model, ws, detail::RingSystem::Step, x);
     }
 }
 
@@ -427,7 +461,7 @@ std::expected<void, Fault> freeAccelerations(const Model& model, const State& st
     {
         ws.qdd[i] = (tau.empty() ? 0.0 : tau[i]) - ws.bias[i];
     }
-    if (model.elementCount() > 0)
+    if (model.hasForceElements())
     {
         if (auto added = addElements(model, state, ws, false); !added)
         {
@@ -518,7 +552,7 @@ std::expected<void, Fault> inverseDynamics(const Model& model, const State& stat
         detail::updateTransforms<true>(model, state, workspace);
         recursiveNewtonEuler<true>(model, state, qdd.data(), tau.data(), workspace);
     }
-    if (model.elementCount() > 0)
+    if (model.hasForceElements())
     {
         if (auto added = addElements(model, state, workspace, false); !added)
         {
@@ -643,7 +677,7 @@ std::expected<void, Fault> stepSemiImplicitEuler(const Model& model, const Forci
         q[i] += step;
         work += (applied.tau.empty() ? 0.0 : applied.tau[i]) * step;
     }
-    if (model.elementCount() > 0)
+    if (model.hasForceElements())
     {
         state.dissipated += sub0math::f64::Energy::fromSi(dt * workspace.elementDissipationPower);
     }
@@ -662,7 +696,7 @@ std::expected<void, Fault> finishLinearlyImplicit(const Model& model, const Forc
     const std::size_t n = model.dofCount();
     // PERF: site forces mapped on the step's own transforms, not a second pass.
     const Forcing applied = detail::applyForcing(model, state, forcing, ws, true);
-    const bool hasElements = model.elementCount() > 0;
+    const bool hasElements = model.hasForceElements();
     const auto dense = formStepSystem(model, state, applied, hasElements ? ws.elementForce.data() : nullptr, ws, dt,
                                       true, terms, true, theta);
     if (!dense)
@@ -817,6 +851,10 @@ std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forci
         (!forcing.damping.empty() && forcing.damping.size() != n * n))
     {
         return invalidInput("forcing Jacobians need dofCount x dofCount entries, or none");
+    }
+    if (!model.rings().empty() && (!forcing.stiffness.empty() || !forcing.damping.empty()))
+    {
+        return invalidInput("forcing Jacobians are not supported with ring substructures yet (contact elements, M2c)");
     }
     for (const SiteForce& f : forcing.siteForces)
     {

@@ -327,7 +327,22 @@ std::expected<Model, Fault> ModelBuilder::build() const
 
     model.gravity_ = gravity_;
     model.baseAcceleration_ = {{}, {-gravity_.x.si(), -gravity_.y.si(), -gravity_.z.si()}};
+    if (!rings_.empty())
+    {
+        if (formulation_ == Formulation::General)
+        {
+            return invalidInput("a model with rings needs the planar formulation (planar first, docs/WHEEL.md)");
+        }
+        if (!constraints_.empty())
+        {
+            return invalidInput("constraints are not supported with ring substructures yet");
+        }
+    }
     if (auto compiled = compileFormulation(model); !compiled)
+    {
+        return std::unexpected(compiled.error());
+    }
+    if (auto compiled = compileRings(model); !compiled)
     {
         return std::unexpected(compiled.error());
     }
@@ -424,6 +439,129 @@ std::expected<void, Fault> ModelBuilder::compileFormulation(Model& model) const
         return invalidInput("the planar formulation needs every revolute axis along one coordinate axis, prismatic "
                             "axes and placement rotations in its plane, and no gravity along it");
     }
+    return {};
+}
+
+std::expected<void, Fault> ModelBuilder::compileRings(Model& model) const
+{
+    if (rings_.empty())
+    {
+        return {};
+    }
+    if (model.formulation_ != Formulation::Planar)
+    {
+        return invalidInput("a model with rings needs the planar formulation, and this one does not qualify");
+    }
+    const PlanarModel& pm = model.planar_;
+    const std::size_t i = pm.axisI;
+    const std::size_t j = pm.axisJ;
+    const std::size_t k = pm.normal;
+    std::size_t coordinate = model.parent_.size();
+    model.rings_.reserve(rings_.size());
+    for (std::size_t r = 0; r < rings_.size(); ++r)
+    {
+        const DeformableRingDescription& d = rings_[r].description;
+        const std::string& name = rings_[r].name;
+        if (name.empty())
+        {
+            return invalidInput("ring name is empty");
+        }
+        for (std::size_t s = 0; s < r; ++s)
+        {
+            if (rings_[s].name == name)
+            {
+                return invalidInput("ring name is not unique");
+            }
+        }
+        if (d.host == WorldBody || d.host.value() >= model.parent_.size())
+        {
+            return invalidInput("ring host is not a body of this model");
+        }
+        const std::size_t n = d.restPositions.size();
+        if (n < 3U || d.nodeMass.size() != n || d.nodeInertia.size() != n || d.foundation.size() != n ||
+            d.edgeLaws.size() != n || d.edgeRestLength.size() != n || (!d.nodeIds.empty() && d.nodeIds.size() != n) ||
+            (!d.edgeIds.empty() && d.edgeIds.size() != n))
+        {
+            return invalidInput("ring needs 3 or more nodes and one mass, inertia, foundation, edge law, rest length "
+                                "(and id, when given) per node or edge");
+        }
+        const sub0math::Vec3d& a0 = d.displacementAxes[0];
+        const sub0math::Vec3d& a1 = d.displacementAxes[1];
+        if (!isFinite(a0) || !isFinite(a1) || std::abs(dot(a0, a0) - 1.0) > UnitTolerance ||
+            std::abs(dot(a1, a1) - 1.0) > UnitTolerance || std::abs(dot(a0, a1)) > UnitTolerance || a0[k] != 0.0 ||
+            a1[k] != 0.0)
+        {
+            return invalidInput("ring displacement axes must be orthonormal and in the model's plane");
+        }
+        const double skin = d.skinRadius.si();
+        if (!std::isfinite(skin) || !(skin >= 0.0))
+        {
+            return invalidInput("ring skin radius must be finite and not negative");
+        }
+        DeformableRing ring;
+        ring.id = RingId{static_cast<std::uint32_t>(r)};
+        ring.name = name;
+        ring.host = d.host.value();
+        ring.firstCoordinate = coordinate;
+        ring.nodeCount = n;
+        for (std::size_t b = ring.host; b != NoParent; b = model.parent_[b])
+        {
+            ring.hostChain.push_back(b);
+        }
+        // Exact unit axes, as the builder renormalises joint axes.
+        const sub0math::Vec3d u0 = sub0math::normalized(a0);
+        const sub0math::Vec3d u1 = sub0math::normalized(a1);
+        ring.axis0 = {u0[i], u0[j]};
+        ring.axis1 = {u1[i], u1[j]};
+        ring.skinRadius = skin;
+        ring.topologyRevision = d.topologyRevision;
+        ring.foundation = d.foundation;
+        ring.edgeLaws = d.edgeLaws;
+        for (std::size_t e = 0; e < n; ++e)
+        {
+            const auto& p = d.restPositions[e];
+            const std::array<double, 3> rest{p.x.si(), p.y.si(), p.z.si()};
+            const double mass = d.nodeMass[e].si();
+            const double inertia = d.nodeInertia[e].si();
+            const double length = d.edgeRestLength[e].si();
+            if (!std::isfinite(rest[0]) || !std::isfinite(rest[1]) || !std::isfinite(rest[2]) ||
+                !std::isfinite(mass) || !(mass > 0.0) || !std::isfinite(inertia) || !(inertia >= 0.0) ||
+                !std::isfinite(length) || !(length > 0.0))
+            {
+                return invalidInput("ring nodes need finite rest positions, positive masses, non-negative inertias "
+                                    "and positive edge rest lengths");
+            }
+            if (e == 0U)
+            {
+                ring.normalOffset = rest[k];
+            }
+            else if (rest[k] != ring.normalOffset)
+            {
+                return invalidInput("ring nodes must share one out-of-plane offset");
+            }
+            ring.restX.push_back(rest[i]);
+            ring.restY.push_back(rest[j]);
+            ring.rest0.push_back(ring.axis0[0] * rest[i] + ring.axis0[1] * rest[j]);
+            ring.rest1.push_back(ring.axis1[0] * rest[i] + ring.axis1[1] * rest[j]);
+            ring.mass.push_back(mass);
+            ring.inertia.push_back(inertia);
+            ring.edgeRestLength.push_back(length);
+            ring.nodeIds.push_back(d.nodeIds.empty() ? static_cast<std::uint32_t>(e) : d.nodeIds[e]);
+            ring.edgeIds.push_back(d.edgeIds.empty() ? static_cast<std::uint32_t>(e) : d.edgeIds[e]);
+        }
+        for (const std::vector<std::uint32_t>* ids : {&ring.nodeIds, &ring.edgeIds})
+        {
+            std::vector<std::uint32_t> sorted = *ids;
+            std::ranges::sort(sorted);
+            if (std::ranges::adjacent_find(sorted) != sorted.end())
+            {
+                return invalidInput("ring material ids must be unique");
+            }
+        }
+        coordinate += ring.coordinateCount();
+        model.rings_.push_back(std::move(ring));
+    }
+    model.ringCoordinateCount_ = coordinate - model.parent_.size();
     return {};
 }
 
@@ -748,6 +886,18 @@ std::optional<ElementId> Model::findElement(std::string_view name) const noexcep
         if (elementName_[i] == name)
         {
             return ElementId{static_cast<std::uint32_t>(i)};
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<RingId> Model::findRing(std::string_view name) const noexcept
+{
+    for (const DeformableRing& ring : rings_)
+    {
+        if (ring.name == name)
+        {
+            return ring.id;
         }
     }
     return std::nullopt;

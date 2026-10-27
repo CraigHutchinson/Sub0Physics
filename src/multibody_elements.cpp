@@ -10,6 +10,7 @@
 
 #include "multibody_joint.hpp"
 #include "multibody_planar.hpp"
+#include "multibody_ring.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 
@@ -44,9 +45,9 @@ template<ElementLaw L>
 bool CoordinateElement<L>::evaluate(const ElementInputs& in, ElementOutputs& out) const noexcept
 {
     using Coordinate = LawCoordinate<L>;
-    const std::size_t n = in.model.dofCount();
+    const std::size_t n = in.model.treeDofCount(); // the Jacobians' stride
     const double q = in.state.values[coordinate];
-    const double qd = in.state.values[n + coordinate];
+    const double qd = in.state.values[in.model.dofCount() + coordinate];
     const auto r = law.respond(Coordinate::fromSi(sign * (q - reference)), CoordinateRate<Coordinate>::fromSi(sign * qd));
     out.force[coordinate] += sign * r.force.si();
     out.potential += r.potential.si();
@@ -64,7 +65,7 @@ bool TendonElement<L>::evaluate(const ElementInputs& in, ElementOutputs& out) co
 {
     const Model& model = in.model;
     const Workspace& ws = in.workspace;
-    const std::size_t n = model.dofCount();
+    const std::size_t n = model.treeDofCount(); // the Jacobians' stride and the scratch's length
     const std::size_t m = support.size();
 
     // Over the support: the first site's Jacobian column J1, the difference Jd = J1 - J2, u x w for a
@@ -77,7 +78,7 @@ bool TendonElement<L>::evaluate(const ElementInputs& in, ElementOutputs& out) co
     double* jl = out.scalars.data();
     double* g = jl + n;
     double* hessian = g + n;
-    const double* qd = in.state.values.data() + n;
+    const double* qd = in.state.values.data() + model.dofCount();
     double rate = 0.0;
     double l = 0.0;
     sub0math::Vec3d u{};      // in the axes the columns use
@@ -278,11 +279,16 @@ std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const S
     const auto evaluate = [&](const auto& element) { inDomain = element.evaluate(in, out) && inDomain; };
     forEachElement(model.coordinateElements(), evaluate);
     forEachElement(model.tendonElements(), evaluate);
+    if (!model.rings().empty())
+    {
+        inDomain = detail::ringElements(model, state, ws, jacobians, geometricStiffness, out.potential,
+                                        out.dissipationPower) && inDomain;
+    }
     ws.elementPotential = out.potential;
     ws.elementDissipationPower = out.dissipationPower;
     if (!inDomain)
     {
-        return std::unexpected(Fault{FaultKind::OutsideDomain, "tendon sites coincide or are not finite"});
+        return std::unexpected(Fault{FaultKind::OutsideDomain, "tendon sites or ring nodes coincide or are not finite"});
     }
     return {};
 }

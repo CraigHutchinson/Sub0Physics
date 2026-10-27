@@ -13,10 +13,12 @@
 #include <sub0math/units/quantities.hpp>
 
 #include "sub0physics/multibody/constraint.hpp"
+#include "sub0physics/multibody/deformable_ring.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/planar.hpp"
 #include "sub0physics/multibody/state.hpp"
+#include "sub0physics/solver/periodic_block_tridiagonal.hpp"
 
 namespace sub0physics::multibody
 {
@@ -101,6 +103,79 @@ struct PlanarKinematics
 };
 
 /**
+ * One condensation of a ring's block of a step matrix onto its host's motion (docs/WHEEL.md section 2.3): the factor
+ * of the ring's periodic block-tridiagonal block `A_ww`, `Z = A_ww^-1 B` for the border B (the ring's coupling to the
+ * host's planar motion) and the host-motion matrix `B^T Z` that is removed from the tree's matrix. Internal.
+ */
+struct RingCondensation
+{
+    /**
+     * Sizes the arrays.
+     *
+     * @param nodes Ring nodes.
+     */
+    explicit RingCondensation(std::size_t nodes)
+        : inversePivot(nodes), next(nodes), wrap(nodes), coupling(nodes)
+    {
+    }
+
+    /** @return The factor's views. */
+    [[nodiscard]] PeriodicBlockFactor<PlanarRingComponents> factor() noexcept
+    {
+        return {inversePivot, next, wrap};
+    }
+
+    std::vector<Block<PlanarRingComponents>> inversePivot; ///< The factor's inverse pivots.
+    std::vector<Block<PlanarRingComponents>> next;         ///< Multipliers onto the next node.
+    std::vector<Block<PlanarRingComponents>> wrap;         ///< Multipliers onto the last node.
+    std::vector<BlockColumns<PlanarRingComponents, 3>> coupling; ///< Z = A_ww^-1 B, per node (2 x 3: w, x, y of the host's motion).
+    std::array<double, 9> hostMatrix{};                    ///< B^T Z, row-major 3 x 3 in the host frame (w, x, y).
+};
+
+/**
+ * Per-ring scratch and results (Workspace::rings), sized once from the ring. Ring quantities are in the host frame's
+ * plane axes (positions, node motion) or in the ring's displacement axes (generalized forces and the element blocks).
+ */
+struct RingWorkspace
+{
+    /**
+     * Sizes the arrays for a ring.
+     *
+     * @param ring The compiled ring.
+     */
+    explicit RingWorkspace(const DeformableRing& ring)
+        : positionX(ring.nodeCount, 0.0), positionY(ring.nodeCount, 0.0), velocity(ring.nodeCount),
+          stiffnessDiagonal(ring.nodeCount), stiffnessUpper(ring.nodeCount), dampingDiagonal(ring.nodeCount),
+          dampingUpper(ring.nodeCount), border(ring.nodeCount), hostJacobian(ring.hostChain.size()),
+          stepDiagonal(ring.nodeCount), stepUpper(ring.nodeCount), solution(ring.nodeCount), mass(ring.nodeCount),
+          step(ring.nodeCount)
+    {
+    }
+
+    std::vector<double> positionX;       ///< Each node's position along the plane's i axis, host frame [m].
+    std::vector<double> positionY;       ///< Along j [m].
+    std::vector<PlanarMotion> velocity;  ///< Each node's velocity in its frame (the host's axes at the node).
+    PlanarForce hostForce{};             ///< From the last Newton-Euler pass: the nodes' net force on the host, host frame (their inertia and gravity, with qdd when given).
+
+    // Element Jacobians in block storage (docs/WHEEL.md section 10, item 4), in the displacement axes: exact, like
+    // Workspace::elementStiffness. Block (i, i + 1) and block (i + 1, i) of dtau/dw are both `stiffnessUpper[i]`
+    // (an edge's Jacobian blocks are G and -G; not transposed, as a damped edge's G is not symmetric).
+    std::vector<Block<PlanarRingComponents>> stiffnessDiagonal; ///< dtau_i/dw_i.
+    std::vector<Block<PlanarRingComponents>> stiffnessUpper;    ///< dtau_i/dw_{i+1} = dtau_{i+1}/dw_i.
+    std::vector<Block<PlanarRingComponents>> dampingDiagonal;   ///< dtau_i/dwd_i (symmetric).
+    std::vector<Block<PlanarRingComponents>> dampingUpper;      ///< dtau_i/dwd_{i+1} = dtau_{i+1}/dwd_i (symmetric).
+
+    std::vector<BlockColumns<PlanarRingComponents, 3>> border; ///< The mass matrix's coupling of each node's coordinates to the host's planar motion (w, x, y; host frame).
+    std::vector<PlanarMotion> hostJacobian; ///< Per DeformableRing::hostChain entry: the host's motion (host frame) per unit rate of that body's joint.
+
+    std::vector<Block<PlanarRingComponents>> stepDiagonal; ///< Scratch: the step matrix's ring blocks.
+    std::vector<Block<PlanarRingComponents>> stepUpper;    ///< Scratch.
+    mutable std::vector<BlockColumns<PlanarRingComponents, 1>> solution; ///< Scratch: one right-hand side (a solve with a const workspace uses it).
+    RingCondensation mass; ///< The mass matrix's condensation (forward dynamics, solveMassMatrix).
+    RingCondensation step; ///< The step matrix's condensation (linearly implicit steps).
+};
+
+/**
  * Preallocated scratch and results for one model's kinematics and dynamics.
  *
  * Sized once from the model; the algorithms write into it and never resize it, so a step does not
@@ -108,7 +183,9 @@ struct PlanarKinematics
  * `planar` kinematics instead of the general kinematic fields (parentToBody, bodyVelocity, bodyAcceleration,
  * bodyForce, compositeInertia, worldToBody, bodyPose); updateKinematics, computeReactions and the constrained steps
  * write the general ones. Fields hold the results of the last algorithm that wrote them (documented on each
- * function) and are meant to be read, not resized. Matrices are row-major `dofCount x dofCount`.
+ * function) and are meant to be read, not resized. Matrices are row-major `treeDofCount x treeDofCount`
+ * (the tree's coordinates; equal to dofCount for a model without rings); a ring's coordinates live in its
+ * RingWorkspace's block storage.
  * Use one workspace per thread.
  *
  * A workspace is bound to the model it was built for (not merely to its size): every algorithm
@@ -125,6 +202,7 @@ struct Workspace
     explicit Workspace(const Model& model)
         : modelId(model.id()),
           dof(model.dofCount()),
+          treeDof(model.treeDofCount()),
           parentToBody(model.bodyCount()),
           bodyVelocity(model.bodyCount()),
           bodyAcceleration(model.bodyCount()),
@@ -132,18 +210,18 @@ struct Workspace
           compositeInertia(model.bodyCount()),
           worldToBody(model.bodyCount()),
           bodyPose(model.bodyCount()),
-          massMatrix(dof * dof, 0.0),
-          massFactor(dof * dof, 0.0),
+          massMatrix(treeDof * treeDof, 0.0),
+          massFactor(treeDof * treeDof, 0.0),
           bias(dof),
           qdd(dof),
           elementForce(dof, 0.0),
-          elementStiffness(dof * dof, 0.0),
-          elementDamping(dof * dof, 0.0),
+          elementStiffness(treeDof * treeDof, 0.0),
+          elementDamping(treeDof * treeDof, 0.0),
           elementSiteWrenches(2 * model.tendonCount()),
-          implicitMatrix(dof * dof, 0.0),
+          implicitMatrix(treeDof * treeDof, 0.0),
           implicitRhs(dof, 0.0),
-          elementVectors(3 * dof),
-          elementScalars(dof * (dof + 2), 0.0),
+          elementVectors(3 * treeDof),
+          elementScalars(treeDof * (treeDof + 2), 0.0),
           constraintImpulse(model.constraintRowCount(), 0.0),
           constraintForce(model.constraintRowCount(), 0.0),
           constraintSiteWrenches(model.constraintWrenchCount()),
@@ -153,6 +231,11 @@ struct Workspace
           planar(model.formulation() == Formulation::Planar ? model.bodyCount() : 0U),
           constraintScratch(dof, model.constraintRowCount(), model.limits().size(), model)
     {
+        rings.reserve(model.rings().size());
+        for (const DeformableRing& ring : model.rings())
+        {
+            rings.emplace_back(ring);
+        }
     }
 
     /**
@@ -171,6 +254,7 @@ struct Workspace
 
     std::uint64_t modelId; ///< Id of the model this workspace was built for.
     std::size_t dof;       ///< Number of generalized coordinates of the model.
+    std::size_t treeDof;   ///< Number of the tree's coordinates: the size of the dense matrices below.
 
     std::vector<sub0math::PluckerTransformd> parentToBody; ///< Transform from parent frame to body frame, at q.
     std::vector<sub0math::SpatialMotiond> bodyVelocity;     ///< Spatial velocity of each body, in its frame.
@@ -180,7 +264,7 @@ struct Workspace
     std::vector<sub0math::PluckerTransformd> worldToBody; ///< Transform from the world frame to each body frame.
     std::vector<sub0math::RigidTransform<double, sub0math::f64::Length>> bodyPose; ///< Each body frame in the world: `toRigidTransform(worldToBody)`.
 
-    std::vector<double> massMatrix; ///< M(q) from CRBA; symmetric; zero except ancestor pairs (zeroed at construction).
+    std::vector<double> massMatrix; ///< The tree's block of M(q) from CRBA (a ring's inertia included in its host's); symmetric; zero except ancestor pairs (zeroed at construction). A ring's border is in RingWorkspace::border and its own block is diagonal (the node masses).
     std::vector<double> massFactor; ///< Tree-sparse factor of M (lower triangle: L below the diagonal, D on it).
     std::vector<double> bias;       ///< c(q, qd): Coriolis, centrifugal and gravity forces from RNEA.
     std::vector<double> qdd;        ///< Generalized accelerations from forward dynamics.
@@ -216,6 +300,7 @@ struct Workspace
     ImplicitTerms preparedTerms = ImplicitTerms::Full; ///< The prepared step's implicit terms; internal.
     PlanarKinematics planar;          ///< The planar formulation's kinematics (Formulation::Planar); empty otherwise.
     ConstraintScratch constraintScratch;    ///< Solver scratch; internal.
+    std::vector<RingWorkspace> rings;       ///< One per ring of the model, in its order.
 };
 
 } // namespace sub0physics::multibody

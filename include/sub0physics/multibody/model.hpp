@@ -17,6 +17,7 @@
 #include <sub0math/units/quantities.hpp>
 
 #include "sub0physics/multibody/constraint.hpp"
+#include "sub0physics/multibody/deformable_ring.hpp"
 #include "sub0physics/multibody/description.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 #include "sub0physics/multibody/planar.hpp"
@@ -114,10 +115,46 @@ public:
         return parent_.size();
     }
 
-    /** @return The number of generalized coordinates (degrees of freedom). */
+    /**
+     * The number of generalized coordinates (degrees of freedom): the tree's, one per body, then every ring's
+     * (docs/WHEEL.md section 2.3), in the order the rings were added. `State` holds `[q; qd]` of this size.
+     *
+     * @return treeDofCount() plus two per ring node.
+     */
     [[nodiscard]] std::size_t dofCount() const noexcept
     {
+        return parent_.size() + ringCoordinateCount_;
+    }
+
+    /**
+     * The number of the tree's coordinates: one per body, the first ones in q. The dense matrices of the Workspace
+     * (mass matrix, element Jacobians, step matrix) are this size; ring coordinates live in block storage.
+     *
+     * @return bodyCount().
+     */
+    [[nodiscard]] std::size_t treeDofCount() const noexcept
+    {
         return parent_.size();
+    }
+
+    /** @return The compiled rings, in the order added (docs/WHEEL.md section 2.3). */
+    [[nodiscard]] std::span<const DeformableRing> rings() const noexcept
+    {
+        return rings_;
+    }
+
+    /**
+     * Finds a ring by name.
+     *
+     * @param name The name given to the builder.
+     * @return The ring, or nothing if no ring has that name.
+     */
+    [[nodiscard]] std::optional<RingId> findRing(std::string_view name) const noexcept;
+
+    /** @return Whether anything contributes element forces: a force element or a ring (its foundation and edges). */
+    [[nodiscard]] bool hasForceElements() const noexcept
+    {
+        return !elementName_.empty() || !rings_.empty();
     }
 
     /** @return Parent index of each body, NoParent for the world; always less than the body's index. */
@@ -398,6 +435,8 @@ private:
     std::size_t closureRowCount_ = 0;
     std::size_t constraintWrenchCount_ = 0;
     ConstraintSettings constraintSettings_{};
+    std::vector<DeformableRing> rings_;
+    std::size_t ringCoordinateCount_ = 0;
     bool elementsFollowTree_ = true;
     bool hasMasslessBodies_ = false;
     Formulation formulation_ = Formulation::General;

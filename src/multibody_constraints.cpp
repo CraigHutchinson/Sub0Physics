@@ -24,6 +24,7 @@
 #include <sub0math/linear/vec.hpp>
 
 #include "multibody_joint.hpp"
+#include "multibody_planar.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/kinematics.hpp"
 
@@ -800,7 +801,7 @@ std::expected<Trial, Fault> trialStep(const Model& model, const Forcing& forcing
     const std::size_t n = model.dofCount();
     const State& start = sc.start;
     const auto dense = detail::formStepMatrix(model, start, forcing,
-                                              model.elementCount() > 0 ? sc.elementForce.data() : nullptr, ws, h,
+                                              model.hasForceElements() ? sc.elementForce.data() : nullptr, ws, h,
                                               implicit, terms, allowFallback);
     if (!dense)
     {
@@ -922,7 +923,7 @@ std::expected<void, Fault> prepareSubstep(const Model& model, Workspace& ws, boo
         return prepared;
     }
     std::copy(ws.elementForce.begin(), ws.elementForce.end(), sc.elementForce.begin());
-    sc.startDissipationPower = model.elementCount() > 0 ? ws.elementDissipationPower : 0.0;
+    sc.startDissipationPower = model.hasForceElements() ? ws.elementDissipationPower : 0.0;
     if (auto gaps = limitGaps(model, sc.start.q(), ws); !gaps)
     {
         return gaps;
@@ -1283,6 +1284,25 @@ std::expected<void, Fault> computeReactionsWithForcing(const Model& model, const
         addWrench(s.second.body, s.second.position, force * -1.0, {});
         ws.constraintSiteWrenches[limit.wrenchSlot] = {limit.id, limit.first, force, {}};
         ws.constraintSiteWrenches[limit.wrenchSlot + 1] = {limit.id, limit.second, force * -1.0, {}};
+    }
+    if (!model.rings().empty())
+    {
+        // A ring's nodes act on their host with their inertia and weight at these accelerations (their foundation
+        // and edges are internal to the host's subtree): the planar Newton-Euler pass gives that force, applied to
+        // the host as an external wrench with the opposite sign.
+        detail::planarTransforms<true>(model, state, ws);
+        detail::planarNewtonEuler<true>(model, state, ws.qdd.data(), sc.velocity.data(), ws);
+        const PlanarModel& pm = model.planar();
+        const auto rings = model.rings();
+        for (std::size_t r = 0; r < rings.size(); ++r)
+        {
+            const PlanarForce& f = ws.rings[r].hostForce;
+            sub0math::SpatialForced w{};
+            w.angular[pm.normal] = f.n;
+            w.linear[pm.axisI] = f.x;
+            w.linear[pm.axisJ] = f.y;
+            sc.bodyExternal[rings[r].host] -= w;
+        }
     }
     detail::transmittedForces(model, state, ws.qdd.data(), sc.velocity.data(), sc.bodyExternal.data(), ws);
     for (std::size_t i = 0; i < n; ++i)

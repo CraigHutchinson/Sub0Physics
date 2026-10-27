@@ -9,6 +9,7 @@
 #include <sub0math/linear/spatial_motion.hpp>
 #include <sub0math/linear/vec.hpp>
 
+#include "multibody_ring.hpp"
 #include "sub0physics/multibody/model.hpp"
 #include "sub0physics/multibody/planar.hpp"
 #include "sub0physics/multibody/state.hpp"
@@ -73,7 +74,7 @@ SUB0MATH_FORCE_INLINE void planarTransforms(const Model& model, const State& sta
     PlanarKinematics& k = ws.planar;
     const std::size_t n = parents.size();
     const double* q = state.values.data();
-    const double* qd = q + n;
+    const double* qd = q + model.dofCount();
     for (std::size_t i = 0; i < n; ++i)
     {
         k.parentToBody[i] = planarJoint(bodies[i], q[i]);
@@ -83,6 +84,10 @@ SUB0MATH_FORCE_INLINE void planarTransforms(const Model& model, const State& sta
             const std::size_t p = parents[i];
             k.velocity[i] = p == NoParent ? joint : apply(k.parentToBody[i], k.velocity[p]) + joint;
         }
+    }
+    if (!model.rings().empty())
+    {
+        ringTransforms(model, state, ws, WithVelocity);
     }
 }
 
@@ -110,7 +115,7 @@ SUB0MATH_FORCE_INLINE void planarNewtonEuler(const Model& model, const State& st
     const PlanarBody* bodies = pm.bodies.data();
     PlanarKinematics& k = ws.planar;
     const std::size_t n = parents.size();
-    const double* qd = state.values.data() + n;
+    const double* qd = state.values.data() + model.dofCount();
     const PlanarMotion base{0.0, -pm.gravityX, -pm.gravityY};
     for (std::size_t i = 0; i < n; ++i)
     {
@@ -125,6 +130,10 @@ SUB0MATH_FORCE_INLINE void planarNewtonEuler(const Model& model, const State& st
         k.acceleration[i] = a;
         const PlanarInertia& in = bodies[i].inertia;
         k.force[i] = in * a + crossForce(v, in * v);
+    }
+    if (!model.rings().empty())
+    {
+        ringNewtonEuler(model, state, WithAcceleration ? qdd : nullptr, tau, ws);
     }
     for (std::size_t i = n; i-- > 0;)
     {
@@ -147,6 +156,10 @@ SUB0MATH_FORCE_INLINE void planarCompositeRigidBody(const Model& model, Workspac
     for (std::size_t i = 0; i < n; ++i)
     {
         k.composite[i] = bodies[i].inertia;
+    }
+    if (!model.rings().empty())
+    {
+        ringCompositeInertia(model, ws);
     }
     for (std::size_t i = n; i-- > 0;)
     {
@@ -171,6 +184,10 @@ SUB0MATH_FORCE_INLINE void planarCompositeRigidBody(const Model& model, Workspac
             h[i * n + j] = value;
             h[j * n + i] = value;
         }
+    }
+    if (!model.rings().empty())
+    {
+        ringHostJacobians(model, ws);
     }
 }
 

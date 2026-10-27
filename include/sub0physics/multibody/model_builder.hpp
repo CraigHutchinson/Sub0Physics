@@ -14,6 +14,7 @@
 #include "sub0physics/constants.hpp"
 #include "sub0physics/fault.hpp"
 #include "sub0physics/multibody/constraint.hpp"
+#include "sub0physics/multibody/deformable_ring.hpp"
 #include "sub0physics/multibody/description.hpp"
 #include "sub0physics/multibody/force_element.hpp"
 #include "sub0physics/multibody/model.hpp"
@@ -144,6 +145,22 @@ public:
      *
      * @param settings The settings.
      */
+    /**
+     * Attaches a deformable ring substructure to a body (docs/WHEEL.md section 2.3). Its coordinates follow the tree's
+     * in the model's coordinate order, ring after ring as added. A model with rings uses the planar formulation and
+     * has no constraints (both checked at build). The description is copied.
+     *
+     * @param ring The ring.
+     * @return Its id.
+     */
+    RingId addRing(const DeformableRingDescription& ring)
+    {
+        const RingId id{static_cast<std::uint32_t>(rings_.size())};
+        rings_.push_back({std::string(ring.name), ring});
+        rings_.back().description.name = {};
+        return id;
+    }
+
     void setConstraintSettings(const ConstraintSettings& settings) noexcept
     {
         constraintSettings_ = settings;
@@ -200,6 +217,13 @@ private:
     [[nodiscard]] std::expected<void, Fault> compileElements(Model& model) const;
     [[nodiscard]] std::expected<void, Fault> compileConstraints(Model& model) const;
     [[nodiscard]] std::expected<void, Fault> compileFormulation(Model& model) const;
+    [[nodiscard]] std::expected<void, Fault> compileRings(Model& model) const;
+
+    struct StoredRing
+    {
+        std::string name;
+        DeformableRingDescription description;
+    };
 
     template<typename Description>
     ConstraintId addConstraintDescription(std::string_view name, Description description)
@@ -225,6 +249,7 @@ private:
     std::vector<std::string> elementNames_;
     std::vector<ConstraintDescription> constraints_;
     std::vector<std::string> constraintNames_;
+    std::vector<StoredRing> rings_;
     ConstraintSettings constraintSettings_{};
     Formulation formulation_ = Formulation::Automatic;
     sub0math::Vec3<sub0math::f64::Acceleration> gravity_{

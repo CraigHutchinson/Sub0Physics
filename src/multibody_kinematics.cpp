@@ -11,6 +11,7 @@
 
 #include "multibody_joint.hpp"
 #include "multibody_planar.hpp"
+#include "multibody_ring.hpp"
 #include "sub0physics/multibody/kinematics.hpp"
 
 namespace sub0physics::multibody
@@ -56,6 +57,10 @@ detail::EnergyTerms planarMotionEnergy(const Model& model, const Workspace& work
         const double cx = in.m * x.x + (x.c * in.hx - x.s * in.hy);
         const double cy = in.m * x.y + (x.s * in.hx + x.c * in.hy);
         potential -= pm.gravityX * cx + pm.gravityY * cy;
+    }
+    if (!model.rings().empty())
+    {
+        detail::ringMotionEnergy(model, workspace, kinetic, potential);
     }
     return {kinetic, potential};
 }
@@ -110,7 +115,7 @@ std::expected<detail::EnergyTerms, Fault> planarEnergyTerms(const Model& model, 
     detail::EnergyTerms terms = planarMotionEnergy(model, workspace);
     double& potential = terms.potential;
     const double kinetic = terms.kinetic;
-    if (model.elementCount() > 0)
+    if (model.hasForceElements())
     {
         if (auto added = detail::evaluateElementsUnchecked(model, state, workspace, false, true, true); !added)
         {
@@ -463,7 +468,7 @@ namespace detail
 std::expected<EnergyTerms, Fault> energyTerms(const Model& model, const State& state, Workspace& workspace) noexcept
 {
     EnergyTerms terms = generalMotionEnergy(model, workspace);
-    if (model.elementCount() > 0)
+    if (model.hasForceElements())
     {
         if (auto added = detail::evaluateElementsUnchecked(model, state, workspace, false); !added)
         {

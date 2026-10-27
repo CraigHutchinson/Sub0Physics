@@ -125,7 +125,7 @@ SUB0MATH_FORCE_INLINE void updateTransforms(const Model& model, const State& sta
     const auto unrotated = model.placementUnrotated();
     const std::size_t n = parents.size();
     const double* q = state.values.data();
-    const double* qd = q + n;
+    const double* qd = q + model.dofCount();
     for (std::size_t i = 0; i < n; ++i)
     {
         ws.parentToBody[i] = parentToBody(types[i], axes[i], tree[i], unrotated[i] != 0U, q[i]);
