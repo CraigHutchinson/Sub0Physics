@@ -66,7 +66,7 @@ SoftConstraintRow softConstraintRow(const SoftConstraintParameters& parameters, 
             imp = solimp[0] + y * (solimp[1] - solimp[0]);
         }
     }
-    // mj_makeImpedance (:1953, :1966-1983): R, then K and B in the standard format.
+    // mj_makeImpedance (:1930, :1947, :1956): R, then K and B in the standard format.
     SoftConstraintRow row;
     row.impedance = imp;
     row.regularisation = std::max(MinVal, (1 - imp) * diagApprox / imp);

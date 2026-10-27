@@ -45,8 +45,8 @@ struct SoftConstraintRow
  * format, a non-discrete integrator): a frictionless contact (`position` the signed gap), and equally a row of an
  * equality or a limit (`position` its violation), which differ only in their bounds (SoftRowKind). The time constant is first raised to at least `2 h`
  * (engine_core_constraint.c:1777-1780), the impedance `d(g)` follows solimp (getimpedance, :1851-1900), `K = 1 /
- * (dwidth^2 tc^2 dr^2)`, `B = 2 / (dwidth tc)` (mj_makeImpedance, :1966-1983), `R = max(mjMINVAL, (1 - d) diagApprox
- * / d)` (:1953) and `aref = -B v - K d g` (mj_referenceConstraint, :3194-3196, the margin zero). Expression order
+ * (dwidth^2 tc^2 dr^2)`, `B = 2 / (dwidth tc)` (mj_makeImpedance, :1947, :1956), `R = max(mjMINVAL, (1 - d) diagApprox
+ * / d)` (:1930) and `aref = -B v - K d g` (mj_referenceConstraint, :3194-3196, the margin zero). Expression order
  * follows the source.
  *
  * @param parameters The law's parameters.

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -472,16 +473,34 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
                 }
             }
         }
-        if (!factorPeriodicBlockTridiagonal<C>(rw.stepDiagonal, rw.stepUpper, cond.factor()))
-        {
-            return false;
-        }
+        // PERF: a block-diagonal ring block (the mass matrix; the reference's step) skips the periodic sweep.
+        cond.blockDiagonal = std::ranges::all_of(rw.stepUpper, [](const Block2& b) {
+            return b[0] == 0.0 && b[1] == 0.0 && b[2] == 0.0 && b[3] == 0.0;
+        });
         std::span<BlockColumns<C, 3>> z = cond.coupling;
-        for (std::size_t i = 0; i < nodes; ++i)
+        if (cond.blockDiagonal)
         {
-            z[i] = cond.border[i];
+            for (std::size_t i = 0; i < nodes; ++i)
+            {
+                if (!sub0physics::detail::invertSymmetricPositive<C>(rw.stepDiagonal[i], cond.inversePivot[i]))
+                {
+                    return false;
+                }
+                z[i] = sub0physics::detail::applyBlock<C, 3>(cond.inversePivot[i], cond.border[i]);
+            }
         }
-        solvePeriodicBlockTridiagonal<C, 3>(cond.inversePivot, cond.next, cond.wrap, z);
+        else
+        {
+            if (!factorPeriodicBlockTridiagonal<C>(rw.stepDiagonal, rw.stepUpper, cond.factor()))
+            {
+                return false;
+            }
+            for (std::size_t i = 0; i < nodes; ++i)
+            {
+                z[i] = cond.border[i];
+            }
+            solvePeriodicBlockTridiagonal<C, 3>(cond.inversePivot, cond.next, cond.wrap, z);
+        }
         // B^T Z, symmetric.
         std::array<double, 9> h{};
         for (std::size_t i = 0; i < nodes; ++i)
@@ -582,7 +601,17 @@ void ringForward(const Model& model, const Workspace& ws, RingSystem system, dou
         {
             y[i] = {xw[C * i], xw[C * i + 1U]};
         }
-        solvePeriodicBlockTridiagonal<C, 1>(cond.inversePivot, cond.next, cond.wrap, y);
+        if (cond.blockDiagonal)
+        {
+            for (std::size_t i = 0; i < nodes; ++i)
+            {
+                y[i] = sub0physics::detail::applyBlock<C, 1>(cond.inversePivot[i], y[i]);
+            }
+        }
+        else
+        {
+            solvePeriodicBlockTridiagonal<C, 1>(cond.inversePivot, cond.next, cond.wrap, y);
+        }
         // g = B^T y, then the tree rows lose J^T g.
         double g0 = 0.0;
         double g1 = 0.0;
