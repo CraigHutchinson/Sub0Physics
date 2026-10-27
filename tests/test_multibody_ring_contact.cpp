@@ -12,6 +12,7 @@
 #include <cstring>
 #include <random>
 #include <span>
+#include <tuple>
 #include <vector>
 
 #include <doctest.h>
@@ -512,6 +513,40 @@ TEST_CASE("structured step with contact loads equals the dense step")
                                              sub0math::f64::Time::fromSi(h), prepared, ws)
                     .has_value());
         CHECK(prepared == stepped);
+        // A kept preparation completes again from a copy of the start, with another step and scheme, bit for bit as a
+        // fresh preparation (step doubling's three solves cost one preparation).
+        {
+            State first = s;
+            REQUIRE(prepareLinearlyImplicitStep(model, first, ws, terms).has_value());
+            State second = s;
+            State third = s;
+            REQUIRE(completeLinearlyImplicitStep(model, Forcing{.tau = {}, .ringLoads = loads}, first.tick,
+                                                 sub0math::f64::Time::fromSi(h), first, ws, ImplicitScheme::Midpoint,
+                                                 PreparedStepUse::Keep)
+                        .has_value());
+            REQUIRE(completeLinearlyImplicitStep(model, Forcing{.tau = {}, .ringLoads = loads}, second.tick,
+                                                 sub0math::f64::Time::fromSi(0.5 * h), second, ws,
+                                                 ImplicitScheme::Midpoint, PreparedStepUse::Keep)
+                        .has_value());
+            REQUIRE(completeLinearlyImplicitStep(model, Forcing{.tau = {}, .ringLoads = loads}, third.tick,
+                                                 sub0math::f64::Time::fromSi(h), third, ws)
+                        .has_value());
+            State used = s;
+            CHECK_FALSE(completeLinearlyImplicitStep(model, Forcing{}, s.tick, sub0math::f64::Time::fromSi(h), used, ws)
+                            .has_value()); // used up by the last (Consume) completion
+            for (const auto& [kept, step, scheme] :
+                 {std::tuple{first, h, ImplicitScheme::Midpoint}, std::tuple{second, 0.5 * h, ImplicitScheme::Midpoint},
+                  std::tuple{third, h, ImplicitScheme::Euler}})
+            {
+                State fresh = s;
+                Workspace other(model);
+                REQUIRE(prepareLinearlyImplicitStep(model, fresh, other, terms).has_value());
+                REQUIRE(completeLinearlyImplicitStep(model, Forcing{.tau = {}, .ringLoads = loads}, fresh.tick,
+                                                     sub0math::f64::Time::fromSi(step), fresh, other, scheme)
+                            .has_value());
+                CHECK(kept == fresh);
+            }
+        }
         // Without loads the step is unchanged by the earlier contact terms (they are cleared).
         State plain = s;
         State plainAgain = s;

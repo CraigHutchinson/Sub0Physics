@@ -10,6 +10,7 @@ add_executable(Sub0Physics_Tests
     test_convex_terrain.cpp
     test_corridor_builder.cpp
     test_damped_oscillator.cpp
+    test_dyadic_step.cpp
     test_elements.cpp
     test_energy_ledger.cpp
     test_extruded_profile.cpp

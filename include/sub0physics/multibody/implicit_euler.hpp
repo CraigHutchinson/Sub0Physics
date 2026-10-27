@@ -213,9 +213,21 @@ enum class ImplicitScheme : std::uint8_t
                                                                    std::span<SiteMotion> out, const Workspace& workspace,
                                                                    EnergyAccount* energy = nullptr) noexcept;
 
+/** What completing a prepared step does to the preparation. */
+enum class PreparedStepUse : std::uint8_t
+{
+    Consume, ///< The preparation is used up (the state it was made at is replaced).
+    Keep     ///< The preparation stays valid for the starting state, so the step can be completed again from a copy of
+             ///< it, with another step size or scheme (step doubling, an embedded pair): it costs one solve, not a
+             ///< second preparation. If a completion fell back to the material stiffness (geometric term dropped,
+             ///< Workspace::geometricStiffnessDropped), later completions from the same preparation use it too.
+};
+
 /**
  * Completes a prepared step (prepareLinearlyImplicitStep): forms and solves the step with the forcing and commits it,
- * as stepLinearlyImplicitEuler or stepLinearlyImplicitMidpoint would from the same state. The preparation is used up.
+ * as stepLinearlyImplicitEuler or stepLinearlyImplicitMidpoint would from the same state. By default the preparation
+ * is used up; with PreparedStepUse::Keep it stays for further completions from the same starting values (each one bit
+ * for bit what a fresh preparation would give, except after a geometric-stiffness fallback, see PreparedStepUse).
  *
  * @param model The model.
  * @param forcing Applied forces and site forces, constant over the step.
@@ -224,11 +236,12 @@ enum class ImplicitScheme : std::uint8_t
  * @param state The state the step was prepared at; replaced by the state at tick + 1 only on success.
  * @param workspace The prepared workspace.
  * @param scheme Euler or midpoint.
+ * @param use Whether the preparation is used up (the default) or kept for another completion.
  * @return Nothing, or InvalidInput when the workspace holds no preparation at this state, or a stepper fault.
  */
-[[nodiscard]] std::expected<void, Fault> completeLinearlyImplicitStep(const Model& model, const Forcing& forcing,
-                                                                      std::uint64_t tick, sub0math::f64::Time h,
-                                                                      State& state, Workspace& workspace,
-                                                                      ImplicitScheme scheme = ImplicitScheme::Euler) noexcept;
+[[nodiscard]] std::expected<void, Fault>
+completeLinearlyImplicitStep(const Model& model, const Forcing& forcing, std::uint64_t tick, sub0math::f64::Time h,
+                             State& state, Workspace& workspace, ImplicitScheme scheme = ImplicitScheme::Euler,
+                             PreparedStepUse use = PreparedStepUse::Consume) noexcept;
 
 } // namespace sub0physics::multibody

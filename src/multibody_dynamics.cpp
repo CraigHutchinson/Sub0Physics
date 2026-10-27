@@ -834,7 +834,7 @@ std::expected<void, Fault> prepareLinearlyImplicitStep(const Model& model, const
 
 std::expected<void, Fault> completeLinearlyImplicitStep(const Model& model, const Forcing& forcing, std::uint64_t tick,
                                                         sub0math::f64::Time h, State& state, Workspace& ws,
-                                                        ImplicitScheme scheme) noexcept
+                                                        ImplicitScheme scheme, PreparedStepUse use) noexcept
 {
     if (!ws.isBuiltFor(model) || !state.isSizedFor(model) || !ws.stepPrepared ||
         !std::ranges::equal(state.values, ws.preparedValues))
@@ -854,7 +854,10 @@ std::expected<void, Fault> completeLinearlyImplicitStep(const Model& model, cons
     {
         return checked;
     }
-    ws.stepPrepared = false;
+    // Keep: finishing reads the preparation (mass matrix, bias, element Jacobians, condensation inputs) and writes only
+    // the step's own storage (implicitMatrix, implicitRhs, the step condensation, the contact blocks, qdd), so the
+    // preparation stays valid for the starting values.
+    ws.stepPrepared = use == PreparedStepUse::Keep;
     return finishLinearlyImplicit(model, forcing, tick, dt, state, ws, ws.preparedTerms,
                                   scheme == ImplicitScheme::Midpoint ? 0.5 : 1.0);
 }
