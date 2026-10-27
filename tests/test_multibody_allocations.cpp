@@ -229,3 +229,51 @@ TEST_CASE("Ring substructures: steps, dynamics, elements, energy and reactions n
     CHECK(allocations.load() - start == 0U);
     CHECK(std::isfinite(s.values[10]));
 }
+
+TEST_CASE("Ring contact: rows, the soft-constraint solve, contact element loads and their steps never allocate")
+{
+    const Model model = ringmodels::ringRig({.nodes = 64}, false);
+    Workspace ws(model);
+    State s = ringmodels::randomState(model, 2);
+    const std::size_t n = model.dofCount();
+    SoftConstraintSolver solver(model, 8);
+    std::vector<double> jacobian(4 * n);
+    std::vector<double> reference(4, -5.0);
+    std::vector<double> regularisation(4, 0.02);
+    std::vector<double> free(n, 0.3);
+    std::vector<double> force(4);
+    std::vector<double> generalized(n);
+    std::vector<double> tau(n, 0.0);
+    std::array<RingContactLoad, 2> loads{};
+    const auto h = sub0math::f64::Time::fromSi(1e-5);
+
+    const std::size_t start = allocations.load();
+    for (int k = 0; k < 20; ++k)
+    {
+        REQUIRE(prepareLinearlyImplicitStep(model, s, ws, ImplicitTerms::DampingOnlyMassPattern));
+        REQUIRE(factorMassMatrix(model, ws));
+        for (std::size_t r = 0; r < 4; ++r)
+        {
+            const RingContactPoint p{.ring = 0, .edge = 10 + r, .weight0 = 0.4, .weight1 = 0.6,
+                                     .point = {0.1, 0.0, 0.05}, .normal = {0.0, 0.0, 1.0}};
+            REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jacobian.data() + r * n, n)));
+        }
+        REQUIRE(solver.solve(model, ws, jacobian, reference, regularisation, free, {}, force, generalized));
+        for (std::size_t l = 0; l < loads.size(); ++l)
+        {
+            const RingContactGeometry g{.ring = 0, .edge = 20 + l, .axisT = 0.3, .witness = ContactWitness::Vertex,
+                                        .witnessPoint = {0.0, 0.0, -1.0}, .normal = {0.0, 0.0, 1.0}, .skin = 0.008};
+            double gap = 0.0;
+            double rate = 0.0;
+            REQUIRE(measureRingContact(model, s, ws, g, gap, rate));
+            REQUIRE(ringContactLoad(model, s, ws, g, {.force = 10.0, .dForceDGap = -1e5, .dForceDGapRate = -20.0},
+                                    loads[l]));
+        }
+        REQUIRE(completeLinearlyImplicitStep(model, Forcing{.tau = generalized, .ringLoads = loads}, s.tick, h, s, ws));
+        REQUIRE(stepLinearlyImplicitEuler(model, Forcing{.tau = tau, .ringLoads = loads}, s.tick, h, s, ws));
+        REQUIRE(stepLinearlyImplicitMidpoint(model, Forcing{.tau = tau, .ringLoads = loads}, s.tick, h, s, ws));
+        REQUIRE(stepSemiImplicitEuler(model, Forcing{.tau = tau, .ringLoads = loads}, s.tick, h, s, ws));
+    }
+    CHECK(allocations.load() - start == 0U);
+    CHECK(std::isfinite(s.values[10]));
+}

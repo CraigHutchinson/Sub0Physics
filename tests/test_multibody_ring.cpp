@@ -402,6 +402,8 @@ TEST_CASE("condensed ring steps agree with the expanded oracle over a run")
         };
         for (const Case k : {Case{"implicit Euler, full", 0, ImplicitTerms::Full, 1e-10},
                              Case{"implicit Euler, damping only", 0, ImplicitTerms::DampingOnly, 1e-10},
+                             Case{"implicit Euler, damping only in the mass pattern", 0,
+                                  ImplicitTerms::DampingOnlyMassPattern, 1e-10},
                              Case{"implicit midpoint", 1, ImplicitTerms::Full, 1e-10},
                              Case{"semi-implicit Euler", 2, ImplicitTerms::Full, 1e-10}})
         {
@@ -448,6 +450,34 @@ TEST_CASE("condensed ring steps agree with the expanded oracle over a run")
             REQUIRE(re.step(e, {}, t, step, se, we).has_value());
         }
         CHECK(relativeDifference(sc.values, se.values) < 1e-10);
+    }
+}
+
+TEST_CASE("damping only in the mass pattern drops exactly the ring's neighbour damping")
+{
+    // The reference engine's implicitfast (ImplicitTerms::DampingOnlyMassPattern): the edges' dampers stay implicit on
+    // each node's own block and explicit between neighbours. It differs from DampingOnly by O(h c / m) on the step,
+    // and equals it without edge viscosity.
+    const auto h = sub0math::f64::Time::fromSi(1e-4);
+    for (const double viscosity : {0.5, 0.0})
+    {
+        CAPTURE(viscosity);
+        RingParameters p{.nodes = 16};
+        p.viscosity = viscosity;
+        const Model c = ringmodels::ringRig(p, false);
+        Workspace w(c);
+        State a = ringmodels::randomState(c, 3);
+        State b = a;
+        REQUIRE(stepLinearlyImplicitEuler(c, {}, 0, h, a, w, ImplicitTerms::DampingOnly).has_value());
+        REQUIRE(stepLinearlyImplicitEuler(c, {}, 0, h, b, w, ImplicitTerms::DampingOnlyMassPattern).has_value());
+        if (viscosity == 0.0)
+        {
+            CHECK(a == b);
+        }
+        else
+        {
+            CHECK(relativeDifference(a.values, b.values) > 1e-9);
+        }
     }
 }
 

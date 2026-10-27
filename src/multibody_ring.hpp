@@ -84,9 +84,11 @@ void ringLoadBlocks(const Model& model, const State& state, const Workspace& ws,
 // The ring loads' Jacobians in a linearly implicit step `-hd D - h2 K~` (Forcing::ringLoads; their force is in the
 // applied force): the host chain's block into the tree's matrix `tree` (lower triangle), the nodes' blocks and the
 // border into each touched ring's contact blocks, which condenseRings adds for the step system, and
-// `dt thetaStep K~ qd` into the right-hand side `b` (when h2 is not zero). Call after ringStepRhs.
+// `dt thetaStep K~ qd` into the right-hand side `b` (when h2 is not zero); without `neighbourDamping` (the mass pattern)
+// the damping between the edge's two nodes stays explicit. Call after ringStepRhs.
 void ringLoadStepTerms(const Model& model, const State& state, Workspace& ws, std::span<const RingContactLoad> loads,
-                       double hd, double h2, double dt, double thetaStep, double* tree, double* b) noexcept;
+                       double hd, bool neighbourDamping, double h2, double dt, double thetaStep, double* tree,
+                       double* b) noexcept;
 
 // Before the tree solve: eliminates the ring rows of x (dofCount entries) onto the tree rows.
 void ringForward(const Model& model, const Workspace& ws, RingSystem system, double* x) noexcept;

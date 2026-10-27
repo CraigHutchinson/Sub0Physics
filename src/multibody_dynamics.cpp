@@ -398,7 +398,7 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
                                 withStiffness ? thetaStep : 0.0, b);
             // Contact loads' Jacobians (their force is already in tau), or none: clears last step's terms.
             detail::ringLoadStepTerms(model, state, ws, implicit ? applied.ringLoads : std::span<const RingContactLoad>{},
-                                      hd, h2, dt, thetaStep, a, b);
+                                      hd, terms != ImplicitTerms::DampingOnlyMassPattern, h2, dt, thetaStep, a, b);
             return detail::condenseRings(model, ws, detail::RingSystem::Step, hd,
                                          terms != ImplicitTerms::DampingOnlyMassPattern,
                                          withStiffness ? thetaStep * thetaStep : 0.0, a);

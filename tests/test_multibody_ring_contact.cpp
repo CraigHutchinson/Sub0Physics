@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <random>
 #include <span>
 #include <vector>
@@ -520,4 +521,82 @@ TEST_CASE("structured step with contact loads equals the dense step")
                     .has_value());
         CHECK(plain == plainAgain);
     }
+}
+
+TEST_CASE("a ring bouncing on contact elements: energy, implicit stability, and the run digest across compilers")
+{
+    // The rear ring of the test rig dropped on flat ground (z = 0), every node in overlap carrying an elastic contact
+    // element (a face witness under the node, t = 0 on its edge). Without viscosity the implicit midpoint step keeps
+    // the mechanical energy plus the contacts' potential, up to the onsets it steps over (event location is M2d); the
+    // full Jacobians enter the step through the ring's blocks and the host's chain. The digest of the run must match
+    // on every compiler.
+    RingParameters p{.nodes = 64};
+    p.viscosity = 0.0;
+    const Model model = ringmodels::ringRig(p, false, false);
+    Workspace ws(model);
+    const std::size_t n = model.dofCount();
+    State s = State::atRest(model);
+    s.q()[1] = 0.3 + 0.352 + 0.008 + 0.002; // the casing 2 mm above the ground
+    s.qd()[1] = -0.8;
+    s.qd()[0] = 0.5;
+    const double k = 2e5;
+    const double h = 2e-4; // w h = sqrt(k / m) h = 0.7 for a node on its contact
+    std::vector<RingContactLoad> loads(64);
+    std::uint64_t hash = 1469598103934665603ULL;
+    double startEnergy = 0.0;
+    double worstDrift = 0.0;
+    double contactPotential = 0.0;
+    std::size_t maxContacts = 0;
+    for (std::uint64_t t = 0; t < 400; ++t)
+    {
+        REQUIRE(prepareLinearlyImplicitStep(model, s, ws).has_value());
+        std::size_t count = 0;
+        contactPotential = 0.0;
+        for (std::size_t i = 0; i < 64; ++i)
+        {
+            const auto node = nodeWorld(model, ws, 0, i); // plane (i, j) = (z, x)
+            if (node[0] - 0.008 >= 0.0)
+            {
+                continue;
+            }
+            const RingContactGeometry g{.ring = 0,
+                                        .edge = i,
+                                        .axisT = 0.0,
+                                        .witness = ContactWitness::Face,
+                                        .witnessPoint = toWorld(model, 0.0, node[1]),
+                                        .normal = toWorld(model, 1.0, 0.0),
+                                        .skin = 0.008};
+            double gap = 0.0;
+            double rate = 0.0;
+            REQUIRE(measureRingContact(model, s, ws, g, gap, rate).has_value());
+            contactPotential += 0.5 * k * gap * gap;
+            REQUIRE(ringContactLoad(model, s, ws, g, linearLaw(gap, rate, k, 0.0), loads[count++]).has_value());
+        }
+        sub0physics::EnergyAccount account{};
+        REQUIRE(computePreparedSiteMotion(model, s, {}, {}, ws, &account).has_value());
+        const double energy = account.kinetic.si() + account.potential.si() + contactPotential;
+        if (t == 0)
+        {
+            startEnergy = energy;
+        }
+        worstDrift = std::max(worstDrift, std::abs(energy - startEnergy));
+        maxContacts = std::max(maxContacts, count);
+        REQUIRE(completeLinearlyImplicitStep(model,
+                                             Forcing{.tau = {}, .ringLoads = std::span<const RingContactLoad>(loads.data(), count)},
+                                             s.tick, sub0math::f64::Time::fromSi(h), s, ws, ImplicitScheme::Midpoint)
+                    .has_value());
+        for (const double v : s.values)
+        {
+            std::uint64_t bits = 0;
+            std::memcpy(&bits, &v, sizeof bits);
+            for (int b = 0; b < 8; ++b)
+            {
+                hash = (hash ^ ((bits >> (8 * b)) & 0xFFU)) * 1099511628211ULL;
+            }
+        }
+    }
+    MESSAGE("ring contact digest: " << hash << ", energy drift " << worstDrift << " J of " << startEnergy);
+    CHECK(std::isfinite(s.values[n - 1]));
+    CHECK(maxContacts >= 3);
+    CHECK(worstDrift < 1e-3 * std::abs(startEnergy)); // measured 6.6e-4: the step crosses each contact's onset kink
 }

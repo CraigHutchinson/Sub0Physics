@@ -509,7 +509,8 @@ void ringLoadBlocks(const Model& model, const State& state, const Workspace& ws,
 }
 
 void ringLoadStepTerms(const Model& model, const State& state, Workspace& ws, std::span<const RingContactLoad> loads,
-                       double hd, double h2, double dt, double thetaStep, double* tree, double* b) noexcept
+                       double hd, bool neighbourDamping, double h2, double dt, double thetaStep, double* tree,
+                       double* b) noexcept
 {
     constexpr std::size_t Cap = RingLoadBlocks::Capacity;
     const std::size_t nt = model.treeDofCount();
@@ -580,7 +581,8 @@ void ringLoadStepTerms(const Model& model, const State& state, Workspace& ws, st
             {
                 rw.contactDiagonal[e][r * C + c] += step[(m + r) * Cap + m + c];
                 rw.contactDiagonal[f][r * C + c] += step[(m + 2 + r) * Cap + m + 2 + c];
-                rw.contactUpper[e][r * C + c] += step[(m + r) * Cap + m + 2 + c];
+                const double d = 0.5 * (g.damping[(m + r) * Cap + m + 2 + c] + g.damping[(m + 2 + c) * Cap + m + r]);
+                rw.contactUpper[e][r * C + c] += step[(m + r) * Cap + m + 2 + c] + (neighbourDamping ? 0.0 : hd * d);
             }
         }
         for (std::size_t node = 0; node < 2; ++node)
