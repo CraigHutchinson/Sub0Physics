@@ -145,8 +145,15 @@ Constraints here are few by design:
   - no parallel reductions inside a step;
   - floating-point contraction disabled for the core's translation units
     (`-ffp-contract=off`, `/fp:precise`);
-  - one set of transcendental functions for state evolution: our own, or audited `std::` ones,
-    decided at M3, where cross-platform hashes are the gate.
+  - one set of transcendental functions for state evolution, decided (2026-10-27): our own, `sub0math::det`
+    (fdlibm-derived sin, cos, exp, log; `pow` by squaring or exp-log), never the C library. The ring run digest
+    matched on every Windows build and differed on Linux (`abd8d2ab7e62fbc7`) and macOS (`f67fc6a4aa623f6d`)
+    while libm `sin`/`cos` drove the joints; the cause was the C libraries, not the compiler. Call sites: the
+    joint transforms (revolute and planar), the corridor builder, the soft-constraint impedance power and the
+    step-size controller's power law. `std::sqrt` stays (IEEE-exact). Not on the state path and still libm: the
+    reference damped oscillator, the principal-moment validation (`acos`), `tan` in the berm test surface and the
+    convergence-order `log`. A new state-path call to a libm transcendental is a bug; add the function to
+    Sub0Math instead.
 - **Precision:** state and dynamics in double. Terrain data stays float and is converted at the
   contact boundary (terrain design §3).
 - **Memory:** the `Model` is immutable and holds flat arrays; a `Workspace` is preallocated per model.
@@ -647,8 +654,8 @@ element Jacobians when substructures are present; velocity-only rows admitted in
   RATTLE-type midpoint is needed for closures is to be measured on a four-bar linkage when one is modelled.
 - **Error control for multibody steps:** the Euler and midpoint steps share their solve and form an embedded pair; a
   controller and event location at force-law switches (as for the stations) are the next continuous lever.
-- **Transcendentals:** whether `std::sin`/`std::cos` are good enough for cross-platform hashes, or
-  whether we need our own (M3 gate).
+- **Transcendentals:** decided, see section 8: our own (`sub0math::det`). Remaining to verify: the ring and ring-contact
+  digests match on Linux and macOS CI.
 
 ### M2a status (2026-10-27)
 

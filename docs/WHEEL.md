@@ -251,8 +251,7 @@ Notes:
   M1b). Support limits (casing strain, node displacement, overlap, rim clearance) are the consumer's guards over the
   accepted state; the core reports what it measured.
 - **Arithmetic.** Rest geometry from canonical tables; the hub's rotation needs one sine and cosine per step. The
-  cross-platform hash gate at M3 decides between audited `std::` functions and our own (MULTIBODY §10); because the
-  ring adds no new transcendental call, the decision is the same one.
+  decision is made (MULTIBODY §8): `sub0math::det::sincos`, bit-identical on every platform.
 - **Bounded memory.** Contact rows and candidate lists have fixed capacities set at build. Overflow is a fault, never
   truncation.
 
