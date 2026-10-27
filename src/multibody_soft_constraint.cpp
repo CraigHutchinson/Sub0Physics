@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +9,7 @@
 
 #include <sub0math/number/det_math.hpp>
 
+#include "multibody_mass.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/soft_constraint.hpp"
 
@@ -79,54 +81,40 @@ SoftConstraintRow softConstraintRow(const SoftConstraintParameters& parameters, 
     return row;
 }
 
+namespace
+{
+
+// A row's support: the tree's coordinates and the edge's four node coordinates.
+constexpr std::size_t RingSupportSize = 4;
+
+} // namespace
+
 SoftConstraintSolver::SoftConstraintSolver(const Model& model, std::size_t capacity)
     : capacity_(capacity), dof_(model.dofCount()), solved_(capacity * model.dofCount(), 0.0),
-      delassus_(capacity * capacity, 0.0), factor_(capacity * capacity, 0.0), rhs_(capacity, 0.0),
-      slack_(capacity, 0.0), work_(capacity, 0.0), subset_(capacity, 0), active_(capacity, 0)
+      index_(capacity * (model.treeDofCount() + RingSupportSize), 0),
+      structured_(capacity * (2 * model.treeDofCount() + 2 * RingSupportSize), 0.0), delassus_(capacity * capacity, 0.0),
+      factor_(capacity * capacity, 0.0), rhs_(capacity, 0.0), slack_(capacity, 0.0), work_(capacity, 0.0),
+      subset_(capacity, 0), active_(capacity, 0)
 {
 }
 
-std::expected<SoftConstraintSolution, Fault>
-SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
-                         std::span<const double> reference, std::span<const double> regularisation,
-                         std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds,
-                         std::span<double> force, std::span<double> generalized) noexcept
+void SoftConstraintSolver::formUniform(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
+                                       std::span<const double> reference, std::span<const double> freeAcceleration,
+                                       std::span<const SoftRowSupport> /*supports*/, std::size_t k) noexcept
 {
     const std::size_t n = dof_;
-    const std::size_t k = reference.size();
-    if (model.dofCount() != n || k > capacity_ || jacobian.size() != k * n || regularisation.size() != k ||
-        freeAcceleration.size() != n || force.size() != k || generalized.size() != n ||
-        (!kinds.empty() && kinds.size() != k))
-    {
-        return invalidInput("soft contact solve needs consistent sizes within the solver's capacity");
-    }
-    std::ranges::fill(generalized, 0.0);
-    SoftConstraintSolution solution;
-    if (k == 0)
-    {
-        return solution;
-    }
     // Y = M^-1 J^T, A = J Y + R, q = J a0 - aref.
-    double scale = 0.0;
     for (std::size_t r = 0; r < k; ++r)
     {
-        if (!(regularisation[r] > 0.0))
-        {
-            return invalidInput("soft contact rows need a positive regularisation");
-        }
         const std::span<double> y(solved_.data() + r * n, n);
         std::copy_n(jacobian.data() + r * n, n, y.begin());
-        if (auto solved = solveMassMatrix(model, workspace, y); !solved)
-        {
-            return std::unexpected(solved.error());
-        }
+        (void)solveMassMatrix(model, workspace, y); // sizes checked by the caller
         double q = 0.0;
         for (std::size_t i = 0; i < n; ++i)
         {
             q += jacobian[r * n + i] * freeAcceleration[i];
         }
         rhs_[r] = q - reference[r];
-        scale = std::max(scale, std::abs(rhs_[r]));
     }
     for (std::size_t r = 0; r < k; ++r)
     {
@@ -142,6 +130,152 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
             delassus_[r * k + c] = sum;
             delassus_[c * k + r] = sum;
         }
+    }
+}
+
+void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& workspace,
+                                         std::span<const double> jacobian, std::span<const double> reference,
+                                         std::span<const double> freeAcceleration,
+                                         std::span<const SoftRowSupport> supports, std::size_t k) noexcept
+{
+    const std::size_t n = dof_;
+    const std::size_t nt = model.treeDofCount();
+    const std::size_t stride = 2 * nt + 2 * RingSupportSize;
+    const auto coordinates = model.coordinates();
+    // Per row: t (tree), v = S^-1 t, the node values j_w and y = A^-1 j_w at node0 then node1.
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        const SoftRowSupport& sup = supports[r];
+        const DeformableRing& ring = model.rings()[sup.ring];
+        const RingWorkspace& rw = workspace.rings[sup.ring];
+        const RingCondensation& cond = rw.mass; // the mass matrix's ring block is always block-diagonal
+        const double* jr = jacobian.data() + r * n;
+        double* row = structured_.data() + r * stride;
+        double* t = row;
+        double* v = row + nt;
+        double* jw = row + 2 * nt;
+        double* y = jw + RingSupportSize;
+        double g0 = 0.0;
+        double g1 = 0.0;
+        double g2 = 0.0;
+        const std::array<std::size_t, 2> nodes{sup.node0, sup.node1};
+        for (std::size_t a = 0; a < 2; ++a)
+        {
+            const std::size_t node = nodes[a];
+            const std::size_t at = ring.firstCoordinate + PlanarRingComponents * node;
+            const BlockColumns<PlanarRingComponents, 1> jn{jr[at], jr[at + 1]};
+            const auto yn = sub0physics::detail::applyBlock<PlanarRingComponents, 1>(cond.inversePivot[node], jn);
+            jw[2 * a] = jn[0];
+            jw[2 * a + 1] = jn[1];
+            y[2 * a] = yn[0];
+            y[2 * a + 1] = yn[1];
+            const BlockColumns<PlanarRingComponents, 3>& b = cond.border[node];
+            g0 += b[0] * yn[0] + b[3] * yn[1];
+            g1 += b[1] * yn[0] + b[4] * yn[1];
+            g2 += b[2] * yn[0] + b[5] * yn[1];
+        }
+        std::copy_n(jr, nt, t);
+        for (std::size_t c = 0; c < ring.hostChain.size(); ++c)
+        {
+            const PlanarMotion& jh = rw.hostJacobian[c];
+            t[coordinates[ring.hostChain[c]]] -= jh.w * g0 + jh.x * g1 + jh.y * g2;
+        }
+        std::copy_n(t, nt, v);
+        detail::solveMassTree(model, workspace, v);
+        double q = 0.0;
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            q += jr[i] * freeAcceleration[i];
+        }
+        rhs_[r] = q - reference[r];
+    }
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        const double* rr = structured_.data() + r * stride;
+        for (std::size_t c = 0; c <= r; ++c)
+        {
+            const double* rc = structured_.data() + c * stride;
+            double sum = 0.0;
+            for (std::size_t i = 0; i < nt; ++i)
+            {
+                sum += rr[i] * rc[nt + i];
+            }
+            // Shared nodes: j_r^T A^-1 j_c = j_r . y_c.
+            if (supports[r].ring == supports[c].ring)
+            {
+                const std::array<std::size_t, 2> nr{supports[r].node0, supports[r].node1};
+                const std::array<std::size_t, 2> nc{supports[c].node0, supports[c].node1};
+                for (std::size_t a = 0; a < 2; ++a)
+                {
+                    for (std::size_t b = 0; b < 2; ++b)
+                    {
+                        if (nr[a] == nc[b])
+                        {
+                            sum += rr[2 * nt + 2 * a] * rc[2 * nt + RingSupportSize + 2 * b] +
+                                   rr[2 * nt + 2 * a + 1] * rc[2 * nt + RingSupportSize + 2 * b + 1];
+                        }
+                    }
+                }
+            }
+            delassus_[r * k + c] = sum;
+            delassus_[c * k + r] = sum;
+        }
+    }
+}
+
+std::expected<SoftConstraintSolution, Fault>
+SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
+                            std::span<const double> reference, std::span<const double> regularisation,
+                            std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds,
+                            std::span<double> force, std::span<double> generalized,
+                            std::span<const SoftRowSupport> supports, DelassusForm form) noexcept
+{
+    const std::size_t n = dof_;
+    const std::size_t k = reference.size();
+    if (model.dofCount() != n || k > capacity_ || jacobian.size() != k * n || regularisation.size() != k ||
+        freeAcceleration.size() != n || force.size() != k || generalized.size() != n ||
+        (!kinds.empty() && kinds.size() != k) || (!supports.empty() && supports.size() != k) ||
+        !workspace.isBuiltFor(model))
+    {
+        return invalidInput("soft contact solve needs consistent sizes within the solver's capacity");
+    }
+    for (const SoftRowSupport& sup : supports)
+    {
+        if (sup.ring >= model.rings().size() || sup.node0 >= model.rings()[sup.ring].nodeCount ||
+            sup.node1 >= model.rings()[sup.ring].nodeCount || sup.node0 == sup.node1)
+        {
+            return invalidInput("soft contact row support names two distinct nodes of a ring of the model");
+        }
+    }
+    if (form == DelassusForm::Condensed && supports.empty() && k > 0)
+    {
+        return invalidInput("the condensed Delassus form needs each row's ring support");
+    }
+    std::ranges::fill(generalized, 0.0);
+    SoftConstraintSolution solution;
+    if (k == 0)
+    {
+        return solution;
+    }
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        if (!(regularisation[r] > 0.0))
+        {
+            return invalidInput("soft contact rows need a positive regularisation");
+        }
+    }
+    if (form == DelassusForm::Condensed)
+    {
+        formCondensed(model, workspace, jacobian, reference, freeAcceleration, supports, k);
+    }
+    else
+    {
+        formUniform(model, workspace, jacobian, reference, freeAcceleration, supports, k);
+    }
+    double scale = 0.0;
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        scale = std::max(scale, std::abs(rhs_[r]));
         delassus_[r * k + r] += regularisation[r];
     }
     // Murty's least-index principal pivoting, from the rows the free motion violates.

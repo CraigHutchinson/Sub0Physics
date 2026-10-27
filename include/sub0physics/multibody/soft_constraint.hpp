@@ -66,6 +66,38 @@ enum class SoftRowKind : std::uint8_t
     Equality    ///< An equality row: always quadratic, force of either sign.
 };
 
+/**
+ * How a soft-constraint solve forms its Delassus matrix `J M^-1 J^T`: the same matrix, two formulations that do
+ * different work and map differently onto hardware. Both are kept behind the solve (docs/PERFORMANCE.md, "Delassus
+ * A/B"; Sub0Math PERFORMANCE "Choosing between alternatives").
+ */
+enum class DelassusForm : std::uint8_t
+{
+    /**
+     * Uniform: `Y = M^-1 J^T` by one full mass-matrix solve per row (through the ring condensation, O(n) each), then
+     * `J Y`. Fixed shapes, any rows; the reference path's bits. With row supports the products `J Y`, `J a0` and
+     * `J^T f` read only each row's support and all rows are solved in one batched sweep (bit for bit the per-row form).
+     */
+    MassSolvePerRow,
+    /**
+     * Structured: from the condensed Schur complement. A row on a ring edge is `j = (j_t, j_w)` (tree coordinates, the
+     * edge's two nodes); with `A_i` a node's mass block, `B_i` its border and `S` the condensed tree matrix, `t = j_t -
+     * J_h^T sum_i B_i^T A_i^-1 j_w,i` and `(J M^-1 J^T)_rc = t_r^T S^-1 t_c + sum_(shared nodes) j_r,i^T A_i^-1 j_c,i`:
+     * one half sweep of the tree factor per row and O(k^2 tree) for the pairs, independent of the ring's node count.
+     * Needs row supports (SoftRowSupport) and a model whose rows touch only the tree and those nodes. Equal to the
+     * uniform form to rounding, not bit for bit.
+     */
+    Condensed
+};
+
+/** The ring coordinates a row touches besides the tree's: one ring edge's two nodes (a ring contact's row). */
+struct SoftRowSupport
+{
+    std::size_t ring = 0;  ///< Index in Model::rings().
+    std::size_t node0 = 0; ///< First node (an edge's `e`).
+    std::size_t node1 = 0; ///< Second node (`e + 1 mod N`).
+};
+
 /** Outcome of a soft-constraint solve. */
 struct SoftConstraintSolution
 {
@@ -115,19 +147,34 @@ public:
      * @param kinds Each row's kind, or empty for all unilateral.
      * @param force Receives f per row (a unilateral row's never negative) [N].
      * @param generalized Receives `J^T f`, dofCount entries.
-     * @return The solution's counts, or InvalidInput (sizes, capacity, a regularisation that is not positive) or
-     *         NonFiniteState.
+     * @param supports Empty, or each row's ring support: then every row's entries outside the tree's coordinates and
+     *        its two nodes must be zero (ringContactJacobian rows are), and the products read only the support.
+     * @param form How the Delassus matrix is formed; Condensed needs supports.
+     * @return The solution's counts, or InvalidInput (sizes, capacity, a regularisation that is not positive, a
+     *         support outside the model, Condensed without supports) or NonFiniteState.
      */
     [[nodiscard]] std::expected<SoftConstraintSolution, Fault>
     solve(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
           std::span<const double> reference, std::span<const double> regularisation,
           std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds, std::span<double> force,
-          std::span<double> generalized) noexcept;
+          std::span<double> generalized, std::span<const SoftRowSupport> supports = {},
+          DelassusForm form = DelassusForm::MassSolvePerRow) noexcept;
 
 private:
+    /** The uniform form: Y = M^-1 J^T by full solves, then J Y (and q = J a0 - aref). */
+    void formUniform(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
+                     std::span<const double> reference, std::span<const double> freeAcceleration,
+                     std::span<const SoftRowSupport> supports, std::size_t k) noexcept;
+    /** The structured form from the condensation (supports required). */
+    void formCondensed(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
+                       std::span<const double> reference, std::span<const double> freeAcceleration,
+                       std::span<const SoftRowSupport> supports, std::size_t k) noexcept;
+
     std::size_t capacity_;
     std::size_t dof_;
-    std::vector<double> solved_;     // capacity x dof: M^-1 J^T, by row
+    std::vector<double> solved_;     // capacity x dof: M^-1 J^T, by row (uniform); per row the tree sweep and node terms (structured)
+    std::vector<std::size_t> index_; // capacity x MaxSupport: each row's support coordinates, ascending
+    std::vector<double> structured_; // capacity x (2 tree + 8): the structured form's per-row values
     std::vector<double> delassus_;   // capacity^2
     std::vector<double> factor_;     // capacity^2
     std::vector<double> rhs_;        // capacity

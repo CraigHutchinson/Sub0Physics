@@ -252,6 +252,93 @@ TEST_CASE("soft-constraint solve is the unique minimiser: brute force over activ
     }
 }
 
+TEST_CASE("soft-constraint Delassus forms: the uniform form with supports is bit for bit; the condensed form agrees to rounding")
+{
+    // Rows on random edges (shared nodes, the wrap edge, an equality row), on a ring whose host sits on a chain of
+    // the rig's tree, against the uniform form without supports (the reference's path).
+    for (const std::size_t nodes : {std::size_t{8}, std::size_t{64}})
+    {
+        const Model model = ringmodels::ringRig({.nodes = nodes}, false, false);
+        Workspace ws(model);
+        const std::size_t n = model.dofCount();
+        std::mt19937_64 rng(11);
+        const auto u = [](std::mt19937_64& g) { return ringmodels::uniformSigned(g); };
+        const State s = ringmodels::randomState(model, 5);
+        prepare(model, s, ws);
+        REQUIRE(factorMassMatrix(model, ws).has_value());
+        SoftConstraintSolver solver(model, 16);
+        double worst = 0.0;
+        for (int trial = 0; trial < 60; ++trial)
+        {
+            const std::size_t k = 1 + static_cast<std::size_t>(trial % 12);
+            std::vector<double> jac(k * n, 0.0);
+            std::vector<double> aref(k);
+            std::vector<double> reg(k);
+            std::vector<SoftRowKind> kinds(k, SoftRowKind::Unilateral);
+            std::vector<SoftRowSupport> supports(k);
+            for (std::size_t r = 0; r < k; ++r)
+            {
+                RingContactPoint p;
+                p.edge = (static_cast<std::size_t>(trial) + 2 * r) % nodes; // neighbours share nodes; trial % nodes == nodes - 1 wraps
+                p.weight0 = 0.5 + 0.4 * u(rng);
+                p.weight1 = 1.0 - p.weight0;
+                const auto a = nodeWorld(model, ws, 0, p.edge);
+                p.point = toWorld(model, a[0] + 0.01 * u(rng), a[1] + 0.01 * u(rng));
+                const double angle = 3.0 * u(rng);
+                p.normal = toWorld(model, std::cos(angle), std::sin(angle));
+                REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jac.data() + r * n, n)).has_value());
+                supports[r] = {.ring = 0, .node0 = p.edge, .node1 = (p.edge + 1) % nodes};
+                aref[r] = 50.0 * u(rng);
+                reg[r] = 0.01 * (1.5 + u(rng));
+                if (trial % 7 == 3 && r == 0)
+                {
+                    kinds[r] = SoftRowKind::Equality;
+                }
+            }
+            std::vector<double> a0(n);
+            for (double& v : a0)
+            {
+                v = 10.0 * u(rng);
+            }
+            std::vector<double> force(k);
+            std::vector<double> generalized(n);
+            std::vector<double> forceSupported(k);
+            std::vector<double> generalizedSupported(n);
+            std::vector<double> forceCondensed(k);
+            std::vector<double> generalizedCondensed(n);
+            REQUIRE(solver.solve(model, ws, jac, aref, reg, a0, kinds, force, generalized).has_value());
+            REQUIRE(solver.solve(model, ws, jac, aref, reg, a0, kinds, forceSupported, generalizedSupported, supports)
+                        .has_value());
+            REQUIRE(solver
+                        .solve(model, ws, jac, aref, reg, a0, kinds, forceCondensed, generalizedCondensed, supports,
+                               DelassusForm::Condensed)
+                        .has_value());
+            CHECK(forceSupported == force);
+            CHECK(generalizedSupported == generalized);
+            const double scale = std::max(1.0, maxAbs(force));
+            worst = std::max(worst, maxDifference(forceCondensed, force) / scale);
+            CHECK(maxDifference(forceCondensed, force) <= 1e-11 * scale);
+            CHECK(maxDifference(generalizedCondensed, generalized) <= 1e-11 * std::max(1.0, maxAbs(generalized)));
+        }
+        MESSAGE(nodes << " nodes: condensed against uniform, worst force difference " << worst << " relative");
+    }
+    // Contract checks.
+    const Model model = ringmodels::ringRig({.nodes = 8}, false, false);
+    Workspace ws(model);
+    SoftConstraintSolver solver(model, 4);
+    const std::size_t n = model.dofCount();
+    std::vector<double> jac(n, 0.0);
+    std::vector<double> one{1.0};
+    std::vector<double> a0(n, 0.0);
+    std::vector<double> f(1);
+    std::vector<double> g(n);
+    const std::array<SoftRowSupport, 1> same{SoftRowSupport{.ring = 0, .node0 = 2, .node1 = 2}};
+    const std::array<SoftRowSupport, 1> outside{SoftRowSupport{.ring = 0, .node0 = 2, .node1 = 8}};
+    CHECK_FALSE(solver.solve(model, ws, jac, one, one, a0, {}, f, g, {}, DelassusForm::Condensed).has_value());
+    CHECK_FALSE(solver.solve(model, ws, jac, one, one, a0, {}, f, g, same).has_value());
+    CHECK_FALSE(solver.solve(model, ws, jac, one, one, a0, {}, f, g, outside).has_value());
+}
+
 TEST_CASE("contact row is the attached point's rate along the normal")
 {
     const Model model = ringmodels::ringRig({.nodes = 16}, false, false);

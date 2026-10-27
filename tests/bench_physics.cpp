@@ -18,6 +18,7 @@ using namespace sub0physics;
 
 void benchMultibody(sub0bench::BenchRunner& runner); // bench_multibody.cpp
 void benchRing(sub0bench::BenchRunner& runner);      // bench_ring.cpp
+void benchDelassus(sub0bench::BenchRunner& runner);  // bench_delassus.cpp
 void benchTerrain(sub0bench::BenchRunner& runner);   // bench_terrain.cpp
 void benchContact(sub0bench::BenchRunner& runner);   // bench_contact.cpp
 
@@ -691,5 +692,6 @@ int main(int argc, char** argv)
     benchContact(runner);
     benchMultibody(runner);
     benchRing(runner);
+    benchDelassus(runner);
     return runner.finish();
 }

@@ -11,6 +11,7 @@
 #include <sub0math/linear/spatial_motion.hpp>
 
 #include "multibody_joint.hpp"
+#include "multibody_mass.hpp"
 #include "multibody_planar.hpp"
 #include "multibody_ring.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
@@ -864,6 +865,26 @@ std::expected<void, Fault> completeLinearlyImplicitStep(const Model& model, cons
 
 namespace detail
 {
+
+void solveMassTree(const Model& model, const Workspace& ws, double* x) noexcept
+{
+    solveTree(model, ws.massFactor.data(), x);
+}
+
+void sweepMassTree(const Model& model, const Workspace& ws, double* x) noexcept
+{
+    // The first loop of solveTree: L^T y = b.
+    const auto parents = model.parents();
+    const std::size_t n = parents.size();
+    const double* h = ws.massFactor.data();
+    for (std::size_t i = n; i-- > 0;)
+    {
+        for (std::size_t j = parents[i]; j != NoParent; j = parents[j])
+        {
+            x[j] -= h[i * n + j] * x[i];
+        }
+    }
+}
 
 std::expected<void, Fault> checkForcing(const Model& model, const Forcing& forcing) noexcept
 {
