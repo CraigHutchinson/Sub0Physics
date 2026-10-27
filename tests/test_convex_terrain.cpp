@@ -491,6 +491,91 @@ TEST_CASE("Clearance bound: conservative under translation, rotation and deforma
     CHECK(violatedWithoutRotation > 0U);
 }
 
+TEST_CASE("Swept clearance bound: two-sided, conservative along the step's interpolant, and tighter than one-sided")
+{
+    // Random steps along a straight interpolant (hub centre and angle linear, node displacements linear): the true gap
+    // at 1001 instants never falls below the two-sided bound, per edge and for the ring; and it certifies steps that
+    // the one-sided bound from the start cannot.
+    const std::array fixtures{crown(), squareRock(), facetedRock(), squareObstacle()};
+    std::mt19937_64 rng(78);
+    Uniform u(0.0, 1.0);
+    std::size_t certified = 0;
+    std::size_t certifiedOneSided = 0;
+    for (const auto& authored : fixtures)
+    {
+        const ConvexTerrain terrain(profileOf(authored));
+        for (int k = 0; k < 40; ++k)
+        {
+            constexpr std::size_t N = 32;
+            const double r = 0.33;
+            const Point2d c0{0.3 + 0.8 * u(rng), 0.345 + 0.03 * u(rng)};
+            const Vec2d d{0.03 * (u(rng) - 0.5), -0.02 * u(rng)};
+            const double spin = 0.2 * (u(rng) - 0.5);
+            const double theta0 = u(rng);
+            std::array<Vec2d, N> q0{};
+            std::array<Vec2d, N> dq{};
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                const double angle = 2.0 * std::numbers::pi * static_cast<double>(i) / N;
+                q0[i] = {r * std::cos(angle), r * std::sin(angle)};
+                dq[i] = {0.002 * (u(rng) - 0.5), 0.002 * (u(rng) - 0.5)};
+            }
+            const auto nodesAt = [&](double t) {
+                std::vector<Node> nodes(N);
+                const Point2d c{c0.x + d.x * t, c0.y + d.y * t};
+                const double th = theta0 + spin * t;
+                for (std::size_t i = 0; i < N; ++i)
+                {
+                    const Vec2d q = q0[i] + dq[i] * t;
+                    nodes[i] = {metres(c.x + std::cos(th) * q.x - std::sin(th) * q.y),
+                                metres(c.y + std::sin(th) * q.x + std::cos(th) * q.y)};
+                }
+                return nodes;
+            };
+            double nodeTravel = 0.0;
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                nodeTravel = std::max(nodeTravel, std::sqrt(lengthSquared(dq[i])));
+            }
+            const std::vector<Node> start = nodesAt(0.0);
+            const std::vector<Node> end = nodesAt(1.0);
+            const SweptStepMotion motion{{metres(c0.x), metres(c0.y)}, {metres(c0.x + d.x), metres(c0.y + d.y)},
+                                         std::abs(spin), metres(nodeTravel)};
+            std::vector<double> edges(N);
+            const ClearanceBound swept = terrain.certifySweptRingClearance(start, end, metres(0.008), motion, metres(0.5), edges);
+            const StepMotionBound oneSided{motion.hubStart, metres(std::hypot(d.x, d.y)), std::abs(spin), metres(nodeTravel)};
+            const ClearanceBound bound = terrain.certifyRingClearance(start, metres(0.008), oneSided, metres(0.5));
+            REQUIRE(swept.status == TerrainQueryStatus::Available);
+            double trueMinimum = std::numeric_limits<double>::infinity();
+            std::vector<double> edgeMinimum(N, std::numeric_limits<double>::infinity());
+            std::array<TerrainContact, 256> found{};
+            for (int s = 0; s <= 1000; ++s)
+            {
+                const auto set = terrain.ringContacts(nodesAt(s / 1000.0), metres(0.008), metres(0.5), found);
+                trueMinimum = std::min(trueMinimum, set.minimumGap.si());
+                for (std::size_t c = 0; c < set.count; ++c)
+                {
+                    edgeMinimum[found[c].edge] = std::min(edgeMinimum[found[c].edge], found[c].gap.si());
+                }
+            }
+            CHECK(swept.clearance.si() <= trueMinimum + 1e-12);
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                CHECK(edges[i] <= edgeMinimum[i] + 1e-12);
+            }
+            CHECK(swept.clearance.si() >= bound.clearance.si() - 1e-15);
+            certified += swept.certified ? 1U : 0U;
+            certifiedOneSided += bound.certified ? 1U : 0U;
+            if (swept.certified)
+            {
+                CHECK(trueMinimum > 0.0);
+            }
+        }
+    }
+    MESSAGE("certified " << certified << " two-sided, " << certifiedOneSided << " one-sided of 160 steps");
+    CHECK(certified > certifiedOneSided);
+}
+
 TEST_CASE("Convex terrain: results are deterministic across compilers (digest of a fixed batch)")
 {
     const ConvexTerrain terrain(profileOf(facetedRock()));

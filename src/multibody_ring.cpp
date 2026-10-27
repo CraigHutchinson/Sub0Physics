@@ -142,9 +142,11 @@ std::expected<DeformableRingDescription, Fault> uniformRing(const UniformRingSpe
     const double k = spec.foundationStiffness.si();
     const double ea = spec.extensionStiffness.si();
     const double c = spec.edgeViscosity.si();
+    const double cf = spec.foundationViscosity;
     const bool finite = std::isfinite(r) && std::isfinite(skin) && std::isfinite(mass) && std::isfinite(k) &&
-                        std::isfinite(ea) && std::isfinite(c);
-    if (!finite || !(r > 0.0) || !(skin >= 0.0) || !(mass > 0.0) || !(k >= 0.0) || !(ea >= 0.0) || !(c >= 0.0))
+                        std::isfinite(ea) && std::isfinite(c) && std::isfinite(cf);
+    if (!finite || !(r > 0.0) || !(skin >= 0.0) || !(mass > 0.0) || !(k >= 0.0) || !(ea >= 0.0) || !(c >= 0.0) ||
+        !(cf >= 0.0))
     {
         return invalidInput("uniform ring needs finite values: positive radius and mass, the rest not negative");
     }
@@ -154,7 +156,7 @@ std::expected<DeformableRingDescription, Fault> uniformRing(const UniformRingSpe
     const double nodeMass = mass / static_cast<double>(n);
     const double nodeInertia = nodeMass * (skin * skin) / 2.0;
     const auto foundation = LinearSpringDamper<Length>::create({.stiffness = sub0math::f64::Stiffness::fromSi(k * ds),
-                                                                .damping = sub0math::f64::Damping::fromSi(0.0)});
+                                                                .damping = sub0math::f64::Damping::fromSi(cf * ds)});
     const auto edge = LinearSpringDamper<Length>::create({.stiffness = sub0math::f64::Stiffness::fromSi(ea / chordLength),
                                                           .damping = sub0math::f64::Damping::fromSi(c / chordLength)});
     if (!foundation || !edge)

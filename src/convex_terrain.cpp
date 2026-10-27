@@ -225,7 +225,12 @@ SUB0MATH_FORCE_INLINE double ConvexTerrain::edgeClearance(double ax, double ay, 
                                             (bx - hx) * (bx - hx) + (by - hy) * (by - hy)));
     reach = motion.hubTravel.si() + motion.nodeTravel.si() + lever * std::min(motion.hubRotation, 2.0);
     // Pieces beyond the pad have a gap above reach + horizon, so they cannot lower the capped bound.
-    const double cap = reach + horizon;
+    return edgeGap(ax, ay, bx, by, radius, reach + horizon) - reach;
+}
+
+SUB0MATH_FORCE_INLINE double ConvexTerrain::edgeGap(double ax, double ay, double bx, double by, double radius,
+                                                   double cap) const noexcept
+{
     const double pad = radius + cap;
     const double low = std::min(ay, by) - pad;
     double minimum = cap;
@@ -244,7 +249,7 @@ SUB0MATH_FORCE_INLINE double ConvexTerrain::edgeClearance(double ax, double ay, 
             minimum = std::min(minimum, sub0math::contact(e, pieces_[i]).gap);
         }
     }
-    return minimum - reach;
+    return minimum;
 }
 
 ClearanceBound ConvexTerrain::certifyClearance(const CasingEdge& edge, const StepMotionBound& motion,
@@ -283,6 +288,71 @@ ClearanceBound ConvexTerrain::certifyRingClearance(std::span<const sub0math::Poi
         double reach = 0.0;
         clearance = std::min(clearance, edgeClearance(nodes[i].x.si(), nodes[i].y.si(), nodes[next].x.si(),
                                                       nodes[next].y.si(), skin.si(), motion, horizon.si(), reach));
+        largestReach = std::max(largestReach, reach);
+    }
+    return {TerrainQueryStatus::Available, Length::fromSi(clearance), Length::fromSi(largestReach), clearance > 0.0};
+}
+
+ClearanceBound ConvexTerrain::certifySweptRingClearance(std::span<const sub0math::Point2<Length>> start,
+                                                        std::span<const sub0math::Point2<Length>> end, Length skin,
+                                                        const SweptStepMotion& motion, Length horizon,
+                                                        std::span<double> edgeBounds) const noexcept
+{
+    std::uint64_t nonFinite = 0;
+    for (const auto& node : start)
+    {
+        nonFinite |= (~std::bit_cast<std::uint64_t>(node.x.si()) & ExponentBits) == 0 ? 1U : 0U;
+        nonFinite |= (~std::bit_cast<std::uint64_t>(node.y.si()) & ExponentBits) == 0 ? 1U : 0U;
+    }
+    for (const auto& node : end)
+    {
+        nonFinite |= (~std::bit_cast<std::uint64_t>(node.x.si()) & ExponentBits) == 0 ? 1U : 0U;
+        nonFinite |= (~std::bit_cast<std::uint64_t>(node.y.si()) & ExponentBits) == 0 ? 1U : 0U;
+    }
+    const double cx0 = motion.hubStart.x.si();
+    const double cy0 = motion.hubStart.y.si();
+    const double cx1 = motion.hubEnd.x.si();
+    const double cy1 = motion.hubEnd.y.si();
+    const double travel = std::sqrt((cx1 - cx0) * (cx1 - cx0) + (cy1 - cy0) * (cy1 - cy0));
+    const double rotation = motion.hubRotation;
+    const double nodeTravel = motion.nodeTravel.si();
+    if (start.size() < 2 || end.size() != start.size() || nonFinite != 0 || !nonNegative(skin.si()) ||
+        !std::isfinite(travel) || !nonNegative(rotation) || !nonNegative(nodeTravel) || !nonNegative(horizon.si()) ||
+        (!edgeBounds.empty() && edgeBounds.size() != start.size()))
+    {
+        return {TerrainQueryStatus::InvalidQuery, Length::fromSi(0.0), Length::fromSi(0.0), false};
+    }
+    const double h = horizon.si();
+    double clearance = h;
+    double largestReach = 0.0;
+    const std::size_t n = start.size();
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const std::size_t next = i + 1 == n ? 0 : i + 1;
+        const double ax0 = start[i].x.si();
+        const double ay0 = start[i].y.si();
+        const double bx0 = start[next].x.si();
+        const double by0 = start[next].y.si();
+        const double ax1 = end[i].x.si();
+        const double ay1 = end[i].y.si();
+        const double bx1 = end[next].x.si();
+        const double by1 = end[next].y.si();
+        // The lever from each end's own hub centre (a point's hub-frame position at that end).
+        const double start2 = std::max((ax0 - cx0) * (ax0 - cx0) + (ay0 - cy0) * (ay0 - cy0),
+                                       (bx0 - cx0) * (bx0 - cx0) + (by0 - cy0) * (by0 - cy0));
+        const double end2 = std::max((ax1 - cx1) * (ax1 - cx1) + (ay1 - cy1) * (ay1 - cy1),
+                                     (bx1 - cx1) * (bx1 - cx1) + (by1 - cy1) * (by1 - cy1));
+        const double lever = std::sqrt(std::max(start2, end2));
+        const double reach = travel + nodeTravel + lever * rotation;
+        const double cap = reach + h;
+        const double g0 = edgeGap(ax0, ay0, bx0, by0, skin.si(), cap);
+        const double g1 = edgeGap(ax1, ay1, bx1, by1, skin.si(), cap);
+        const double bound = std::min(h, 0.5 * (g0 + g1 - reach));
+        if (!edgeBounds.empty())
+        {
+            edgeBounds[i] = bound;
+        }
+        clearance = std::min(clearance, bound);
         largestReach = std::max(largestReach, reach);
     }
     return {TerrainQueryStatus::Available, Length::fromSi(clearance), Length::fromSi(largestReach), clearance > 0.0};

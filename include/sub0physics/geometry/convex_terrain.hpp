@@ -75,6 +75,20 @@ struct StepMotionBound
 };
 
 /**
+ * The motion of a casing over one step between two known configurations, along the step's straight interpolant in
+ * the generalized coordinates (the hub's centre and angle and the nodes' hub-frame displacements each change linearly):
+ * every point of the casing then moves at most `tau R` from where it starts and `(1 - tau) R` from where it ends, with
+ * `R = |hubEnd - hubStart| + nodeTravel + lever |hubRotation|` (the rotation term uncapped, so it stays proportional).
+ */
+struct SweptStepMotion
+{
+    sub0math::Point2<sub0math::f64::Length> hubStart; ///< Hub centre at the start, m.
+    sub0math::Point2<sub0math::f64::Length> hubEnd;   ///< Hub centre at the end, m.
+    double hubRotation;                               ///< |theta(1) - theta(0)|, rad.
+    sub0math::f64::Length nodeTravel;                 ///< Largest |w_i(1) - w_i(0)| of a node in the hub frame, m.
+};
+
+/**
  * A certified lower bound on a casing's gap to the terrain over a whole step.
  *
  * `clearance` is at most `horizon` (pieces further away are not measured). When positive, no point of the moving casing
@@ -231,7 +245,35 @@ public:
                                                       sub0math::f64::Length skin, const StepMotionBound& motion,
                                                       sub0math::f64::Length horizon) const noexcept;
 
+    /**
+     * Bounds a closed ring's gap from below over a step whose start and end are both known: the swept certificate of
+     * the improved contact model (docs/WHEEL.md section 3.4, "M2d status").
+     *
+     * For each edge the gap is 1-Lipschitz in the edge's movement, and along the step's interpolant (SweptStepMotion)
+     * a point is within `tau R` of its start and `(1 - tau) R` of its end, so at every instant the gap is at least
+     * `max(g0 - tau R, g1 - (1 - tau) R) >= (g0 + g1 - R) / 2`, with g0 and g1 the edge's gaps at the two ends. This
+     * two-sided bound certifies far more steps than the one-sided `g0 - R` (certifyRingClearance), which knows only
+     * the start: a casing rolling past a corner at millimetres of clearance is certified, and a step is only refused
+     * where the casing could really have touched in between (a graze, or tunnelling through a thin feature).
+     * No trigonometry is evaluated.
+     *
+     * @param start Node positions at the start, in ring order; at least two.
+     * @param end Node positions at the end, the same count.
+     * @param skin Edge radius, not negative.
+     * @param motion The step's motion.
+     * @param horizon Gaps beyond `R + horizon` are not measured, so each bound is capped at `horizon`.
+     * @param edgeBounds Empty, or one entry per edge receiving that edge's bound (capped at `horizon`), m.
+     * @return The smallest bound over the edges, or InvalidQuery.
+     */
+    [[nodiscard]] ClearanceBound certifySweptRingClearance(std::span<const sub0math::Point2<sub0math::f64::Length>> start,
+                                                           std::span<const sub0math::Point2<sub0math::f64::Length>> end,
+                                                           sub0math::f64::Length skin, const SweptStepMotion& motion,
+                                                           sub0math::f64::Length horizon,
+                                                           std::span<double> edgeBounds = {}) const noexcept;
+
 private:
+    /** One edge's smallest gap to the pieces, measured exactly when below `cap` and reported as `cap` otherwise. */
+    [[nodiscard]] double edgeGap(double ax, double ay, double bx, double by, double radius, double cap) const noexcept;
     /** One edge's clearance bound (capped at `horizon`), its reach written to `reach`; no input checks. */
     [[nodiscard]] double edgeClearance(double ax, double ay, double bx, double by, double radius,
                                        const StepMotionBound& motion, double horizon, double& reach) const noexcept;

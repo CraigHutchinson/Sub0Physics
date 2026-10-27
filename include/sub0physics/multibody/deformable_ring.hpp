@@ -114,6 +114,14 @@ struct UniformRingSpec
     sub0math::f64::Pressure foundationStiffness;   ///< k, per unit centreline length [N/m^2]; not negative.
     sub0math::f64::Force extensionStiffness;       ///< EA [N]; not negative.
     sub0math::f64::Impulse edgeViscosity;          ///< c [N s]; not negative.
+    /**
+     * Hub-relative foundation viscosity per unit centreline length [N s/m^2]: a dashpot `c_f ds` beside each slide's
+     * spring, loss `sum c_f ds |w'|^2`. Zero (the default) is the reference engine's ring, which has foundation springs
+     * only, so its global casing modes (the ring's uniform translation and rotation against the hub, which leave the
+     * edge lengths unchanged) are undamped. A non-zero value is an improved-model description value, never a numerical
+     * fix (docs/WHEEL.md, "M2d status").
+     */
+    double foundationViscosity = 0.0;
     std::array<sub0math::Vec3d, PlanarRingComponents> displacementAxes{
         sub0math::Vec3d{1.0, 0.0, 0.0}, sub0math::Vec3d{0.0, 0.0, 1.0}}; ///< As DeformableRingDescription.
 };
