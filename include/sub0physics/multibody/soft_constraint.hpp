@@ -175,6 +175,8 @@ private:
     std::vector<double> solved_;     // capacity x dof: M^-1 J^T, by row (uniform); per row the tree sweep and node terms (structured)
     std::vector<std::size_t> index_; // capacity x MaxSupport: each row's support coordinates, ascending
     std::vector<double> structured_; // capacity x (2 tree + 8): the structured form's per-row values
+    std::vector<double> sweep_;      // 6 x capacity: the batched solve's host terms
+    std::vector<std::uint64_t> key_; // 2 x capacity: the structured form's (ring, node) keys per row
     std::vector<double> delassus_;   // capacity^2
     std::vector<double> factor_;     // capacity^2
     std::vector<double> rhs_;        // capacity

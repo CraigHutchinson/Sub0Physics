@@ -16,4 +16,12 @@ void solveMassTree(const Model& model, const Workspace& ws, double* x) noexcept;
 // factor's diagonal (Workspace::massFactor[i * n + i]).
 void sweepMassTree(const Model& model, const Workspace& ws, double* x) noexcept;
 
+// Solves M X = B for `columns` right-hand sides at once (X row-major dofCount x columns: coordinate i's values are
+// contiguous), with the factor of factorMassMatrix: for each column the same operations in the same order as
+// solveMassMatrix, so each column is bit for bit a single solve; the work is laid out so that the columns can share
+// SIMD lanes. `scratch` holds 6 * columns values. `skipZeroRingRows`: the ring elimination skips nodes whose rows are
+// zero in every column (their elimination adds exact zeros: still bit for bit).
+void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, std::size_t columns, double* scratch,
+                            bool skipZeroRingRows) noexcept;
+
 } // namespace sub0physics::multibody::detail

@@ -871,6 +871,131 @@ void solveMassTree(const Model& model, const Workspace& ws, double* x) noexcept
     solveTree(model, ws.massFactor.data(), x);
 }
 
+void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, std::size_t columns, double* scratch,
+                            bool skipZeroRingRows) noexcept
+{
+    const std::size_t m = columns;
+    const auto coordinates = model.coordinates();
+    const auto rings = model.rings();
+    double* g = scratch; // 3 m: the condensed right-hand side's host terms per column
+    // ringForward, per ring (the mass system's ring block is block-diagonal: inverse pivots alone).
+    for (std::size_t r = 0; r < rings.size(); ++r)
+    {
+        const DeformableRing& ring = rings[r];
+        const RingWorkspace& rw = ws.rings[r];
+        const RingCondensation& cond = rw.mass;
+        std::fill_n(g, 3 * m, 0.0);
+        for (std::size_t i = 0; i < ring.nodeCount; ++i)
+        {
+            double* x0 = x + (ring.firstCoordinate + 2 * i) * m;
+            double* x1 = x0 + m;
+            if (skipZeroRingRows)
+            {
+                bool zero = true;
+                for (std::size_t c = 0; c < m; ++c)
+                {
+                    zero = zero && x0[c] == 0.0 && x1[c] == 0.0;
+                }
+                if (zero)
+                {
+                    continue; // y = +0 and the host terms gain exact zeros
+                }
+            }
+            const Block<PlanarRingComponents>& a = cond.inversePivot[i];
+            const BlockColumns<PlanarRingComponents, 3>& b = cond.border[i];
+            for (std::size_t c = 0; c < m; ++c)
+            {
+                // applyBlock's arithmetic, in its order.
+                double y0 = 0.0;
+                y0 += a[0] * x0[c];
+                y0 += a[1] * x1[c];
+                double y1 = 0.0;
+                y1 += a[2] * x0[c];
+                y1 += a[3] * x1[c];
+                x0[c] = y0;
+                x1[c] = y1;
+                g[c] += b[0] * y0 + b[3] * y1;
+                g[m + c] += b[1] * y0 + b[4] * y1;
+                g[2 * m + c] += b[2] * y0 + b[5] * y1;
+            }
+        }
+        for (std::size_t k = 0; k < ring.hostChain.size(); ++k)
+        {
+            const PlanarMotion& j = rw.hostJacobian[k];
+            double* t = x + coordinates[ring.hostChain[k]] * m;
+            for (std::size_t c = 0; c < m; ++c)
+            {
+                t[c] -= j.w * g[c] + j.x * g[m + c] + j.y * g[2 * m + c];
+            }
+        }
+    }
+    // solveTree, column-wise.
+    const auto parents = model.parents();
+    const std::size_t n = parents.size();
+    const double* h = ws.massFactor.data();
+    for (std::size_t i = n; i-- > 0;)
+    {
+        for (std::size_t j = parents[i]; j != NoParent; j = parents[j])
+        {
+            const double l = h[i * n + j];
+            for (std::size_t c = 0; c < m; ++c)
+            {
+                x[j * m + c] -= l * x[i * m + c];
+            }
+        }
+    }
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const double d = h[i * n + i];
+        for (std::size_t c = 0; c < m; ++c)
+        {
+            x[i * m + c] /= d;
+        }
+    }
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        for (std::size_t j = parents[i]; j != NoParent; j = parents[j])
+        {
+            const double l = h[i * n + j];
+            for (std::size_t c = 0; c < m; ++c)
+            {
+                x[i * m + c] -= l * x[j * m + c];
+            }
+        }
+    }
+    // ringBackward.
+    double* v = scratch + 3 * m;
+    for (std::size_t r = 0; r < rings.size(); ++r)
+    {
+        const DeformableRing& ring = rings[r];
+        const RingWorkspace& rw = ws.rings[r];
+        const RingCondensation& cond = rw.mass;
+        std::fill_n(v, 3 * m, 0.0);
+        for (std::size_t k = 0; k < ring.hostChain.size(); ++k)
+        {
+            const PlanarMotion& j = rw.hostJacobian[k];
+            const double* rate = x + coordinates[ring.hostChain[k]] * m;
+            for (std::size_t c = 0; c < m; ++c)
+            {
+                v[c] += j.w * rate[c];
+                v[m + c] += j.x * rate[c];
+                v[2 * m + c] += j.y * rate[c];
+            }
+        }
+        for (std::size_t i = 0; i < ring.nodeCount; ++i)
+        {
+            const BlockColumns<PlanarRingComponents, 3>& z = cond.coupling[i];
+            double* x0 = x + (ring.firstCoordinate + 2 * i) * m;
+            double* x1 = x0 + m;
+            for (std::size_t c = 0; c < m; ++c)
+            {
+                x0[c] -= z[0] * v[c] + z[1] * v[m + c] + z[2] * v[2 * m + c];
+                x1[c] -= z[3] * v[c] + z[4] * v[m + c] + z[5] * v[2 * m + c];
+            }
+        }
+    }
+}
+
 void sweepMassTree(const Model& model, const Workspace& ws, double* x) noexcept
 {
     // The first loop of solveTree: L^T y = b.

@@ -87,12 +87,17 @@ namespace
 // A row's support: the tree's coordinates and the edge's four node coordinates.
 constexpr std::size_t RingSupportSize = 4;
 
+// A/B uniform pass 3: the batched solve's ring elimination skips nodes no row touches (bit for bit).
+constexpr bool SkipZeroRingRows = true;
+
 } // namespace
 
 SoftConstraintSolver::SoftConstraintSolver(const Model& model, std::size_t capacity)
     : capacity_(capacity), dof_(model.dofCount()), solved_(capacity * model.dofCount(), 0.0),
       index_(capacity * (model.treeDofCount() + RingSupportSize), 0),
-      structured_(capacity * (2 * model.treeDofCount() + 2 * RingSupportSize), 0.0), delassus_(capacity * capacity, 0.0),
+      structured_(capacity * (2 * model.treeDofCount() + 2 * RingSupportSize), 0.0), sweep_(6 * capacity, 0.0),
+      key_(2 * capacity, 0),
+      delassus_(capacity * capacity, 0.0),
       factor_(capacity * capacity, 0.0), rhs_(capacity, 0.0), slack_(capacity, 0.0), work_(capacity, 0.0),
       subset_(capacity, 0), active_(capacity, 0)
 {
@@ -100,32 +105,71 @@ SoftConstraintSolver::SoftConstraintSolver(const Model& model, std::size_t capac
 
 void SoftConstraintSolver::formUniform(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
                                        std::span<const double> reference, std::span<const double> freeAcceleration,
-                                       std::span<const SoftRowSupport> /*supports*/, std::size_t k) noexcept
+                                       std::span<const SoftRowSupport> supports, std::size_t k) noexcept
 {
     const std::size_t n = dof_;
     // Y = M^-1 J^T, A = J Y + R, q = J a0 - aref.
+    if (supports.empty())
+    {
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            const std::span<double> y(solved_.data() + r * n, n);
+            std::copy_n(jacobian.data() + r * n, n, y.begin());
+            (void)solveMassMatrix(model, workspace, y); // sizes checked by the caller
+        }
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            double q = 0.0;
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                q += jacobian[r * n + i] * freeAcceleration[i];
+            }
+            rhs_[r] = q - reference[r];
+            for (std::size_t c = 0; c <= r; ++c)
+            {
+                double sum = 0.0;
+                const double* jr = jacobian.data() + r * n;
+                const double* yc = solved_.data() + c * n;
+                for (std::size_t i = 0; i < n; ++i)
+                {
+                    sum += jr[i] * yc[i];
+                }
+                delassus_[r * k + c] = sum;
+                delassus_[c * k + r] = sum;
+            }
+        }
+        return;
+    }
+    // PERF (A/B uniform pass 2): all rows solved in one sweep, Y laid out coordinate-major (Y[i k + r]) so the rows
+    // share SIMD lanes; each column bit for bit its own solve.
     for (std::size_t r = 0; r < k; ++r)
     {
-        const std::span<double> y(solved_.data() + r * n, n);
-        std::copy_n(jacobian.data() + r * n, n, y.begin());
-        (void)solveMassMatrix(model, workspace, y); // sizes checked by the caller
-        double q = 0.0;
+        const double* jr = jacobian.data() + r * n;
         for (std::size_t i = 0; i < n; ++i)
         {
-            q += jacobian[r * n + i] * freeAcceleration[i];
+            solved_[i * k + r] = jr[i];
         }
-        rhs_[r] = q - reference[r];
     }
+    detail::solveMassMatrixColumns(model, workspace, solved_.data(), k, sweep_.data(), SkipZeroRingRows);
+    // PERF (A/B uniform pass 1): with supports, the products read only each row's support, in ascending coordinate
+    // order: the terms skipped are exact zeros, so the sums are bit for bit those over every coordinate.
+    const std::size_t width = model.treeDofCount() + RingSupportSize;
     for (std::size_t r = 0; r < k; ++r)
     {
+        const double* jr = jacobian.data() + r * n;
+        const std::size_t* index = index_.data() + r * width;
+        double q = 0.0;
+        for (std::size_t s = 0; s < width; ++s)
+        {
+            q += jr[index[s]] * freeAcceleration[index[s]];
+        }
+        rhs_[r] = q - reference[r];
         for (std::size_t c = 0; c <= r; ++c)
         {
             double sum = 0.0;
-            const double* jr = jacobian.data() + r * n;
-            const double* yc = solved_.data() + c * n;
-            for (std::size_t i = 0; i < n; ++i)
+            for (std::size_t s = 0; s < width; ++s)
             {
-                sum += jr[i] * yc[i];
+                sum += jr[index[s]] * solved_[index[s] * k + c];
             }
             delassus_[r * k + c] = sum;
             delassus_[c * k + r] = sum;
@@ -138,18 +182,17 @@ void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& wo
                                          std::span<const double> freeAcceleration,
                                          std::span<const SoftRowSupport> supports, std::size_t k) noexcept
 {
-    const std::size_t n = dof_;
     const std::size_t nt = model.treeDofCount();
     const std::size_t stride = 2 * nt + 2 * RingSupportSize;
     const auto coordinates = model.coordinates();
-    // Per row: t (tree), v = S^-1 t, the node values j_w and y = A^-1 j_w at node0 then node1.
+    // Per row: w = L^-T t (tree), D^-1 w, the node values j_w and y = A^-1 j_w at node0 then node1.
     for (std::size_t r = 0; r < k; ++r)
     {
         const SoftRowSupport& sup = supports[r];
         const DeformableRing& ring = model.rings()[sup.ring];
         const RingWorkspace& rw = workspace.rings[sup.ring];
         const RingCondensation& cond = rw.mass; // the mass matrix's ring block is always block-diagonal
-        const double* jr = jacobian.data() + r * n;
+        const double* jr = jacobian.data() + r * dof_;
         double* row = structured_.data() + r * stride;
         double* t = row;
         double* v = row + nt;
@@ -180,14 +223,27 @@ void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& wo
             const PlanarMotion& jh = rw.hostJacobian[c];
             t[coordinates[ring.hostChain[c]]] -= jh.w * g0 + jh.x * g1 + jh.y * g2;
         }
-        std::copy_n(t, nt, v);
-        detail::solveMassTree(model, workspace, v);
+        // PERF (A/B structured pass 1): half the tree solve. With S = L^T D L, t_r^T S^-1 t_c = w_r^T D^-1 w_c for
+        // w = L^-T t (one sweep), so each row keeps w and D^-1 w and a pair costs a dot of tree length.
+        detail::sweepMassTree(model, workspace, t);
+        for (std::size_t i = 0; i < nt; ++i)
+        {
+            v[i] = t[i] / workspace.massFactor[i * nt + i];
+        }
+        // PERF (A/B structured pass 2): J a0 straight from the tree's coordinates and the two nodes, no index lists.
         double q = 0.0;
-        for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t i = 0; i < nt; ++i)
         {
             q += jr[i] * freeAcceleration[i];
         }
+        for (std::size_t a = 0; a < 2; ++a)
+        {
+            const std::size_t at = ring.firstCoordinate + PlanarRingComponents * nodes[a];
+            q += jr[at] * freeAcceleration[at] + jr[at + 1] * freeAcceleration[at + 1];
+        }
         rhs_[r] = q - reference[r];
+        key_[2 * r] = (sup.ring << 32U) | sup.node0;
+        key_[2 * r + 1] = (sup.ring << 32U) | sup.node1;
     }
     for (std::size_t r = 0; r < k; ++r)
     {
@@ -200,20 +256,16 @@ void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& wo
             {
                 sum += rr[i] * rc[nt + i];
             }
-            // Shared nodes: j_r^T A^-1 j_c = j_r . y_c.
-            if (supports[r].ring == supports[c].ring)
+            // Shared nodes: j_r^T A^-1 j_c = j_r . y_c. PERF (A/B structured pass 3): one integer key per node
+            // (ring, node), compared directly.
+            for (std::size_t a = 0; a < 2; ++a)
             {
-                const std::array<std::size_t, 2> nr{supports[r].node0, supports[r].node1};
-                const std::array<std::size_t, 2> nc{supports[c].node0, supports[c].node1};
-                for (std::size_t a = 0; a < 2; ++a)
+                for (std::size_t b = 0; b < 2; ++b)
                 {
-                    for (std::size_t b = 0; b < 2; ++b)
+                    if (key_[2 * r + a] == key_[2 * c + b])
                     {
-                        if (nr[a] == nc[b])
-                        {
-                            sum += rr[2 * nt + 2 * a] * rc[2 * nt + RingSupportSize + 2 * b] +
-                                   rr[2 * nt + 2 * a + 1] * rc[2 * nt + RingSupportSize + 2 * b + 1];
-                        }
+                        sum += rr[2 * nt + 2 * a] * rc[2 * nt + RingSupportSize + 2 * b] +
+                               rr[2 * nt + 2 * a + 1] * rc[2 * nt + RingSupportSize + 2 * b + 1];
                     }
                 }
             }
@@ -262,6 +314,27 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         if (!(regularisation[r] > 0.0))
         {
             return invalidInput("soft contact rows need a positive regularisation");
+        }
+    }
+    if (!supports.empty() && form == DelassusForm::MassSolvePerRow)
+    {
+        // Each row's support in ascending coordinate order: the tree's coordinates, then the edge's two nodes.
+        const std::size_t nt = model.treeDofCount();
+        const std::size_t width = nt + RingSupportSize;
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            std::size_t* index = index_.data() + r * width;
+            for (std::size_t i = 0; i < nt; ++i)
+            {
+                index[i] = i;
+            }
+            const DeformableRing& ring = model.rings()[supports[r].ring];
+            const std::size_t lo = std::min(supports[r].node0, supports[r].node1);
+            const std::size_t hi = std::max(supports[r].node0, supports[r].node1);
+            index[nt] = ring.firstCoordinate + PlanarRingComponents * lo;
+            index[nt + 1] = index[nt] + 1;
+            index[nt + 2] = ring.firstCoordinate + PlanarRingComponents * hi;
+            index[nt + 3] = index[nt + 2] + 1;
         }
     }
     if (form == DelassusForm::Condensed)
@@ -388,9 +461,26 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         {
             continue;
         }
-        for (std::size_t i = 0; i < n; ++i)
+        if (supports.empty())
+        {
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                generalized[i] += jacobian[r * n + i] * f;
+            }
+            continue;
+        }
+        // Over the support only: the other entries would add exact zeros.
+        const std::size_t nt = model.treeDofCount();
+        for (std::size_t i = 0; i < nt; ++i)
         {
             generalized[i] += jacobian[r * n + i] * f;
+        }
+        const std::size_t first = model.rings()[supports[r].ring].firstCoordinate;
+        const std::size_t lo = first + PlanarRingComponents * std::min(supports[r].node0, supports[r].node1);
+        const std::size_t hi = first + PlanarRingComponents * std::max(supports[r].node0, supports[r].node1);
+        for (const std::size_t at : {lo, lo + 1, hi, hi + 1})
+        {
+            generalized[at] += jacobian[r * n + at] * f;
         }
     }
     return solution;
