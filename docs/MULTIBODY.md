@@ -1,7 +1,9 @@
 # Multibody core (design, step M1 of ADR 0003)
 
 - **Status:** M1a to M1d landed (M1d 2026-10-21); M2 designed in [WHEEL.md](WHEEL.md); M2a (ring substructure,
-  condensation, expanded oracle) landed 2026-10-27, see [WHEEL.md, M2a status](WHEEL.md#m2a-status-2026-10-27)
+  condensation, expanded oracle) landed 2026-10-27, see [WHEEL.md, M2a status](WHEEL.md#m2a-status-2026-10-27); M2c (contact
+  elements, the reference soft-constraint law, `ImplicitTerms::DampingOnlyMassPattern`) landed 2026-10-27, see
+  [M2c status](#m2c-status-2026-10-27)
 - **Decision:** [ADR 0003](https://github.com/CraigHutchinson/.github/blob/main/docs/decisions/0003-dynamics-engine.md).
   Sub0Physics owns the dynamics core; MuJoCo 3.16.0 is a test-only reference.
 
@@ -655,3 +657,24 @@ to bodies; their coordinates follow the tree's (`Model::dofCount` = `treeDofCoun
 matrices are `treeDofCount` square, and every step, forward and inverse dynamics, energy and reactions condense the
 rings onto their hosts before the tree factorisation. Models without rings are unchanged bit for bit (the consumer's
 parity tests pass unchanged). Details, gate evidence and deviations: [WHEEL.md, M2a status](WHEEL.md#m2a-status-2026-10-27).
+
+### M2c status (2026-10-27)
+
+**Landed:** contact elements (WHEEL.md section 10, item 3) and the reference engine's soft-constraint law, with these
+contract changes (details, derivation and evidence in [WHEEL.md, M2c status](WHEEL.md#m2c-status-2026-10-27)):
+
+- `Forcing::ringLoads`: contact element loads on rings, held over the step like `tau`; their force is mapped through
+  the host's chain, and the linearly implicit steps take their exact Jacobians through the ring's block storage, the
+  condensation's border and the tree's matrix (the chain's pairs only, so LTDL keeps its sparsity). Dense forcing
+  Jacobians stay refused with rings.
+- `ImplicitTerms::DampingOnlyMassPattern`: MuJoCo's `implicitfast` exactly. The engine gathers its velocity derivative
+  into the mass matrix's sparsity, so dampers between branches (a ring's neighbouring nodes, a tendon across branches)
+  stay explicit; `DampingOnly` is the same for models whose dampers follow the tree (the rig: its parity is unchanged
+  bit for bit).
+- `multibody/soft_constraint.hpp`: the soft-constraint law written once for every row kind, and one exact solve of a
+  step's rows with the mass matrix (contacts now; soft equality closures in M4's reference path). Nothing of it lives in
+  `State`: the solve is direct, so there is no warm start to keep.
+- `multibody/ring_contact.hpp`: a contact point's row on a ring, the node inverse weights the reference scales its
+  regularisation by, and the contact element's gap kinematics with exact first and second derivatives.
+- The ring's condensation skips the periodic sweep when its block is block-diagonal (always for the mass matrix), bit
+  for bit.

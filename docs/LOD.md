@@ -98,7 +98,7 @@ spent only where it is needed.
 | Extraction resolution (`HeightRequest::stride`) | Continuous | `terrain/height_extract.hpp` | A height-error tolerance; `strideForTolerance` picks the coarsest power-of-two stride whose estimated error `M s^2 / 4` meets it (docs/TERRAIN.md Levers) |
 | Corridor tightness (`tightCorridor`) | Continuous | `terrain/corridor_builder.hpp` | A relative cell-saving target; doubles the sub-interval count until a doubling gains less. Containment holds at every count |
 | Quadrature slots | Discrete (per slot) | `LinearlyImplicitEuler::setQuadrature` | Integrals nothing depends on use the trapezoid rule on the endpoint derivatives, so energy ledgers measure the method, not the bookkeeping |
-| Multibody implicit terms (`ImplicitTerms::Full`, `MaterialStiffness`, `DampingOnly`) | Discrete | `multibody/implicit_euler.hpp` | None. `DampingOnly` is MuJoCo's `implicitfast` structure and the more accurate at equal step for lightly damped modes; `Full` is needed only past the explicit stability limit (docs/MULTIBODY.md, M1d status) |
+| Multibody implicit terms (`ImplicitTerms::Full`, `MaterialStiffness`, `DampingOnly`, `DampingOnlyMassPattern`) | Discrete | `multibody/implicit_euler.hpp` | None. `DampingOnly` is MuJoCo's `implicitfast` structure and the more accurate at equal step for lightly damped modes; `Full` is needed only past the explicit stability limit (docs/MULTIBODY.md, M1d status). `DampingOnlyMassPattern` is `implicitfast` exactly (dampers between branches explicit); a parity setting, not a fidelity lever (M2c) |
 | Multibody step (linearly implicit Euler or midpoint) | Discrete | `stepLinearlyImplicitEuler`, `stepLinearlyImplicitMidpoint` | None yet. The midpoint step has no numerical damping and order 2 for constant M; the two share their solve, so they are an embedded pair for a future step-size controller |
 | Multibody formulation (planar or general) | Not a fidelity lever | `ModelBuilder::setFormulation` | Same results to rounding; the planar one is cheaper and chosen automatically |
 
@@ -111,6 +111,8 @@ The ring substructure (docs/WHEEL.md, M2a status) exposes two levers of the noda
 | Node count N | Discrete | Any N >= 3 through the description; the canonical tables cover divisors of 128. No error estimate yet: judge against a converged ring (the 32/64/128 sensitivity) |
 | Non-uniform spacing | Continuous (spacing profile) | Per-node and per-edge coefficients make a fixed non-uniform ring a description, not a code change; between runs only, after the mass, first-moment and spin-inertia checks (WHEEL.md section 2.5) |
 | Quasi-static, modal and rigid-ring casing models | Discrete (models of the same mechanism) | Future cheaper models behind the substructure (WHEEL.md section 2.4); they need state transfers |
+| Contact law (reference soft constraint, contact element) | Discrete (models of the same contact) | M2c: the reference rows (parity) and the contact element with exact Jacobians (the improved model's carrier); the element's law, its parameters and event-located onset are M2d's, judged against a converged run (continuous, target-driven: step and event tolerance first) |
+| The soft solve's Delassus matrix (one mass solve per row, or the condensed Schur complement) | Cost only (same result) | M2c: one solve per row; the O(k^2) Schur form is the recorded lever (docs/PERFORMANCE.md, open gap) |
 
 ## Not provided yet
 

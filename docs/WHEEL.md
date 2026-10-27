@@ -1,6 +1,7 @@
 # Deformable wheel (design, steps M2–M3 of ADR 0003)
 
-- **Status:** design, 2026-10-21. M2b (contact geometry, §3.1, and the certified skip of §3.4) is implemented
+- **Status:** design, 2026-10-21. M2c (the contact element, the reference soft-constraint law and their place in the
+  substructure's step) landed 2026-10-27, see [M2c status](#m2c-status-2026-10-27). M2b (contact geometry, §3.1, and the certified skip of §3.4) is implemented
   (2026-10-27): casing edges against canonical convex pieces with exact witnesses and the rotation-aware clearance
   bound, in `geometry/convex_terrain.hpp` on Sub0Math's closed-form capsule contacts; see
   [TERRAIN.md](TERRAIN.md#casing-contact-convexterrain). M2a (the ring substructure, its condensation and its oracle) landed
@@ -431,3 +432,102 @@ and an Interactive budget of 2 ms per 16.7 ms frame.
 - **Not done here:** the MuJoCo adapter's ring (consumer side, test-only) and Jacobian checks by finite differences of
   the ring alone (the blocks are checked against the expanded tendons, whose Jacobians are checked against central
   differences in M1b).
+
+## M2c status (2026-10-27)
+
+**Landed:** the contact element (section 10, item 3) and the reference soft-constraint law (section 3.2), with the
+ring-node border terms in the substructure's blocks. The consumer's moving wheel runs on them at parity with the
+reference engine (its docs/CONNECTED_BIKE.md and docs/MUJOCO_REFERENCE.md).
+
+**Gap kinematics, one implementation** (`multibody/ring_contact.hpp`). A contact acts at a point of a casing edge
+along a unit normal. `ringContactJacobian` gives its row `J = n^T dp/dq` (the host's chain through each joint's motion
+at the point, the two nodes' coordinates weighted): with the normal held, the gap's gradient (the witnesses' own motion
+drops out by the envelope theorem). The reference attaches a flex contact to the node bodies with normalised
+inverse-distance weights from the contact point; the element uses barycentric weights at its axis witness. Both are the
+same row with different weights.
+
+**The reference law, written once for every row kind** (`multibody/soft_constraint.hpp`). `softConstraintRow` turns a
+row's position (a contact's gap, an equality's violation), its rate and the diagonal approximation of `J M^-1 J^T` into
+the reference acceleration and the regularisation; `SoftConstraintSolver` solves all rows of a step together, contacts
+unilateral (`SoftRowKind::Unilateral`) and equalities always active (`SoftRowKind::Equality`, for the soft closures M4
+will need). Transcribed from MuJoCo 3.16.0 at commit
+[a892750](https://github.com/google-deepmind/mujoco/tree/a892750516336d8358949f4518fcc4fbbd85beae), file
+`src/engine/engine_core_constraint.c`:
+
+| Step | MuJoCo | Here |
+|---|---|---|
+| Time constant raised to `2 h` (non-discrete integrators) | getsolparam, [:1780](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L1780) | `softConstraintRow` |
+| Impedance `d(g)` from solimp (flat when `d0 = dwidth`) | getimpedance, [:1851-1900](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L1851) | same |
+| `R = max(mjMINVAL, (1 - d) diagApprox / d)`, `K = 1 / (dwidth^2 tc^2 dr^2)`, `B = 2 / (dwidth tc)` | mj_makeImpedance, [:1930](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L1930), [:1947](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L1947), [:1956](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L1956) | same |
+| `aref = -B v - K d g` | mj_referenceConstraint, [:3195](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L3195) | same |
+| `diagApprox`: the contact's body weights times `body_invweight0` (the world side weighs zero) | mj_diagApprox, [:1679-1697](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L1679); `body_invweight0` at qpos0, `engine_setconst.c` [:1250-1257](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_setconst.c#L1250) | `ringNodeInverseWeights` (the mean of the translational `J M^-1 J^T` diagonal over three axes, once at the reference configuration) |
+| Row cost `1/2 D jar^2` for `jar < 0`, zero when satisfied; force `-D jar` | mj_constraintUpdate_impl, [:3239](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L3239), [:3288-3300](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_core_constraint.c#L3288) | The mixed LCP `f >= 0`, `w = (J M^-1 J^T + R) f + J a0 - aref >= 0`, `f w = 0`: its unique solution is the cost's minimiser. Murty's principal pivoting solves it exactly where the engine's Newton stops at its tolerance (1e-10) |
+
+**How it combines with `implicitfast`** (the open risk of the consumer's CONNECTED_BIKE section 9, settled from the
+source and by the open-loop check). The constraint forces are solved in the forward pass with `M` (the free
+acceleration `a0 = M^-1 qfrc_smooth`), then held: the velocity update solves `(M - h D) dqd = h (qfrc_smooth +
+qfrc_constraint)` ([engine_forward.c:1819-1845](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_forward.c#L1819)).
+So the parity path is the equivalent regularised row solved at the start of the step and passed as a held generalized
+force, not a force element with Jacobians (an implicit element would differ from the engine at first order). One detail
+mattered: the engine **gathers its velocity derivative into the mass matrix's sparsity** (`mapD2M`,
+[engine_forward.c:1842](https://github.com/google-deepmind/mujoco/blob/a892750516336d8358949f4518fcc4fbbd85beae/src/engine/engine_forward.c#L1842)),
+so a flex edge's damping between neighbouring nodes (sibling bodies, no mass-matrix entry) is dropped from its implicit
+matrix while each node's own block stays. `ImplicitTerms::DampingOnlyMassPattern` is that rule (a damper between
+branches stays explicit). With plain `DampingOnly`, one step from the engine's state differed by 0.3% of the step's
+velocity change in free flight; with the mass pattern, by 3e-14 m/s (rounding).
+
+**The contact element** (`RingContactGeometry`, `measureRingContact`, `ringContactLoad`). A scalar law on the signed
+gap along the witness normal (the law's coordinate is the penetration), applied at the casing's axis witness, with its
+exact Jacobians in local coordinates (the host's planar motion in its frame and the edge's four node coordinates):
+`K = J^T (dF/dg) J + F H + (dF/dgdot) J^T (H v)^T`, `D = J^T (dF/dgdot) J`. The gap's Hessian `H` holds the host's
+rotation (the point's second derivative), and at a vertex witness the rotation of the normal and the witness's sliding
+along the edge (`H = P^T (I - n n^T) P / rho + n^T P'' - phi_qt phi_tq / phi_tt`, the envelope over the axis
+parameter). The host's chain adds its own curvature (`F C(grad g)` and its rate transport), mapped exactly by
+`ringLoadsToGeneralized` (a dense oracle path). The steps take loads through `Forcing::ringLoads` (their work is
+external work, as for every forcing): the chain's block into the tree's matrix (ancestor pairs, so the tree's sparsity
+is kept), the nodes' blocks into per-node and per-edge contact blocks (`RingWorkspace::contactDiagonal`,
+`contactUpper`), and the node-to-host coupling into the condensation's border (`RingCondensation::border`: the mass
+coupling plus the loads' terms, the place section 10 reserved for them).
+
+**Gate evidence** (`tests/test_multibody_ring_contact.cpp`, GCC 16, GCC 16 and Clang 22 `-march=x86-64-v3`):
+
+- *The law:* `softConstraintRow` against the source's formulas term by term (flat and graded impedance, the `2 h` bound).
+- *The solve:* 40 random sets of 1 to 6 rows on a 16-node ring (some with an equality row): forces non-negative on
+  unilateral rows, and no perturbation of the forces lowers the primal cost.
+- *The row:* `J qd` against a central difference of the attached point (off the axis, rotating with the host) to 1e-8.
+- *The element's Jacobians:* central differences of the generalized force (geometry re-derived at each state) on a ring
+  whose host sits on a chain with two revolute joints, for a face witness and two vertex witnesses with interior axis
+  points: about 1e-9 of the stiffness's scale (bound 1e-8); dropping the chain's curvature term gives 4e-3.
+- *The structured step with loads:* against a dense solve of the same step (dense `M` by inverse dynamics, the loads'
+  dense Jacobians) to 1e-10, for `Full` and `DampingOnly`; prepared and one-call steps bit for bit; a later step
+  without loads is unaffected by the earlier contact blocks.
+- *The mass pattern:* the condensed ring and its expanded oracle agree over 300 steps of `DampingOnlyMassPattern`
+  (1e-10; the oracle drops the cross-branch tendon damping by the same rule), and the mode differs from `DampingOnly`
+  exactly when the edges are viscous.
+- *A ring dropped on contact elements* (64 nodes, elastic, implicit midpoint at 200 us): energy plus contact potential
+  within 6.6e-4 of the start (the step crosses each onset's kink; event location is M2d); run digest
+  `11241068545413185626` on all three builds.
+- *Allocation:* rows, the soft solve, loads and every stepper with loads allocate nothing.
+- *Consumer parity* (the reference stepper on these pieces): open loop on the engine's states, one step to rounding
+  (median 5e-13 of the step's change), geometry and forces at the engine's GJK/EPA tolerance; whole runs within the
+  engine's own collision-tolerance envelope.
+
+**Deviations and decisions:**
+
+- **Parity law as rows, not an element.** Held rows reproduce `implicitfast` exactly; an implicit force element would
+  not. The element is the improved model's.
+- **Exact LCP instead of Newton.** The same minimiser; the engine stops at 1e-10, which the open-loop check sees as up
+  to 1e-5 relative in the generalized constraint force (median).
+- **One mass-matrix solve per row** for `J M^-1 J^T`; a hand-written twin forms it from the condensed Schur complement
+  in O(k^2) (docs/PERFORMANCE.md, open gap). A block-diagonal ring block (the mass matrix always, the reference's step
+  matrix) now skips the periodic sweep, bit for bit.
+- **The structured step drops one term of the element's exact K:** the rate transport through the host chain's
+  curvature on the nodes' rows (it does not factor through the host's motion). It is zero for hosts on prismatic chains
+  and for a law without damping; the step is a W-method, so only stability could depend on it. The dense map keeps it.
+- **Deep overlap at a vertex** (the casing's axis past the obstacle) omits the normal's rotation terms; outside the
+  element's support.
+- **Found, not caused here:** the M2a ring digest (`ring run digest`) is `761d96d625139bc2` on GCC 16 with and without
+  `-march=x86-64-v3` but `b96b9f5285379502` on Clang 22 `-march=x86-64-v3` with Sub0Math f7316fe, already at this
+  branch's base (b7c004b). The new contact digest and the consumer's moving-wheel digest agree on all three builds.
+- **Not here:** the improved model's law and parameters, event-located onset and swept certification (M2d), friction
+  rows (M3b).
