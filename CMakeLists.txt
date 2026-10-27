@@ -23,6 +23,7 @@ include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")
 add_library(Sub0Physics STATIC
     src/bounded_periodic_tridiagonal.cpp
     src/circle_clearance.cpp
+    src/convex_terrain.cpp
     src/corridor_builder.cpp
     src/damped_oscillator.cpp
     src/fidelity_selector.cpp

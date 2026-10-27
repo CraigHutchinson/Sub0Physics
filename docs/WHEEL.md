@@ -1,6 +1,9 @@
 # Deformable wheel (design, steps M2–M3 of ADR 0003)
 
-- **Status:** design, 2026-10-21. Nothing here is implemented. It fixes the core-side contracts for the
+- **Status:** design, 2026-10-21. M2b (contact geometry, §3.1, and the certified skip of §3.4) is implemented
+  (2026-10-27): casing edges against canonical convex pieces with exact witnesses and the rotation-aware clearance
+  bound, in `geometry/convex_terrain.hpp` on Sub0Math's closed-form capsule contacts; see
+  [TERRAIN.md](TERRAIN.md#casing-contact-convexterrain). The rest fixes the core-side contracts for the
   spatial deformable wheel (M2) and for assembling several of them under a moving tree (M3), so the steps can
   be delegated and reviewed against one specification.
 - **Builds on:** [MULTIBODY.md](MULTIBODY.md) (tree, elements, constraints, steppers), [LOD.md](LOD.md)

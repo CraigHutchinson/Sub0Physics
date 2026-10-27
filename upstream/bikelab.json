@@ -100,6 +100,16 @@
         "include/sub0physics/terrain/source_tile_cache.hpp",
         "include/sub0physics/terrain/column_extract.hpp"
       ]
+    },
+    {
+      "source": "dist/moving-wheel.js",
+      "blob": "64d1df88877ec3a090c64e0cdd3b4a4ca2e33876",
+      "driftOwner": true,
+      "what": "Collision terrain construction: collinear merging of the profile (canonicalProfile: turn below 1e-12 of the hypot product and no reversal) and one convex prism per non-vertical canonical segment down to a floor one metre below the lowest vertex (terrainParts), so vertical faces are neighbours' sides and contact multiplicity is one per (casing edge, piece)",
+      "targets": [
+        "include/sub0physics/geometry/convex_terrain.hpp",
+        "src/convex_terrain.cpp"
+      ]
     }
   ]
 }

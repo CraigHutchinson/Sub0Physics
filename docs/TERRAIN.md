@@ -114,7 +114,8 @@ counter never wraps onto a used value. `SourceRevision` is an `Id`.
 
 ## Witnesses: `Witness<N>`
 
-`sub0physics/geometry/witness.hpp`. Every nearest-point or hit query returns a witness `{point, normal,
+`sub0physics/geometry/witness.hpp`: Sub0Math's `Witness<T, N>` and `WitnessKind` in metres (aliases since M2b, so the
+primitives in Sub0Math and the queries here share one type). Every nearest-point or hit query returns a witness `{point, normal,
 kind, index}`: `WitnessKind` is `Vertex`, `Edge` (the interior of a segment, `index` its first vertex) or
 `Face` (3D). A query reports the feature itself and never averages the normals of several: at a square
 corner the witness is the vertex with the true approach direction.
@@ -160,6 +161,54 @@ byte-identical. Three places needed a specific form, recorded here because a "fa
 
 Because the library is built without floating-point contraction (PUBLIC), the results are the same with FMA
 hardware (`-march=x86-64-v3`), which CI checks.
+
+## Casing contact: `ConvexTerrain`
+
+`sub0physics/geometry/convex_terrain.hpp` (step M2b of [WHEEL.md](WHEEL.md)). Exact contact geometry between the casing
+edges of a deformable wheel (capsules: a segment between two nodes plus the skin radius) and a profile, built on
+Sub0Math's closed-form `contact(Capsule, ConvexPolygon)` and `contact(Capsule, Segment)`.
+
+**Decomposition (built once, allocates).** The construction of the reference vehicle experiments (BikeLab
+`canonicalProfile` and `terrainParts`, recorded in `upstream/bikelab.json`):
+
+- Collinear runs are merged first: a vertex is dropped while its neighbouring segments turn by less than
+  `1e-12 |u| |v|` (norms in the compensated arithmetic) and do not reverse. Subdividing an authored line therefore
+  adds no support: the pieces, and every contact, are bit-identical (tested on the square, faceted and 200 mm
+  fixtures subdivided eightfold).
+- One convex piece per non-vertical canonical segment: the quadrilateral from the segment down to a common floor one
+  metre below the lowest vertex, with vertical sides. A vertical segment has no piece; it is the side of the
+  neighbour that rises above it, so vertical faces are real faces with normal +-x.
+
+**Queries (allocation-free, status aggregates, caller-owned buffers).**
+
+| Query | Answers |
+|---|---|
+| `contacts(edge, margin, out, edgeIndex)` | One `TerrainContact` per piece whose gap is at most `margin`: gap, axis parameter, capsule point, piece, canonical segment and a `Witness2` on the piece (piece-local feature index). `TerrainContactSet` gives count, found, `overflowed`, the pairs measured and the smallest gap (exact when within the margin) |
+| `ringContacts(nodes, skin, margin, out)` | The same over a closed ring, in edge order then piece order; inputs validated once |
+| `certifyClearance(edge, motion, horizon)`, `certifyRingClearance(...)` | A lower bound on the gap over a whole step (`ClearanceBound`), capped at `horizon`; `certified` when positive |
+| `cornerCone(vertex, convex)`, `segmentNormal(segment)` | The admissible normals at a convex terrain corner, for witness admissibility checks |
+
+The window is a binary search over the pieces' right x, then a height cull (the casing's lowest point against each
+piece's top, and against the highest piece for a whole edge). Multiplicity is the reference's: one contact per
+(edge, piece) pair, independent of the authored subdivision. At a convex corner both pieces that meet there can report
+the vertex, each with the true approach direction; nothing is averaged.
+
+**Clearance bound (the basis for event location in M2c).** A point at hub-frame position `q` moves by
+`(c(t) - c(0)) + R(t)(q(t) - q(0)) + (R(t) - R(0)) q(0)`, and `|(R(t) - R(0)) q(0)| = 2 |q(0)| |sin(dtheta/2)| <=
+|q(0)| min(|dtheta|, 2)`. So every point of an edge moves at most `reach = hubTravel + nodeTravel + lever min(hubRotation,
+2)` (`lever`: the farther end from the hub; interior points are convex combinations of the ends). The gap to a fixed
+set is 1-Lipschitz in that movement, so `gap(t) >= gap(0) - reach` for the whole step: a positive bound proves no
+contact and no tunnelling. No trigonometry is evaluated, so the bound is identical on every platform. Property test:
+random curved hub paths, spins up to 0.3 rad and node displacements over all four fixtures, 1001 instants each; the
+sampled gap never falls below the bound, and dropping the rotation term is caught (some steps violate it).
+
+**Verification.** Per-pair gaps against a long-double direction search (the largest separation over all directions,
+exact for convex bodies in or out of contact) to 1e-9 m; the smallest gap against the distance to the authored
+polyline; vertex witnesses inside the piece's normal cone; a square corner approached from 29 directions gives the
+corner vertex, inside `cornerCone`, along the true approach direction (sine error below 1e-12, against the
+reference's 0.005 rad budget); overflow and invalid inputs; a digest of a fixed batch equal on GCC 16 and Clang 22 with
+`-march=x86-64-v3`; the allocation gate. Fixtures: the reference's 15 mm crown, 40 mm square rock, 60 mm faceted rock
+and 200 mm square obstacle.
 
 ## Bounded periodic chains: `solveBoundedPeriodicTridiagonal`
 

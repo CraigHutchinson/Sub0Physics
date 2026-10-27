@@ -7,6 +7,7 @@ add_executable(Sub0Physics_Tests
     test_bounded_periodic_tridiagonal.cpp
     test_channel_table.cpp
     test_circle_clearance.cpp
+    test_convex_terrain.cpp
     test_corridor_builder.cpp
     test_damped_oscillator.cpp
     test_elements.cpp
@@ -76,6 +77,6 @@ target_link_libraries(Sub0Physics_HeaderCheck PRIVATE Sub0Physics::Sub0Physics)
 # ── Benchmarks (not run by ctest — run manually) ──────────────────────────────
 
 if(SUB0PHYSICS_BUILD_BENCHMARKS)
-    sub0math_add_benchmark(Sub0Physics_Bench bench_physics.cpp bench_multibody.cpp bench_terrain.cpp)
+    sub0math_add_benchmark(Sub0Physics_Bench bench_physics.cpp bench_contact.cpp bench_multibody.cpp bench_terrain.cpp)
     target_link_libraries(Sub0Physics_Bench PRIVATE Sub0Physics::Sub0Physics)
 endif()

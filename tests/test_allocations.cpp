@@ -147,6 +147,23 @@ TEST_CASE("Prepared profile queries never allocate once the ray origin has been 
     CHECK(count.since() == 0U);
 }
 
+TEST_CASE("Convex terrain contact and clearance queries never allocate")
+{
+    using sub0math::metres;
+    const auto step = PolylineProfile::create(test_profiles::metresPoints({{-1.0, 0.0}, {0.0, 0.0}, {0.0, 0.1}, {0.2, 0.1}, {0.2, 0.0}, {1.0, 0.0}}));
+    REQUIRE(step);
+    const ConvexTerrain terrain(*step);
+    std::array<sub0math::Point2<sub0math::f64::Length>, 4> ring{{test_profiles::at(-0.05, 0.105), test_profiles::at(0.05, 0.105),
+                                                                 test_profiles::at(0.05, 0.3), test_profiles::at(-0.05, 0.3)}};
+    std::array<TerrainContact, 8> buffer{};
+    const StepMotionBound motion{test_profiles::at(0.0, 0.2), metres(0.001), 0.01, metres(0.0005)};
+    const AllocationCount count;
+    CHECK(terrain.ringContacts(ring, metres(0.008), metres(0.001), buffer).count > 0U);
+    CHECK(terrain.contacts({{ring[0], ring[1]}, metres(0.008)}, metres(0.0), std::span<TerrainContact>{}).overflowed);
+    CHECK(terrain.certifyRingClearance(ring, metres(0.008), motion, metres(0.1)).status == TerrainQueryStatus::Available);
+    CHECK(count.since() == 0U);
+}
+
 TEST_CASE("The bounded periodic solver allocates nothing once the solution has capacity")
 {
     std::vector<double> lower(512, 0.0);
