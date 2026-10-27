@@ -160,11 +160,21 @@ inline Model ringRig(const RingParameters& p, bool expanded, bool secondRing = t
     return *builder.build();
 }
 
+/**
+ * A uniform draw in [-1, 1) from the generator's raw 64-bit output, bit-identical on every standard library. The
+ * engine's sequence is specified by the standard but `std::uniform_real_distribution` is not: libstdc++ and the MSVC
+ * STL differ in the last bit of some draws, which moved the cross-compiler run digests.
+ */
+inline double uniformSigned(std::mt19937_64& rng)
+{
+    return 2.0 * (static_cast<double>(rng() >> 11U) * 0x1.0p-53) - 1.0;
+}
+
 /** A deterministic state: the tree moving, the ring nodes displaced by a few millimetres and moving. */
 inline State randomState(const Model& model, unsigned seed, double displacement = 0.004)
 {
     std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> u(-1.0, 1.0);
+    const auto u = [](std::mt19937_64& g) { return uniformSigned(g); };
     State s = State::atRest(model);
     const std::size_t n = model.dofCount();
     auto q = s.q();

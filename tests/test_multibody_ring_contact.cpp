@@ -159,7 +159,7 @@ TEST_CASE("soft-constraint solve is the unique minimiser: brute force over activ
     Workspace ws(model);
     const std::size_t n = model.dofCount();
     std::mt19937_64 rng(7);
-    std::uniform_real_distribution<double> u(-1.0, 1.0);
+    const auto u = [](std::mt19937_64& g) { return ringmodels::uniformSigned(g); };
     const State s = ringmodels::randomState(model, 3);
     prepare(model, s, ws);
     REQUIRE(factorMassMatrix(model, ws).has_value());

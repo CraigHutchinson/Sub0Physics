@@ -34,7 +34,7 @@ template<std::size_t Dim>
 double periodicSolveError(std::size_t n, unsigned seed)
 {
     std::mt19937_64 rng(seed);
-    std::uniform_real_distribution<double> u(-1.0, 1.0);
+    const auto u = [](std::mt19937_64& g) { return ringmodels::uniformSigned(g); };
     std::vector<Block<Dim>> diagonal(n);
     std::vector<Block<Dim>> upper(n);
     for (std::size_t k = 0; k < n; ++k)
@@ -317,7 +317,7 @@ TEST_CASE("condensed ring agrees with its expanded oracle: dynamics, energy, ele
 
             // Inverse dynamics with random accelerations: M qdd + c - tau_e, every coordinate.
             std::mt19937_64 rng(seed + 100);
-            std::uniform_real_distribution<double> u(-1.0, 1.0);
+            const auto u = [](std::mt19937_64& g) { return ringmodels::uniformSigned(g); };
             std::vector<double> qdd(n);
             for (double& v : qdd)
             {
@@ -719,4 +719,9 @@ TEST_CASE("ring run digest (compare across compilers)")
     char text[17];
     std::snprintf(text, sizeof text, "%016llx", static_cast<unsigned long long>(digest));
     MESSAGE("ring run digest " << text);
+    // Pinned: identical on GCC, GCC -march=x86-64-v3 and Clang -march=x86-64-v3 (Windows). The random state comes from
+    // the raw mt19937_64 output (ringmodels::uniformSigned), not std::uniform_real_distribution. The revolute tree
+    // joints still call libm sin/cos, so a C library with a different last-bit result would show up here: investigate
+    // that (a deterministic sin/cos in Sub0Math) before re-pinning.
+    CHECK(std::strcmp(text, "b96b9f5285379502") == 0);
 }
