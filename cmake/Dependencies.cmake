@@ -2,7 +2,7 @@ include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/CPM.cmake")
 
 # Pins, not HEADs: change deliberately and record why in the commit message.
-set(SUB0PHYSICS_SUB0MATH_REVISION 54e6a02207fbeb70ad28e10e1f6b941ed23c78e1)
+set(SUB0PHYSICS_SUB0MATH_REVISION f7316fe6ae17f1f78848d2ecda7a896b88255d10)
 
 CPMAddPackage(NAME Sub0Math GITHUB_REPOSITORY CraigHutchinson/Sub0Math
     GIT_TAG ${SUB0PHYSICS_SUB0MATH_REVISION} EXCLUDE_FROM_ALL YES
