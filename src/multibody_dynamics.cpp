@@ -135,7 +135,7 @@ std::expected<void, Fault> factorUnchecked(const Model& model, Workspace& worksp
     std::copy_n(workspace.massMatrix.data(), n * n, workspace.massFactor.data());
     // A ring's block is eliminated onto its host first (its border and host Jacobians come with the mass matrix).
     if (!model.rings().empty() &&
-        !detail::condenseRings(model, workspace, detail::RingSystem::Mass, 0.0, 0.0, workspace.massFactor.data()))
+        !detail::condenseRings(model, workspace, detail::RingSystem::Mass, 0.0, true, 0.0, workspace.massFactor.data()))
     {
         return invalidInput("a ring's mass block is not positive definite");
     }
@@ -333,6 +333,19 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
     // theta = 1: backward Euler linearised; theta = 1/2: the linearised trapezoid (implicit midpoint).
     const double thetaStep = theta * dt;
     const double hd = implicit ? thetaStep : 0.0;
+    // DampingOnlyMassPattern: keep D only between coordinates whose bodies are on one chain (the mass matrix's pattern).
+    const bool massPattern = terms == ImplicitTerms::DampingOnlyMassPattern && !model.elementsFollowTree();
+    const auto related = [&](std::size_t i, std::size_t j) {
+        const auto parents = model.parents();
+        for (std::size_t body = i; body != NoParent; body = parents[body])
+        {
+            if (body == j)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
     const auto assemble = [&](bool withStiffness) {
         const double h2 = withStiffness ? thetaStep * thetaStep : 0.0;
         for (std::size_t i = 0; i < n; ++i)
@@ -341,6 +354,10 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
             for (std::size_t j = 0; j <= i; ++j)
             {
                 double damping = d[i * n + j];
+                if (massPattern && !related(i, j))
+                {
+                    damping = 0.0; // outside the mass matrix's sparsity: explicit, as the reference engine
+                }
                 if (fd != nullptr)
                 {
                     damping += 0.5 * (fd[i * n + j] + fd[j * n + i]);
@@ -383,6 +400,7 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
             detail::ringLoadStepTerms(model, state, ws, implicit ? applied.ringLoads : std::span<const RingContactLoad>{},
                                       hd, h2, dt, thetaStep, a, b);
             return detail::condenseRings(model, ws, detail::RingSystem::Step, hd,
+                                         terms != ImplicitTerms::DampingOnlyMassPattern,
                                          withStiffness ? thetaStep * thetaStep : 0.0, a);
         }
         return true;
@@ -391,7 +409,8 @@ std::expected<bool, Fault> formStepSystem(const Model& model, const State& state
     const bool dense = implicit && (!model.elementsFollowTree() || fk != nullptr || fd != nullptr);
     const auto factor = [&]() { return dense ? factorDense(n, a, ws.elementScalars.data()) : factorTree(model, a); };
     // Without elements, K and D are zero from the workspace's construction and never written.
-    const bool stiffness = implicit && (hasElements || fk != nullptr) && terms != ImplicitTerms::DampingOnly;
+    const bool stiffness = implicit && (hasElements || fk != nullptr) && terms != ImplicitTerms::DampingOnly &&
+                           terms != ImplicitTerms::DampingOnlyMassPattern;
     const bool condensed = assemble(stiffness);
     ws.geometricStiffnessDropped = false;
     if (!condensed || !factor())

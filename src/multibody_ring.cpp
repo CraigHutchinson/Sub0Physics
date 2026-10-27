@@ -424,7 +424,8 @@ void ringMotionEnergy(const Model& model, const Workspace& ws, double& kinetic, 
     }
 }
 
-bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double hd, double h2, double* tree) noexcept
+bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double hd, bool neighbourDamping, double h2,
+                   double* tree) noexcept
 {
     const auto rings = model.rings();
     const std::size_t nt = model.treeDofCount();
@@ -448,7 +449,7 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
                 for (std::size_t k = 0; k < C * C; ++k)
                 {
                     diagonal[k] -= hd * rw.dampingDiagonal[i][k] + h2 * kd[k];
-                    upper[k] = -(hd * rw.dampingUpper[i][k] + h2 * ku[k]);
+                    upper[k] = -((neighbourDamping ? hd * rw.dampingUpper[i][k] : 0.0) + h2 * ku[k]);
                 }
             }
             if (contact)

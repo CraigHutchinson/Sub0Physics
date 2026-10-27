@@ -47,7 +47,14 @@ enum class ImplicitTerms : std::uint8_t
 {
     Full,              ///< D and K, including the tendons' geometric and rate-transport terms (default).
     MaterialStiffness, ///< D and the material part of K only (geometric stiffness off).
-    DampingOnly        ///< D only: springs and stiffness explicit, as MuJoCo's `implicitfast`.
+    DampingOnly,       ///< D only: springs and stiffness explicit, as MuJoCo's `implicitfast` on a tree.
+    /**
+     * D only, and only where the mass matrix has entries: MuJoCo's `implicitfast` exactly, which gathers its velocity
+     * derivative into the mass matrix's sparsity (engine_forward.c:1842, `mapD2M`), so a damper between branches
+     * (a ring's edge between neighbouring nodes, a tendon across branches) stays explicit there while its own nodes'
+     * terms are implicit. The same as DampingOnly for a model whose dampers follow the tree.
+     */
+    DampingOnlyMassPattern
 };
 
 /**

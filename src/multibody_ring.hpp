@@ -48,10 +48,12 @@ void ringHostJacobians(const Model& model, Workspace& ws) noexcept;
 // The nodes' kinetic and gravitational energy; needs ringTransforms with velocities and planar.worldToBody.
 void ringMotionEnergy(const Model& model, const Workspace& ws, double& kinetic, double& potential) noexcept;
 
-// Forms each ring's block of `M - hd D - h2 K~` (the element blocks are read only when hd or h2 is not zero),
+// Forms each ring's block of `M - hd D - h2 K~` (without the neighbour blocks of D when `neighbourDamping` is false: the
+// reference engine's mass-matrix pattern, ImplicitTerms::DampingOnlyMassPattern) (the element blocks are read only when hd or h2 is not zero),
 // factorises it, and removes its condensation from the tree's matrix `tree` (lower triangle, treeDofCount stride).
 // False when a ring block is not positive definite. Needs ringCompositeInertia and ringHostJacobians.
-[[nodiscard]] bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double hd, double h2,
+[[nodiscard]] bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double hd,
+                                 bool neighbourDamping, double h2,
                                  double* tree) noexcept;
 
 // The ring rows of a linearly implicit step's right-hand side: b_w = dt (tau + tau_e - c + thetaStep K~ wd), with K~
