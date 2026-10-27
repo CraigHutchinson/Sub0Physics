@@ -6,6 +6,8 @@
 #include <limits>
 #include <span>
 
+#include <sub0math/number/det_math.hpp>
+
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/soft_constraint.hpp"
 
@@ -55,13 +57,13 @@ SoftConstraintRow softConstraintRow(const SoftConstraintParameters& parameters, 
             }
             else if (x <= solimp[3])
             {
-                const double a = 1 / std::pow(solimp[3], solimp[4] - 1);
-                y = a * std::pow(x, solimp[4]);
+                const double a = 1 / sub0math::det::pow(solimp[3], solimp[4] - 1);
+                y = a * sub0math::det::pow(x, solimp[4]);
             }
             else
             {
-                const double b = 1 / std::pow(1 - solimp[3], solimp[4] - 1);
-                y = 1 - b * std::pow(1 - x, solimp[4]);
+                const double b = 1 / sub0math::det::pow(1 - solimp[3], solimp[4] - 1);
+                y = 1 - b * sub0math::det::pow(1 - x, solimp[4]);
             }
             imp = solimp[0] + y * (solimp[1] - solimp[0]);
         }

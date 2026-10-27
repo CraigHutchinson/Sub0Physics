@@ -596,6 +596,8 @@ TEST_CASE("a ring bouncing on contact elements: energy, implicit stability, and 
         }
     }
     MESSAGE("ring contact digest: " << hash << ", energy drift " << worstDrift << " J of " << startEnergy);
+    // Pinned like the ring run digest: same bits on every platform (no libm transcendentals on the state path).
+    CHECK(hash == 5485379336972323518ULL);
     CHECK(std::isfinite(s.values[n - 1]));
     CHECK(maxContacts >= 3);
     CHECK(worstDrift < 1e-3 * std::abs(startEnergy)); // measured 6.6e-4: the step crosses each contact's onset kink

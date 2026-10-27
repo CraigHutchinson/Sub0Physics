@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include <sub0math/number/det_math.hpp>
+
 namespace sub0physics::terrain
 {
 
@@ -57,9 +59,9 @@ std::expected<CorridorBuilder, Fault> CorridorBuilder::create(const CorridorSpec
     const double dyaw = spec.to.yaw.si() - ayaw;
     const double k = static_cast<double>(spec.subIntervals);
     // Lookbehind opposite the displacement; along the start heading when stationary.
-    const double distance = std::hypot(dx, dy);
-    const double ux = distance != 0.0 ? dx / distance : std::cos(ayaw);
-    const double uy = distance != 0.0 ? dy / distance : std::sin(ayaw);
+    const double distance = std::sqrt(dx * dx + dy * dy); // not hypot: libm hypot differs between platforms
+    const double ux = distance != 0.0 ? dx / distance : sub0math::det::cos(ayaw);
+    const double uy = distance != 0.0 ? dy / distance : sub0math::det::sin(ayaw);
     const double wx = -f.behind.si() * ux, wy = -f.behind.si() * uy;
     const double hl = f.halfLength.si(), hw = f.halfWidth.si();
     const double delta = std::abs(dyaw) / (2.0 * k); // largest heading departure from a sub-interval's middle
@@ -72,7 +74,8 @@ std::expected<CorridorBuilder, Fault> CorridorBuilder::create(const CorridorSpec
     {
         const double s = (static_cast<double>(m) + 0.5) / k;
         const double yaw = ayaw + dyaw * s;
-        const Frame frame{std::cos(yaw), std::sin(yaw)};
+        const auto yawSinCos = sub0math::det::sincos(yaw);
+        const Frame frame{yawSinCos.cos, yawSinCos.sin};
         const auto w = frame.local(wx, wy);
         const auto d = frame.local(dx, dy);
         const double slack = RoundingSlack.si();

@@ -8,6 +8,7 @@
 #include <sub0math/linear/plucker_transform.hpp>
 #include <sub0math/linear/spatial_motion.hpp>
 #include <sub0math/linear/vec.hpp>
+#include <sub0math/number/det_math.hpp>
 
 #include "multibody_ring.hpp"
 #include "sub0physics/multibody/model.hpp"
@@ -35,8 +36,8 @@ namespace sub0physics::multibody::detail
     const PlanarTransform& t = b.placement;
     if (b.revolute)
     {
-        const double c = std::cos(q);
-        const double s = b.axisSign * std::sin(q);
+        const auto [sinQ, c] = sub0math::det::sincos(q);
+        const double s = b.axisSign * sinQ;
         if (b.unrotated)
         {
             return {c, s, t.x, t.y};

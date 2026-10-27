@@ -89,10 +89,22 @@ std::vector<std::pair<double, double>> subdivide(const std::vector<std::pair<dou
     return out;
 }
 
+// A uniform real from the generator's raw bits: std::uniform_real_distribution is not specified to the last bit, so
+// libstdc++, libc++ and the MSVC STL draw different values from the same engine.
+struct Uniform
+{
+    double low;
+    double high;
+    double operator()(std::mt19937_64& rng) const noexcept
+    {
+        return low + (high - low) * (static_cast<double>(rng() >> 11U) * 0x1.0p-53);
+    }
+};
+
 // A casing ring of `n` nodes on centreline radius `r` about `hub`, with radial dents from a seed.
 std::vector<Node> ring(Point2d hub, double r, std::size_t n, double dent, std::mt19937_64& rng)
 {
-    std::uniform_real_distribution<double> u(-1.0, 1.0);
+    Uniform u(-1.0, 1.0);
     std::vector<Node> nodes(n);
     for (std::size_t i = 0; i < n; ++i)
     {
@@ -238,7 +250,7 @@ TEST_CASE("Convex terrain: contacts match the direction search per piece, and th
 {
     const std::array fixtures{crown(), squareRock(), facetedRock(), squareObstacle()};
     std::mt19937_64 rng(2026);
-    std::uniform_real_distribution<double> u(0.0, 1.0);
+    Uniform u(0.0, 1.0);
     std::array<TerrainContact, 64> buffer{};
     std::size_t compared = 0;
     std::size_t vertexWitnesses = 0;
@@ -402,7 +414,7 @@ TEST_CASE("Clearance bound: conservative under translation, rotation and deforma
     // certified bound. A bound without the rotation term is violated by some of the same steps.
     const std::array fixtures{crown(), squareRock(), facetedRock(), squareObstacle()};
     std::mt19937_64 rng(77);
-    std::uniform_real_distribution<double> u(0.0, 1.0);
+    Uniform u(0.0, 1.0);
     std::size_t certified = 0;
     std::size_t violatedWithoutRotation = 0;
     for (const auto& authored : fixtures)

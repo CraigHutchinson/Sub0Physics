@@ -10,6 +10,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <sub0math/number/det_math.hpp>
+
 #include "sub0physics/fault.hpp"
 #include "sub0physics/integrator/ode_system.hpp"
 
@@ -90,7 +92,7 @@ struct StepSizeController
         {
             factor = ratio == std::numeric_limits<double>::infinity()
                          ? minFactor
-                         : std::clamp(safety * std::pow(ratio, -1.0 / static_cast<double>(errorOrder + 1)), minFactor,
+                         : std::clamp(safety * sub0math::det::pow(ratio, -1.0 / static_cast<double>(errorOrder + 1)), minFactor,
                                       maxFactor);
         }
         return std::clamp(h * factor, minStep, maxStep);

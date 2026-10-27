@@ -12,6 +12,7 @@
 #include <sub0math/linear/spatial_inertia.hpp>
 #include <sub0math/linear/spatial_motion.hpp>
 #include <sub0math/linear/vec.hpp>
+#include <sub0math/number/det_math.hpp>
 
 #include "sub0physics/fault.hpp"
 #include "sub0physics/multibody/implicit_euler.hpp"
@@ -53,8 +54,7 @@ SUB0MATH_FORCE_INLINE sub0math::PluckerTransformd parentToBody(JointType type, c
     if (type == JointType::Revolute)
     {
         // E_J = R^T = c 1 - s [a]x + (1 - c) a a^T (Rodrigues, transposed).
-        const double c = std::cos(q);
-        const double s = std::sin(q);
+        const auto [s, c] = sub0math::det::sincos(q);
         sub0math::Mat3d e{};
         if (a.x == 0.0 && a.y == 0.0)
         {

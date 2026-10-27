@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <sub0math/linear/vec.hpp>
+#include <sub0math/number/det_math.hpp>
 #include <sub0math/units/quantities.hpp>
 #include <variant>
 
@@ -243,12 +244,12 @@ struct Berm
         {
             return 0.0;
         }
-        const double arcEnd = radius * std::sin(maxAngle);
+        const double arcEnd = radius * sub0math::det::sin(maxAngle);
         if (u <= arcEnd)
         {
             return radius - std::sqrt(radius * radius - u * u);
         }
-        return radius * (1.0 - std::cos(maxAngle)) + std::tan(maxAngle) * (u - arcEnd);
+        return radius * (1.0 - sub0math::det::cos(maxAngle)) + std::tan(maxAngle) * (u - arcEnd);
     }
 
     /** @return Unit normal at (x, y). */
@@ -259,7 +260,7 @@ struct Berm
         {
             return {0.0, 0.0, 1.0};
         }
-        const double arcEnd = radius * std::sin(maxAngle);
+        const double arcEnd = radius * sub0math::det::sin(maxAngle);
         const double slope = u <= arcEnd ? u / std::sqrt(radius * radius - u * u) : std::tan(maxAngle);
         const double n = std::sqrt(1.0 + slope * slope);
         return {0.0, -slope / n, 1.0 / n};

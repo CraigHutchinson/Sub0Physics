@@ -719,9 +719,10 @@ TEST_CASE("ring run digest (compare across compilers)")
     char text[17];
     std::snprintf(text, sizeof text, "%016llx", static_cast<unsigned long long>(digest));
     MESSAGE("ring run digest " << text);
-    // Pinned: identical on GCC, GCC -march=x86-64-v3 and Clang -march=x86-64-v3 (Windows). The random state comes from
-    // the raw mt19937_64 output (ringmodels::uniformSigned), not std::uniform_real_distribution. The revolute tree
-    // joints still call libm sin/cos, so a C library with a different last-bit result would show up here: investigate
-    // that (a deterministic sin/cos in Sub0Math) before re-pinning.
-    CHECK(std::strcmp(text, "b96b9f5285379502") == 0);
+    // Pinned: identical on GCC, GCC -march=x86-64-v3 and Clang -march=x86-64-v3 (Windows), and expected on every
+    // platform: the random state comes from the raw mt19937_64 output (ringmodels::uniformSigned, not
+    // std::uniform_real_distribution), the revolute joints use sub0math::det::sincos (fdlibm, no C library), and
+    // everything else is IEEE + - * / and sqrt under -ffp-contract=off. Before 2026-10-27 this was b96b9f5285379502
+    // on Windows with libm sin/cos, abd8d2ab7e62fbc7 on Linux and f67fc6a4aa623f6d on macOS. A mismatch now is a bug.
+    CHECK(std::strcmp(text, "f4b3d8f7baf6ed29") == 0);
 }
