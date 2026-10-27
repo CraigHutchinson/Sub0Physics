@@ -1235,7 +1235,7 @@ std::expected<void, Fault> computeReactionsWithForcing(const Model& model, const
     }
     Workspace& ws = workspace;
     ConstraintScratch& sc = ws.constraintScratch;
-    const std::size_t n = model.dofCount();
+    const std::size_t n = model.bodyCount();
     // The general kinematics at the state (a planar model's dynamics wrote only the planar ones).
     detail::updateTransforms<true>(model, state, ws);
     detail::composeWorldTransforms(model, ws);
