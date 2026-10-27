@@ -17,6 +17,8 @@ option(SUB0PHYSICS_ENABLE_ITT "Intel ITT task markers for VTune (fetches intel/i
 include(cmake/Dependencies.cmake)
 # Benchmark, budget, profiler and vectorization tooling for the Sub0 family, from Sub0Math.
 include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")
+# The pre-push hook refuses a push whose Sub0Math pin is not yet on GitHub (push Sub0Math first).
+set(SUB0MATH_PERF_PINS "file=cmake/Dependencies.cmake,var=SUB0PHYSICS_SUB0MATH_REVISION,repo=CraigHutchinson/Sub0Math,checkout=../Sub0Math,name=Sub0Math")
 
 # ── Core library ─────────────────────────────────────────────────────────────
 
