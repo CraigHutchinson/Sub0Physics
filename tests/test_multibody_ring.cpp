@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <numbers>
 #include <random>
 #include <span>
@@ -650,4 +651,42 @@ TEST_CASE("free-ring modal frequencies agree with the closed form")
     CHECK(std::abs(measured - omega) < 1e-5 * omega);
     // The foundation-only branch.
     CHECK(std::sqrt(kf / m) < omega);
+}
+
+TEST_CASE("ring run digest (compare across compilers)")
+{
+    // Two 64-node rings on the tree, 2000 steps of each implicit scheme from a deformed, moving state. The digest of
+    // every state bit and the energy flows is printed: the determinism gate compares it across GCC, GCC
+    // -march=x86-64-v3 and Clang -march=x86-64-v3 builds (docs/PERFORMANCE.md).
+    const Model model = ringmodels::ringRig({.nodes = 64}, false);
+    Workspace ws(model);
+    std::uint64_t digest = 1469598103934665603ULL;
+    const auto mix = [&](double v) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &v, sizeof bits);
+        for (int b = 0; b < 8; ++b)
+        {
+            digest = (digest ^ ((bits >> (8 * b)) & 0xFFU)) * 1099511628211ULL;
+        }
+    };
+    const auto h = sub0math::f64::Time::fromSi(31.25e-6);
+    for (int scheme = 0; scheme < 3; ++scheme)
+    {
+        State s = ringmodels::randomState(model, 21);
+        for (std::uint64_t t = 0; t < 2000; ++t)
+        {
+            const auto r = scheme == 0   ? stepLinearlyImplicitEuler(model, {}, t, h, s, ws)
+                           : scheme == 1 ? stepLinearlyImplicitMidpoint(model, {}, t, h, s, ws)
+                                         : stepLinearlyImplicitEuler(model, {}, t, h, s, ws, ImplicitTerms::DampingOnly);
+            REQUIRE(r.has_value());
+        }
+        for (const double v : s.values)
+        {
+            mix(v);
+        }
+        mix(s.dissipated.si());
+    }
+    char text[17];
+    std::snprintf(text, sizeof text, "%016llx", static_cast<unsigned long long>(digest));
+    MESSAGE("ring run digest " << text);
 }

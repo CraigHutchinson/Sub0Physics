@@ -13,6 +13,7 @@
 
 #include "sub0physics/multibody.hpp"
 #include "test_multibody_models.hpp"
+#include "test_ring_models.hpp"
 
 namespace
 {
@@ -194,4 +195,37 @@ TEST_CASE("M1d: site forces, forcing Jacobians, the midpoint step, the prepared 
         CHECK(allocations.load() - start == 0U);
         CHECK(std::isfinite(account.kinetic.si() + motion[0].position.x.si()));
     }
+}
+
+TEST_CASE("Ring substructures: steps, dynamics, elements, energy and reactions never allocate")
+{
+    const Model model = ringmodels::ringRig({.nodes = 64}, false);
+    Workspace ws(model);
+    Workspace aux(model);
+    State s = ringmodels::randomState(model, 1);
+    std::vector<double> tau(model.dofCount(), 0.1);
+    std::vector<double> out(model.dofCount());
+    Rk4Stepper rk4(model, ws);
+    const auto h = sub0math::f64::Time::fromSi(1e-5);
+
+    const std::size_t start = allocations.load();
+    for (int k = 0; k < 50; ++k)
+    {
+        const Forcing forcing{tau};
+        REQUIRE(stepLinearlyImplicitEuler(model, forcing, s.tick, h, s, ws));
+        REQUIRE(stepLinearlyImplicitEuler(model, forcing, s.tick, h, s, ws, ImplicitTerms::DampingOnly));
+        REQUIRE(stepLinearlyImplicitMidpoint(model, forcing, s.tick, h, s, ws));
+        REQUIRE(stepSemiImplicitEuler(model, forcing, s.tick, h, s, ws));
+        REQUIRE(rk4.step(model, forcing, s.tick, h, s, ws));
+        REQUIRE(prepareLinearlyImplicitStep(model, s, ws));
+        REQUIRE(completeLinearlyImplicitStep(model, forcing, s.tick, h, s, ws));
+        REQUIRE(forwardDynamics(model, s, tau, aux));
+        REQUIRE(solveMassMatrix(model, aux, out));
+        REQUIRE(inverseDynamics(model, s, tau, out, aux));
+        REQUIRE(evaluateElements(model, s, aux));
+        REQUIRE(computeEnergy(model, s, aux));
+        REQUIRE(computeReactions(model, s, tau, aux));
+    }
+    CHECK(allocations.load() - start == 0U);
+    CHECK(std::isfinite(s.values[10]));
 }
