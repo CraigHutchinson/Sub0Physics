@@ -60,7 +60,7 @@ sub0math::Vec3d toWorld(const Model& model, double i, double j)
     return v;
 }
 
-Rows patchRows(const Model& model, const Workspace& ws, std::size_t k)
+Rows patchRows(const Model& model, const Workspace& ws, std::size_t k, std::size_t offset = 0)
 {
     const std::size_t n = model.dofCount();
     Rows rows;
@@ -70,7 +70,7 @@ Rows patchRows(const Model& model, const Workspace& ws, std::size_t k)
     rows.supports.resize(k);
     for (std::size_t r = 0; r < k; ++r)
     {
-        const std::size_t edge = (Nodes - k / 2 + r) % Nodes;
+        const std::size_t edge = (Nodes - k / 2 + r + offset) % Nodes;
         const auto a = nodeWorld(model, ws, edge);
         const auto b = nodeWorld(model, ws, (edge + 1) % Nodes);
         RingContactPoint p;
@@ -179,6 +179,20 @@ void uniformBatched(BatchedData<W, K, T>& d)
                 hv[2 * W + l] += h[2 * W + l] * y[c * W + l];
             }
         }
+        // PERF (batched uniform pass 1): row r of D accumulated while column r of Y is finished, so Y is swept once
+        // (the kernel is memory-bound at 64 wheels); the dense dot over every coordinate is kept (the uniform shape).
+        std::array<double, K * W> sum{};
+        for (std::size_t c = 0; c <= r; ++c)
+        {
+            const double* jc = d.jdense.data() + c * Dofs * W;
+            for (std::size_t i = 0; i < T; ++i)
+            {
+                for (std::size_t l = 0; l < W; ++l)
+                {
+                    sum[c * W + l] += jc[i * W + l] * y[i * W + l];
+                }
+            }
+        }
         for (std::size_t i = 0; i < N; ++i)
         {
             const double* z = d.coupling.data() + i * 6 * W;
@@ -189,26 +203,22 @@ void uniformBatched(BatchedData<W, K, T>& d)
                 y0[l] -= z[0 * W + l] * hv[0 * W + l] + z[1 * W + l] * hv[1 * W + l] + z[2 * W + l] * hv[2 * W + l];
                 y1[l] -= z[3 * W + l] * hv[0 * W + l] + z[4 * W + l] * hv[1 * W + l] + z[5 * W + l] * hv[2 * W + l];
             }
-        }
-    }
-    for (std::size_t r = 0; r < K; ++r)
-    {
-        for (std::size_t c = 0; c <= r; ++c)
-        {
-            const double* jr = d.jdense.data() + r * Dofs * W;
-            const double* yc = d.y.data() + c * Dofs * W;
-            std::array<double, W> sum{};
-            for (std::size_t i = 0; i < Dofs; ++i)
+            for (std::size_t c = 0; c <= r; ++c)
             {
+                const double* j0 = d.jdense.data() + (c * Dofs + T + 2 * i) * W;
+                const double* j1 = j0 + W;
                 for (std::size_t l = 0; l < W; ++l)
                 {
-                    sum[l] += jr[i * W + l] * yc[i * W + l];
+                    sum[c * W + l] += j0[l] * y0[l] + j1[l] * y1[l];
                 }
             }
+        }
+        for (std::size_t c = 0; c <= r; ++c)
+        {
             for (std::size_t l = 0; l < W; ++l)
             {
-                d.delassus[(r * K + c) * W + l] = sum[l];
-                d.delassus[(c * K + r) * W + l] = sum[l];
+                d.delassus[(r * K + c) * W + l] = sum[c * W + l];
+                d.delassus[(c * K + r) * W + l] = sum[c * W + l];
             }
         }
     }
@@ -351,7 +361,7 @@ void fill(BatchedData<W, K, T>& d, const Model& model, Workspace& ws, std::vecto
                 d.sinv[(a * T + c) * W + l] = e[a];
             }
         }
-        const Rows rows = patchRows(model, ws, K);
+        const Rows rows = patchRows(model, ws, K, (5 * l) % Nodes); // each wheel's patch at its own nodes
         for (std::size_t r = 0; r < K; ++r)
         {
             const double* jr = rows.jacobian.data() + r * n;
