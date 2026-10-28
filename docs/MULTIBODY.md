@@ -703,3 +703,19 @@ Section 10's open question "error control for multibody steps" is answered for t
 stays open: the midpoint step is not L-stable, and the improved wheel shows where that matters (an unresolved stiff
 contact mode is not damped, WHEEL.md M2d finding 1).
 
+### M3a consumer status (2026-10-28)
+
+**No core change.** The consumer's connected trail bike (BikeDynamics docs/CONNECTED_BIKE.md, "M3a status") runs on the
+M2a to M2d pieces as they are: one tree of up to eight coordinates (massless carriers for the frame's travel and heave,
+the frame on pitch with a centre-of-mass offset, the fork, the swingarm with a shock tendon, the guided rider, two hubs)
+and two 64-node rings on hubs deep in the tree (264 coordinates). Its reference stepping (both rings' soft rows solved
+together with `M`, `DampingOnlyMassPattern`) reproduces MuJoCo's step to 7e-13 of the step's change on every engine state
+of ten runs when given the engine's constraint force, and its whole-run digest is identical on the three builds.
+
+**Contract note found by the consumer** (documentation, not a defect): `computeReactionsWithForcing` treats `Forcing::tau`
+as forces inside the joints, so a contact on a ring passed as its generalized force `J^T f` (the reference path's form)
+reaches the reactions as joint forces, and the ring nodes' Newton-Euler sees no external force: the reactions omit ring
+contact loads, as MuJoCo's `mj_rnePostConstraint` omits flex contacts. Consumers remove the ring's ground wrench where
+they need a subtree's interface load, as BikeLab does. "No force category is left out" holds for site forces, elements,
+closures and limits; a ring contact load given as a site-like external force on the ring would remove the correction
+(a candidate contract change, not needed for parity).

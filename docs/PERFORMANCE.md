@@ -232,3 +232,12 @@ The consumer's explicit nodal ring (its FIDELITY_LEVERS 4.11, PERFORMANCE "Findi
 setting a moving-wheel run is 20 to 90 times cheaper than the improved model. The functions added here
 (`casing_models.hpp`) are scalar closed forms called per contact or per switch; they have no measurable cost of their own.
 
+## Consumer check: the connected bike (M3a, 2026-10-28)
+
+No library change in M3a. The consumer's trail bike (BikeDynamics docs/PERFORMANCE.md, "Findings (M3a)") runs both
+Delassus forms on two 64-node rings hosted deep in an eight-coordinate tree: the structured (condensed) form is faster
+on every pass, 1.1x to 1.4x on the reference step (11.7 to 16.0 against 15.5 to 22.9 us a step, GCC 16, three
+interleaved passes, loaded host) and 1.15x to 1.3x on whole runs. The ranking measured on the moving wheel (section
+"Delassus A/B") holds for the connected vehicle; both forms stay. The consumer's hand-written whole-bike twin is
+1.6x to 2.3x faster than the library step: the forward pass's observation and the generic tree passes, the open gap
+already recorded for the moving wheel.
