@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   drift:
+    # Honours the explicit no-CI gate (docs/ci-strategy.md).
+    if: ${{ vars.CI_MODE != 'off' }}
     # Shared tooling pinned to a Sub0Math commit; keep both refs equal when moving it.
     uses: CraigHutchinson/Sub0Math/.github/workflows/upstream-drift-reusable.yml@924289212d30e2a3abc8246dac4e1946ba986e94
     with:
