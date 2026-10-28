@@ -24,6 +24,7 @@ set(SUB0MATH_PERF_PINS "file=cmake/Dependencies.cmake,var=SUB0PHYSICS_SUB0MATH_R
 
 add_library(Sub0Physics STATIC
     src/bounded_periodic_tridiagonal.cpp
+    src/casing_models.cpp
     src/circle_clearance.cpp
     src/convex_terrain.cpp
     src/corridor_builder.cpp

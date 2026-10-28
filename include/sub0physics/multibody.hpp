@@ -1,5 +1,6 @@
 #pragma once
 
+#include "sub0physics/multibody/casing_models.hpp"
 #include "sub0physics/multibody/constraint.hpp"
 #include "sub0physics/multibody/deformable_ring.hpp"
 #include "sub0physics/multibody/description.hpp"
