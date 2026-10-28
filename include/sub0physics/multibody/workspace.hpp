@@ -131,6 +131,7 @@ struct RingCondensation
     std::vector<BlockColumns<PlanarRingComponents, 3>> coupling; ///< Z = A_ww^-1 B, per node (2 x 3: w, x, y of the host's motion).
     std::array<double, 9> hostMatrix{};                    ///< B^T Z, row-major 3 x 3 in the host frame (w, x, y).
     std::vector<BlockColumns<PlanarRingComponents, 3>> border; ///< The border B this condensation used: the mass coupling, plus the contact loads' terms for a step.
+    bool inverseKept = false;   ///< The mass condensation's inverse pivots are the model's constants, already formed.
     bool blockDiagonal = false; ///< Every neighbour block was zero: `inversePivot` alone is the factor (no periodic sweep).
 };
 

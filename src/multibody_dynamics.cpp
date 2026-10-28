@@ -872,7 +872,7 @@ void solveMassTree(const Model& model, const Workspace& ws, double* x) noexcept
 }
 
 void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, std::size_t columns, double* scratch,
-                            bool skipZeroRingRows) noexcept
+                            bool skipZeroRingRows, const std::uint8_t* touchedRows) noexcept
 {
     const std::size_t m = columns;
     const auto coordinates = model.coordinates();
@@ -889,7 +889,14 @@ void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, 
         {
             double* x0 = x + (ring.firstCoordinate + 2 * i) * m;
             double* x1 = x0 + m;
-            if (skipZeroRingRows)
+            if (touchedRows != nullptr)
+            {
+                if (touchedRows[ring.firstCoordinate + 2 * i] == 0U)
+                {
+                    continue;
+                }
+            }
+            else if (skipZeroRingRows)
             {
                 bool zero = true;
                 for (std::size_t c = 0; c < m; ++c)

@@ -177,6 +177,7 @@ private:
     std::vector<double> structured_; // capacity x (2 tree + 8): the structured form's per-row values
     std::vector<double> sweep_;      // 6 x capacity: the batched solve's host terms
     std::vector<std::uint64_t> key_; // 2 x capacity: the structured form's (ring, node) keys per row
+    std::vector<std::uint8_t> touched_; // dofCount: the uniform form's ring nodes some row touches
     std::vector<double> delassus_;   // capacity^2
     std::vector<double> factor_;     // capacity^2
     std::vector<double> rhs_;        // capacity

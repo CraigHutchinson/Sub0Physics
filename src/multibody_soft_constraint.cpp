@@ -96,7 +96,7 @@ SoftConstraintSolver::SoftConstraintSolver(const Model& model, std::size_t capac
     : capacity_(capacity), dof_(model.dofCount()), solved_(capacity * model.dofCount(), 0.0),
       index_(capacity * (model.treeDofCount() + RingSupportSize), 0),
       structured_(capacity * (2 * model.treeDofCount() + 2 * RingSupportSize), 0.0), sweep_(6 * capacity, 0.0),
-      key_(2 * capacity, 0),
+      key_(2 * capacity, 0), touched_(model.dofCount(), 0),
       delassus_(capacity * capacity, 0.0),
       factor_(capacity * capacity, 0.0), rhs_(capacity, 0.0), slack_(capacity, 0.0), work_(capacity, 0.0),
       subset_(capacity, 0), active_(capacity, 0)
@@ -142,15 +142,37 @@ void SoftConstraintSolver::formUniform(const Model& model, const Workspace& work
     }
     // PERF (A/B uniform pass 2): all rows solved in one sweep, Y laid out coordinate-major (Y[i k + r]) so the rows
     // share SIMD lanes; each column bit for bit its own solve.
+    // PERF (A/B uniform pass 4): only the tree and the touched nodes are laid out; no zero scan.
+    const std::size_t nt = model.treeDofCount();
+    std::ranges::fill(touched_, 0U);
     for (std::size_t r = 0; r < k; ++r)
     {
         const double* jr = jacobian.data() + r * n;
-        for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t i = 0; i < nt; ++i)
         {
             solved_[i * k + r] = jr[i];
         }
+        const std::size_t* index = index_.data() + r * (nt + RingSupportSize);
+        for (const std::size_t at : {index[nt], index[nt + 2]})
+        {
+            if (touched_[at] == 0U)
+            {
+                touched_[at] = 1U;
+                std::fill_n(solved_.data() + at * k, 2 * k, 0.0);
+            }
+        }
     }
-    detail::solveMassMatrixColumns(model, workspace, solved_.data(), k, sweep_.data(), SkipZeroRingRows);
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        const double* jr = jacobian.data() + r * n;
+        const std::size_t* index = index_.data() + r * (nt + RingSupportSize);
+        for (std::size_t s = nt; s < nt + RingSupportSize; ++s)
+        {
+            solved_[index[s] * k + r] = jr[index[s]];
+        }
+    }
+    detail::solveMassMatrixColumns(model, workspace, solved_.data(), k, sweep_.data(), SkipZeroRingRows,
+                                   touched_.data());
     // PERF (A/B uniform pass 1): with supports, the products read only each row's support, in ascending coordinate
     // order: the terms skipped are exact zeros, so the sums are bit for bit those over every coordinate.
     const std::size_t width = model.treeDofCount() + RingSupportSize;

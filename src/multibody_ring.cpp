@@ -440,8 +440,15 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
         RingCondensation& cond = system == RingSystem::Mass ? rw.mass : rw.step;
         const std::size_t nodes = ring.nodeCount;
         const bool contact = system == RingSystem::Step && rw.contactBlocks;
+        // PERF: constant mass inverse pivots formed once, not per factorisation.
+        const bool kept = system == RingSystem::Mass && cond.inverseKept;
         for (std::size_t i = 0; i < nodes; ++i)
         {
+            if (kept)
+            {
+                cond.border[i] = rw.border[i];
+                continue;
+            }
             const double m = ring.mass[i];
             Block2 diagonal{m, 0.0, 0.0, m};
             Block2 upper{};
@@ -476,15 +483,18 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
             }
         }
         // PERF: a block-diagonal ring block (the mass matrix; the reference's step) skips the periodic sweep.
-        cond.blockDiagonal = std::ranges::all_of(rw.stepUpper, [](const Block2& b) {
-            return b[0] == 0.0 && b[1] == 0.0 && b[2] == 0.0 && b[3] == 0.0;
-        });
+        if (!kept)
+        {
+            cond.blockDiagonal = std::ranges::all_of(rw.stepUpper, [](const Block2& b) {
+                return b[0] == 0.0 && b[1] == 0.0 && b[2] == 0.0 && b[3] == 0.0;
+            });
+        }
         std::span<BlockColumns<C, 3>> z = cond.coupling;
         if (cond.blockDiagonal)
         {
             for (std::size_t i = 0; i < nodes; ++i)
             {
-                if (!sub0physics::detail::invertSymmetricPositive<C>(rw.stepDiagonal[i], cond.inversePivot[i]))
+                if (!kept && !sub0physics::detail::invertSymmetricPositive<C>(rw.stepDiagonal[i], cond.inversePivot[i]))
                 {
                     return false;
                 }
@@ -503,6 +513,7 @@ bool condenseRings(const Model& model, Workspace& ws, RingSystem system, double 
             }
             solvePeriodicBlockTridiagonal<C, 3>(cond.inversePivot, cond.next, cond.wrap, z);
         }
+        cond.inverseKept = cond.inverseKept || (system == RingSystem::Mass && cond.blockDiagonal && !withElements);
         // B^T Z, symmetric.
         std::array<double, 9> h{};
         for (std::size_t i = 0; i < nodes; ++i)
