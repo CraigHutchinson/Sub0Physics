@@ -99,7 +99,7 @@ SoftConstraintSolver::SoftConstraintSolver(const Model& model, std::size_t capac
       key_(2 * capacity, 0), touched_(model.dofCount(), 0),
       delassus_(capacity * capacity, 0.0),
       factor_(capacity * capacity, 0.0), rhs_(capacity, 0.0), slack_(capacity, 0.0), work_(capacity, 0.0),
-      subset_(capacity, 0), active_(capacity, 0)
+      subset_(capacity, 0), prior_(capacity, 0), active_(capacity, 0)
 {
 }
 
@@ -381,6 +381,7 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         active_[r] = equality(r) || rhs_[r] < 0.0 ? 1U : 0U;
     }
     const std::uint32_t maxPivots = static_cast<std::uint32_t>(16U * k + 64U);
+    std::size_t priorCount = 0;
     for (;;)
     {
         // Solve A_SS f_S = -q_S by Cholesky.
@@ -392,7 +393,15 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
                 subset_[m++] = r;
             }
         }
-        for (std::size_t a = 0; a < m; ++a)
+        // PERF: factor rows before the first changed row kept across pivots.
+        std::size_t kept = 0;
+        while (kept < m && kept < priorCount && prior_[kept] == subset_[kept])
+        {
+            ++kept;
+        }
+        std::copy_n(subset_.begin(), m, prior_.begin());
+        priorCount = m;
+        for (std::size_t a = kept; a < m; ++a)
         {
             for (std::size_t c = 0; c <= a; ++c)
             {

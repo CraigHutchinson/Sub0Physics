@@ -184,6 +184,7 @@ private:
     std::vector<double> slack_;      // capacity
     std::vector<double> work_;       // capacity
     std::vector<std::size_t> subset_; // capacity
+    std::vector<std::size_t> prior_;  // capacity: the subset the factor rows were formed for
     std::vector<std::uint8_t> active_; // capacity
 };
 
