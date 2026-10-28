@@ -99,10 +99,13 @@ spent only where it is needed.
 | Corridor tightness (`tightCorridor`) | Continuous | `terrain/corridor_builder.hpp` | A relative cell-saving target; doubles the sub-interval count until a doubling gains less. Containment holds at every count |
 | Quadrature slots | Discrete (per slot) | `LinearlyImplicitEuler::setQuadrature` | Integrals nothing depends on use the trapezoid rule on the endpoint derivatives, so energy ledgers measure the method, not the bookkeeping |
 | Multibody implicit terms (`ImplicitTerms::Full`, `MaterialStiffness`, `DampingOnly`, `DampingOnlyMassPattern`) | Discrete | `multibody/implicit_euler.hpp` | None. `DampingOnly` is MuJoCo's `implicitfast` structure and the more accurate at equal step for lightly damped modes; `Full` is needed only past the explicit stability limit (docs/MULTIBODY.md, M1d status). `DampingOnlyMassPattern` is `implicitfast` exactly (dampers between branches explicit); a parity setting, not a fidelity lever (M2c) |
-| Multibody step (linearly implicit Euler or midpoint) | Discrete | `stepLinearlyImplicitEuler`, `stepLinearlyImplicitMidpoint` | None yet. The midpoint step has no numerical damping and order 2 for constant M; the two share their solve, so they are an embedded pair for a future step-size controller |
+| Multibody step (linearly implicit Euler or midpoint) | Discrete | `stepLinearlyImplicitEuler`, `stepLinearlyImplicitMidpoint` | None. The midpoint step has no numerical damping and order 2 for constant M |
+| Multibody step size on a lattice (M2d) | Continuous | `advanceDyadically`, `DyadicStepController`, `PreparedStepUse::Keep` | An error tolerance; the estimate by step doubling (three solves from two preparations); steps `base * 2^k`, aligned, never across a caller's boundary (command ticks), landing on it; switches bisected to `minLevel` |
+| Event floor (M2d) | Continuous | `DyadicStepController::minLevel` | The time a switch is located to; the error a switch leaves is first order in it |
+| Swept certificate (M2d) | Discrete (on or off) | `ConvexTerrain::certifySweptRingClearance` | A two-sided gap bound over a step with both ends known: certified half steps skip the contact query, uncertified edges out of contact are bisected (no graze or tunnelling missed) |
 | Multibody formulation (planar or general) | Not a fidelity lever | `ModelBuilder::setFormulation` | Same results to rounding; the planar one is cheaper and chosen automatically |
 
-## Levers of the deformable ring (recorded, not yet studied)
+## Levers of the deformable ring (studied in M2d where marked)
 
 The ring substructure (docs/WHEEL.md, M2a status) exposes two levers of the nodal ring and reserves the cheaper models:
 
@@ -111,8 +114,9 @@ The ring substructure (docs/WHEEL.md, M2a status) exposes two levers of the noda
 | Node count N | Discrete | Any N >= 3 through the description; the canonical tables cover divisors of 128. No error estimate yet: judge against a converged ring (the 32/64/128 sensitivity) |
 | Non-uniform spacing | Continuous (spacing profile) | Per-node and per-edge coefficients make a fixed non-uniform ring a description, not a code change; between runs only, after the mass, first-moment and spin-inertia checks (WHEEL.md section 2.5) |
 | Quasi-static, modal and rigid-ring casing models | Discrete (models of the same mechanism) | Future cheaper models behind the substructure (WHEEL.md section 2.4); they need state transfers |
-| Contact law (reference soft constraint, contact element) | Discrete (models of the same contact) | M2c: the reference rows (parity) and the contact element with exact Jacobians (the improved model's carrier); the element's law, its parameters and event-located onset are M2d's, judged against a converged run (continuous, target-driven: step and event tolerance first) |
-| The soft solve's Delassus matrix (one mass solve per row, or the condensed Schur complement) | Cost only (same result) | M2c: one solve per row; the O(k^2) Schur form is the recorded lever (docs/PERFORMANCE.md, open gap) |
+| Contact law (reference soft constraint, contact element) | Discrete (models of the same contact) | M2d: the improved model's compliant element (revision 1: the reference row's transient on the mid-edge mass), event-located switches (pair, pushing state, witness feature), the swept certificate; frontier against a converged run in the consumer's FIDELITY_LEVERS 4.10 |
+| Hub-relative foundation viscosity | Model value (versioned), not a lever | `UniformRingSpec::foundationViscosity`; zero is the reference ring. Damps the global casing modes that no edge damps |
+| The soft solve's Delassus matrix (`DelassusForm`) | Cost only (same matrix to rounding) | M2d A/B, three passes each: the structured form wins on every target measured, single wheel and batched (docs/PERFORMANCE.md, "Delassus A/B"); the uniform form stays the reference's path for its bits |
 
 ## Not provided yet
 

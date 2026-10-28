@@ -652,8 +652,7 @@ element Jacobians when substructures are present; velocity-only rows admitted in
 - **Constrained energy behaviour:** the rig has no closures (M1d status); implicit Euler's own numerical damping is
   material on it, and the linearly implicit midpoint step removes it for unconstrained mechanisms. Whether a
   RATTLE-type midpoint is needed for closures is to be measured on a four-bar linkage when one is modelled.
-- **Error control for multibody steps:** the Euler and midpoint steps share their solve and form an embedded pair; a
-  controller and event location at force-law switches (as for the stations) are the next continuous lever.
+- **Error control for multibody steps:** done in M2d (step doubling on a dyadic lattice, events bisected; M2d status).
 - **Transcendentals:** decided, see section 8: our own (`sub0math::det`). Remaining to verify: the ring and ring-contact
   digests match on Linux and macOS CI.
 
@@ -685,3 +684,22 @@ contract changes (details, derivation and evidence in [WHEEL.md, M2c status](WHE
   regularisation by, and the contact element's gap kinematics with exact first and second derivatives.
 - The ring's condensation skips the periodic sweep when its block is block-diagonal (always for the mass matrix), bit
   for bit.
+
+### M2d status (2026-10-28)
+
+**Landed** (details and evidence in [WHEEL.md, M2d status](WHEEL.md#m2d-status-2026-10-28)): the error-controlled
+multibody step section 10 asked for, on a dyadic lattice (`integrator/dyadic_step.hpp`: `DyadicClock`,
+`DyadicStepController`, `advanceDyadically`), with step doubling of the linearly implicit midpoint step as the estimate
+rather than the Euler-midpoint pair (the two do not share a matrix: `M - h D - h^2 K` against `M - h/2 D - h^2/4 K`);
+`PreparedStepUse::Keep` lets one preparation serve the coarse step and the first half step. Contract changes:
+
+- `completeLinearlyImplicitStep(..., PreparedStepUse use = Consume)`: Keep leaves the preparation valid for the same
+  starting values (bit for bit a fresh preparation).
+- `SoftConstraintSolver::solve(..., supports, DelassusForm)`: row supports make the uniform form's products sparse (bit
+  for bit) and enable the structured form.
+- `UniformRingSpec::foundationViscosity` (default zero).
+
+Section 10's open question "error control for multibody steps" is answered for the ring; "higher-order implicit scheme"
+stays open: the midpoint step is not L-stable, and the improved wheel shows where that matters (an unresolved stiff
+contact mode is not damped, WHEEL.md M2d finding 1).
+

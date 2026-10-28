@@ -1,6 +1,7 @@
 # Deformable wheel (design, steps M2–M3 of ADR 0003)
 
-- **Status:** design, 2026-10-21. M2c (the contact element, the reference soft-constraint law and their place in the
+- **Status:** design, 2026-10-21. M2d (the improved model's dyadic error-controlled step, swept certificate,
+  foundation viscosity and the Delassus A/B) landed 2026-10-28, see [M2d status](#m2d-status-2026-10-28). M2c (the contact element, the reference soft-constraint law and their place in the
   substructure's step) landed 2026-10-27, see [M2c status](#m2c-status-2026-10-27). M2b (contact geometry, §3.1, and the certified skip of §3.4) is implemented
   (2026-10-27): casing edges against canonical convex pieces with exact witnesses and the rotation-aware clearance
   bound, in `geometry/convex_terrain.hpp` on Sub0Math's closed-form capsule contacts; see
@@ -343,7 +344,9 @@ and an Interactive budget of 2 ms per 16.7 ms frame.
 - Whether planar-first (exact Coulomb as an LCP, parity with the planar references) or 3D-first (finite width,
   lateral modes) is the first casing. Recommended: planar first, with storage and laws written for three components.
 - The improved normal law's form and parameters (linear, Hunt–Crossley, a tread layer in series with the node), and
-  whether a massless contact layer removes the node-on-contact mode that sets the step.
+  whether a massless contact layer removes the node-on-contact mode that sets the step. M2d: revision 1 is linear and
+  keeps the reference row's transient; switches of the witness feature dominate its cost, so a law distributed along
+  the edge (no force jump between nodes) is the next candidate (M2d status).
 - Whether `f_n` must be iterated for the friction bound, or the start-of-step value is within budget.
 - Whether the hierarchy pays for itself at N = 64.
 - The cost and accuracy of the rigid-ring model's state transfer at contact onset (the most demanding switch).
@@ -530,3 +533,66 @@ coupling plus the loads' terms, the place section 10 reserved for them).
   branch's base (b7c004b). The new contact digest and the consumer's moving-wheel digest agree on all three builds.
 - **Not here:** the improved model's law and parameters, event-located onset and swept certification (M2d), friction
   rows (M3b).
+
+## M2d status (2026-10-28)
+
+**Landed:** the pieces of the improved moving wheel (section 3.2's contact element model, section 3.4's swept contact and
+events, section 5's error-controlled step). The consumer's improved moving wheel (its docs/CONNECTED_BIKE.md, "M2d
+status") runs on them beside the frozen reference; the reference path is unchanged bit for bit.
+
+- **Error-controlled steps on a dyadic lattice** (`integrator/dyadic_step.hpp`; the consumer's time-base decision D4).
+  Time is an integer count of fine units (`base / 2^S`); a step of level k is `base * 2^k`, starts aligned to its own
+  length, never crosses a boundary the caller names (a command tick, the end) and lands on it. `DyadicStepController`
+  changes the level by whole factors of two from fixed thresholds (`ratio * 2^(q+1) <= safety^(q+1)` grows), so it
+  evaluates no power function. `advanceDyadically` drives any system that proposes a step with an error ratio and an
+  event flag: an error above target is retried at the predicted level, an event (a switch inside the step) is bisected,
+  both down to `minLevel`, where the step is accepted (the switch is then located to the floor step). Faults retry
+  smaller. Decisions depend on the reports, the configuration and the position only.
+- **Step doubling from one preparation** (`PreparedStepUse::Keep`): `completeLinearlyImplicitStep` may leave the
+  preparation in place, so the coarse step and the first half step share it. Each completion is bit for bit what a
+  fresh preparation gives (tested with ring contact loads, both schemes).
+- **The swept two-sided certificate** (`ConvexTerrain::certifySweptRingClearance`, `SweptStepMotion`). Along a step's
+  straight interpolant in the coordinates (hub centre and angle and hub-frame node displacements each linear), every
+  casing point is within `tau R` of its start and `(1 - tau) R` of its end, so each edge's gap is at least
+  `(g0 + g1 - R) / 2` at every instant, `R = hub travel + node travel + lever |dtheta|` (rotation uncapped so it stays
+  proportional). Conservative in a 1001-instant property test on four fixtures, and it certifies twice as many random
+  steps as the one-sided `certifyRingClearance` (26 against 12 of 160). Per-edge bounds are returned.
+- **Hub-relative foundation viscosity** (`UniformRingSpec::foundationViscosity`, N s/m^2 per unit centreline length, a
+  dashpot `c_f ds` beside each slide). Zero is the reference ring bit for bit; a non-zero value is an improved-model
+  description value (the consumer's review decision D5), never a numerical fix.
+- **The Delassus A/B** (`DelassusForm`, `SoftRowSupport`): the soft-constraint solve forms `J M^-1 J^T` either by a
+  full mass-matrix solve per row (uniform, the reference's bits) or from the condensed Schur complement in O(k^2) per
+  pair (structured: `t = j_t - J_h^T sum B^T A^-1 j_w`, `D_rc = t_r^T S^-1 t_c + shared-node terms`, with `t^T S^-1 t`
+  from one half sweep of the tree factor). Both behind one call; three optimisation passes each; numbers per target in
+  docs/PERFORMANCE.md ("Delassus A/B").
+
+**The improved contact element** (the consumer's choice, recorded here because it answers section 11's open question
+on the law). Each (edge, piece) pair in overlap carries a unilateral spring-damper on its gap at the casing's axis
+witness (`measureRingContact`, `ringContactLoad` with the law's exact derivatives), so the contact is implicit through
+its Jacobians in the linearly implicit midpoint step (`ImplicitTerms::Full`). Three findings from building it:
+
+1. **The reference row is not a spring.** The soft row drives the gap's acceleration to `aref` (a critically damped
+   response of time constant `tc`), but its force balances slow loads through `J a = d aref + (1 - d) J a0`, which is
+   `1 / (1 - d)` (100 at `d = 0.99`) times stiffer than the transient: about 2.3e6 N/m and 4.6e3 N s/m per contact on
+   this ring, a node-on-contact mode near 1.4 kHz, heavily overdamped. A force element matched to that is a stiff,
+   unresolved mode that the midpoint step (A-stable, not L-stable) does not damp: 19 000 steps on flat ground and 0.25% of
+   the energy created at a 1e-5 m target. Revision 1 of the improved law keeps the row's *transient* instead (`k = m_c
+   / (d tc^2)`, `c = 2 m_c / tc` on the mid-edge effective mass `m_c = 2 m`), a declared tread compliance whose mode the
+   step resolves. Its static deflection is larger than the reference's (a model-form difference, reported at L3, not a
+   numerical one).
+2. **The gap's minimising feature is a switch.** The gap of a capsule against a convex piece is a minimum over
+   features: on a face the force jumps from one end node of the edge to the other as the edge rolls past level, at a
+   vertex it turns onto the next one. Not locating those cost first order: the energy created fell only as the 0.3th
+   power of the tolerance. Keying the switch on the witness feature and the axis end (as well as the pair and its
+   pushing state) gave a tenfold drop; what remains scales with the event floor (first order in the floor step).
+3. **Events dominate the cost.** On rolling contact every edge switches several times; each switch costs a bisection
+   to the floor and a regrowth. A smooth (distributed) tread law along the edge, whose force does not jump between
+   nodes, is the recorded next lever (section 11).
+
+**Global casing modes.** The ring's translation and rotation against the hub change no edge length, so no edge viscosity
+damps them; the reference ring has no foundation damping. The midpoint step adds no numerical damping: in the
+consumer's controlled case (free flight under a constant hub force) the mode energy's late peak is 1.01 of its early
+peak (the reference scheme's 0.97). Foundation viscosity damps them when the model asks for it.
+
+**Not done here:** an L-stable step for unresolved modes (TR-BDF2 or a massless contact layer), the distributed tread
+law, friction rows (M3b).

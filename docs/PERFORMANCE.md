@@ -15,6 +15,8 @@ These are deterministic, so they block in CI:
 |---|---|---|
 | No allocation while stepping | `Sub0Physics_AllocationTests` | RK4/midpoint steps, recording, ledgers, statistics, selection and the closed form allocate nothing; clearance queries (both overloads), every `PreparedProfile` query, the `ConvexTerrain` contact and clearance queries and the bounded periodic chain solve (once the solution has capacity) allocate nothing |
 | No allocation in multibody dynamics | `Sub0Physics_MultibodyAllocationTests` | Semi-implicit Euler and `Rk4Stepper` steps (with changing forcing), inverse dynamics, site kinematics and Jacobians, and energy on a 10-DOF tree allocate nothing once the `Workspace` exists; with force elements, linearly implicit Euler (dense and tree factorisation), semi-implicit Euler, RK4, `evaluateElements` and energy allocate nothing; with constraints, implicit and semi-implicit Euler (closures, an LCP row, split steps), RK4 with closures, `projectConstraints` and `computeReactions` allocate nothing; in both formulations, steps with site forces and forcing Jacobians (implicit Euler, midpoint, semi-implicit Euler), the prepared step and its site queries, batch site kinematics with energy, `computeAppliedForce` and `computeReactionsWithForcing` allocate nothing |
+| Dyadic step and swept certificate (M2d) | `test_dyadic_step.cpp`, `test_convex_terrain.cpp` | Steps aligned, never across a boundary, landing on it, events only inside floor steps, replay identical; step doubling meets its target and cost falls as it loosens; the swept bound never exceeds the true gap at 1001 instants and certifies more than the one-sided bound |
+| Delassus forms (M2d) | `test_multibody_ring_contact.cpp` | The uniform form with supports is bit for bit the form without; the structured form agrees to 1e-11 relative; a kept preparation completes bit for bit as a fresh one |
 | Ring substructure gate (M2a) | `test_multibody_ring.cpp` | The condensed ring agrees with its expanded oracle (bodies and tendons, dense path) at N = 8 and 16: dynamics, energy, element forces and Jacobian blocks, reactions to 1e-13, steps and runs of every stepper to 1e-10; mass properties; free flight; the ledger closes with ring damping; a modal frequency to 1e-5 of the closed form; the periodic block solver against dense solves; a run digest printed for the cross-compiler comparison |
 | Planar formulation, forcing and two-phase step gate (M1d) | `test_multibody_planar.cpp` | Every query of the planar formulation equals the general one to 1e-13 and stepped trajectories to 1e-11; site forces equal `J^T F` and are applied where they act in reactions; forcing Jacobians step like the same element; `DampingOnly` equals the closed-form implicitfast step; the midpoint step keeps an oscillator's energy to 1e-12 and is order 2; prepare then complete equals the one-call step bit for bit; a massless leaf is refused |
 | Constraints gate (M1c) | `test_multibody_constraints.cpp` | Slider-crank closure residual within the requested tolerance and not drifting (every stepper); a hard stop never overshot, the impact located to the requested gap and its loss in the ledger; reactions equal to independent statics; ledger channels first order |
@@ -153,6 +155,58 @@ Rules that keep hot code fast and analysable:
 | 2026-10-27 | M2a: one implicit Euler step of two 64-node rings on a five-coordinate tree | Pair `two 64-node rings implicit Euler step`, five interleaved rounds, loaded host: GCC 16 library 10.3-14.1 us, twin 8.0-9.1 us (about 1.3x); Clang 22 `-march=x86-64-v3` 11.2-17.6 against 8.2-12.7 us (about 1.35x). The expanded bodies (dense `LDL^T` of n = 261, plus dense element accumulation) 0.8-1.4 ms | Condensation adopted (about 100x the dense path). The consumer's rig and station pairs against the previous Sub0Physics, four interleaved rounds: rig run 15.2-17.6 ms before, 15.5-19.1 ms after (ratios to its twin 1.6-2.1x both), stations within noise: no regression |
 | 2026-10-27 | M2c: the reference's step matrix on a ring is block-diagonal (`DampingOnlyMassPattern` keeps only each node's own damping block; the mass block is always diagonal), yet both condensations ran the periodic block sweep with zero neighbour blocks | The consumer's moving-wheel pair against its hand-written twin, which condenses with 2 x 2 inverses | `condenseRings` detects a block-diagonal ring block and uses the inverse pivots alone (bit for bit: the ring, contact and consumer digests are unchanged). The consumer's rig and station pairs against its main build, interleaved: within noise **A/B, not a verdict (2026-10-27):** the library's uniform per-row matrix solve and the twin's O(k^2) Schur form are both kept as candidate paths. The matrix form may map better onto SIMD or batched (many-bike, many-contact) hardware. Each gets three optimisation passes, measured on the consumer scenario and on a batched shape, before either is chosen per target (Sub0Math PERFORMANCE "Choosing between alternatives") |
 
+## Delassus A/B (M2d, 2026-10-28)
+
+The soft-constraint solve's `J M^-1 J^T` in two forms behind `SoftConstraintSolver::solve(..., supports, DelassusForm)`
+(docs/WHEEL.md, "M2d status"), each given three optimisation passes (Sub0Math PERFORMANCE, "Choosing between
+alternatives"). Measured on the library solve (one 64-node ring on the five-coordinate rig tree, k contact rows of a
+patch, all pushing; `soft solve 64-node ring, k rows, <form>` in `tests/bench_delassus.cpp`), on a batched shape (both
+forms as structure-of-arrays kernels over W wheels with the wheel index innermost, each wheel's patch at its own nodes;
+`Delassus W wheels x 8 rows SoA, <form>`), and on the consumer's moving-wheel step (BikeDynamics docs/PERFORMANCE.md).
+CrogLegion shared with other agents; medians with min-max of interleaved rounds.
+
+**Passes.**
+
+| Pass | Uniform (full solve per row; bit for bit the reference's arithmetic) | Structured (Schur, O(k^2)) |
+|---|---|---|
+| 0 | `solveMassMatrix` per row, dense products | `t = j_t - J_h^T sum B^T A^-1 j_w`, a full tree solve per row, shared-node terms |
+| 1 | Products `J Y`, `J a0`, `J^T f` over each row's support (exact zeros skipped, same order) | Half a tree solve: `t^T S^-1 t = w^T D^-1 w` after one sweep of the factor |
+| 2 | All rows in one coordinate-major sweep (`solveMassMatrixColumns`), rows sharing SIMD lanes | `J a0` and `J^T f` straight from the support, no index lists |
+| 3 | The sweep's ring elimination skips nodes no row touches | Shared nodes by integer keys |
+
+Library solve, GCC 16, ns at 4 / 8 / 16 rows: pass 0 uniform 1670 / 4430 / 14 730, structured 575 / 1500 / 6170; after
+pass 1 about 1080 / 2700 / 8800 and 290 / 990 / 5300; pass 2 (uniform only) no gain under GCC's SSE2; after pass 3 810
+/ 1930 / 7470 and 284 / 930 / 5390 (5 rounds). The pivoting (one Cholesky of the active set per pivot) dominates both
+at 16 rows.
+
+**After three passes, per target** (3 interleaved rounds; ns, 4 / 8 / 16 rows):
+
+| Target | Uniform | Structured | Structured advantage |
+|---|---|---|---|
+| GCC 16 | 1300 / 2900 / 6800 | 460 / 1160 / 4600 | 2.8x / 2.5x / 1.5x |
+| GCC 16 `-march=x86-64-v3` | 720 / 1530 / 6680 | 277 / 786 / 5240 | 2.6x / 1.9x / 1.3x |
+| Clang 22 `-march=x86-64-v3` | 812 / 1415 / 4840 | 265 / 774 / 3520 | 3.1x / 1.8x / 1.4x |
+
+**Batched shape** (ns for the batch; 8 rows a wheel; 5 rounds): the uniform kernel gained nothing from accumulating `D`
+during its backward sweep (its pass 1), so its own passes are the library's; the order-of-magnitude asymptotic difference
+(O(k N) against O(k^2) at N = 64) is the rule's exception, so the batched decision does not wait on further passes.
+
+| Target | 1 wheel: uniform, structured | 8 wheels | 64 wheels | Per wheel at 64: uniform, structured |
+|---|---|---|---|---|
+| GCC 16 | 2450, 161 | 14 700, 1170 | 148 000, 13 300 | 2.3 us, 0.21 us (11x) |
+| GCC 16 `-march=x86-64-v3` | 2450, 164 | 11 300, 1150 | 99 900, 13 100 | 1.6 us, 0.21 us (7.6x) |
+| Clang 22 `-march=x86-64-v3` | 2130, 194 | 18 500, 1550 | 99 000, 14 700 | 1.5 us, 0.23 us (6.7x) |
+
+AVX2 helps the uniform kernel most (2.3 to 1.6 us a wheel at 64 wheels): it is fixed-shape and streams. The structured
+kernel gathers each wheel's two nodes per lane, and got slower when the wheels' patches stopped sharing nodes (9 to 13
+us at 64 wheels), yet stays 7 to 11 times ahead.
+
+**Decision per target:** the structured form on every target measured, scalar and batched. The uniform form is not
+deleted: it is the reference path's arithmetic (its digest depends on it), it handles rows without ring supports, and it
+is the candidate if a target with wide fixed-shape throughput (GPU) or much smaller rings changes the balance. On the
+consumer's whole step the difference is small (BikeDynamics: 1.1x to 1.2x on flat ground, within noise on the rock),
+because the forward pass's other work dominates.
+
 ## Open gaps
 
 Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANCE.md`).
@@ -160,7 +214,7 @@ Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANC
 | Since | Pair | Gap | Cause | Follow-up |
 |---|---|---|---|---|
 | 2026-10-27 | `ring contacts 64 edges, square rock` | GCC 16 0.93x to 1.19x, median 1.09x (119-143 vs 130-165 ns); Clang 22 1.19x to 1.36x, median 1.31x (129-138 vs 154-188 ns); `-march=x86-64-v3`, 5 interleaved rounds, loaded host | The library writes a fuller record (axis parameter, capsule point, crossing flag, quantities; 112 bytes against the twin's 72), keeps found/measured counts and the smallest gap, and validates its inputs | Re-measure when M2c binds contacts to elements (the record is what the element needs); accept or trim then |
-| 2026-10-27 | The consumer's moving-wheel reference step (one 64-node ring, soft-constraint contact rows) against its hand-written twin | about 3x (GCC 16 2.6-4.1x, Clang 22 2.0-4.5x; 4-13 us against 1.4-4 us a step, loaded host) | `SoftConstraintSolver` forms `J M^-1 J^T` with one full mass-matrix solve per row (each O(N) with the condensation); the twin forms it from the condensed Schur complement in O(k^2). The consumer also computes energy and accelerations each state | A structured Delassus product: the rows' supports (host chain and two nodes) against the condensation's Z and host matrix, without a full solve per row; then re-measure on the consumer |
+| 2026-10-27 | The consumer's moving-wheel reference step (one 64-node ring, soft-constraint contact rows) against its hand-written twin | about 2.9x to 3.2x after M2d (GCC 16 5.45 against 1.90 us a step on flat ground; GCC x86-64-v3 5.3 against 1.6; Clang 22 7.0 against 2.4); was 2.6x to 4.5x | M2d: the Delassus A/B (above) took the per-row solve's cost down on both forms; the reference keeps the uniform form (its bits). What remains: the forward pass's energy and acceleration observation every state, the general tree and element code | A forward pass without observation for consumers that do not record every state; the reference may switch to the structured form only with a re-pinned digest and its L2 bounds (an owner decision) |
 | 2026-10-27 | `two 64-node rings implicit Euler step` | about 1.3x (GCC 16), 1.35x (Clang 22) | The library evaluates the laws through `respond` (potential and the full response per coordinate), the ring's right-hand side in a separate pass, generic periodic-solve loops over `std::array` blocks and the general tree code; the twin fuses these | Profile when contact (M2c) is in the step; the step is far inside the frame budget |
 | 2026-10-21 | `page height x1024`, `HeightPage::heightAt` (single sample) | about 1.06x median (0.95x to 1.08x over 5 interleaved runs); the batch `heightsAt` pair is at 1.00x | Per-call conversion and bounds work around an otherwise identical kernel | Accepted with these numbers: callers with many samples use `heightsAt` (G3), which extraction does |
 | 2026-10-20 | `planar tree 10-DOF implicit Euler step, 2 elements` | 1.1x to 1.5x since M1d (GCC 16, three rounds; was 2.0x); Clang 22 `-march=x86-64-v3` 1.5x | The planar formulation closed the transform cost; the rest is the generic element loop and the forcing/assembly checks per step | The consumer's whole rig run is the judge (about 2.0x, below); next: the elements (next row) |
