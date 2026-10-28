@@ -113,12 +113,14 @@ The ring substructure (docs/WHEEL.md, M2a status) exposes two levers of the noda
 |---|---|---|
 | Node count N | Discrete | Any N >= 3 through the description; the canonical tables cover divisors of 128. No error estimate yet: judge against a converged ring (the 32/64/128 sensitivity) |
 | Non-uniform spacing | Continuous (spacing profile) | Per-node and per-edge coefficients make a fixed non-uniform ring a description, not a code change; between runs only, after the mass, first-moment and spin-inertia checks (WHEEL.md section 2.5) |
-| Quasi-static, modal and rigid-ring casing models | Discrete (models of the same mechanism) | Future cheaper models behind the substructure (WHEEL.md section 2.4); they need state transfers |
+| Quasi-static, modal and rigid-ring casing models, rigid disc, explicit nodal ring | Discrete (models of the same mechanism) | Wheel-model study (WHEEL.md, 2026-10-28): measured in the consumer (its FIDELITY_LEVERS 4.11). The explicit nodal ring meets Interactive; the others fail on rock corners. The state transfer nodal ↔ rigid ring is `fitRigidRing` / `placeNodalCasing` (`multibody/casing_models.hpp`), used by a switched run (rigid ring in flight) through `FidelitySelector` |
+| Tread band (`smoothedTreadFace`) | Continuous | Half-width of the smoothing of the witness law's maximum; zero is the witness law. Removes the force jump between an edge's nodes (fewer steps, no energy created by unlocated switches) |
 | Contact law (reference soft constraint, contact element) | Discrete (models of the same contact) | M2d: the improved model's compliant element (revision 1: the reference row's transient on the mid-edge mass), event-located switches (pair, pushing state, witness feature), the swept certificate; frontier against a converged run in the consumer's FIDELITY_LEVERS 4.10 |
 | Hub-relative foundation viscosity | Model value (versioned), not a lever | `UniformRingSpec::foundationViscosity`; zero is the reference ring. Damps the global casing modes that no edge damps |
 | The soft solve's Delassus matrix (`DelassusForm`) | Cost only (same matrix to rounding) | M2d A/B, three passes each: the structured form wins on every target measured, single wheel and batched (docs/PERFORMANCE.md, "Delassus A/B"); the uniform form stays the reference's path for its bits |
 
 ## Not provided yet
 
-Shadow references running beside the live model, asynchronous comparison windows, and state
-adapters between models with different state shapes. They arrive with their first real consumer.
+Shadow references running beside the live model and asynchronous comparison windows. State adapters between models
+with different state shapes have their first instance: the nodal casing ↔ rigid ring transfer (`casing_models.hpp`), with
+momentum kept and the transfer's energy logged as a loss.

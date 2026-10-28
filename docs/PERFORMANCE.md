@@ -224,3 +224,11 @@ Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANC
 | 2026-10-20 | `Rk4 step` and `Midpoint step, contact oscillator` under Clang 22 (`-march=x86-64-v3`, Windows) | 1.2x and 1.35x to 1.4x (GCC 16 is at parity, above) | Clang does not inline the flattened step's nested calls the way GCC does (`stepBetween` or `advance` stay out of line); force-inlining them measured no clear gain, so it was not kept | Re-measure on the Linux Clang CI leg; GCC is the host baseline's compiler |
 | 2026-10-19 | `planar tree 10-DOF`: `computeMassMatrix`, `forwardDynamics` | 1.16-1.22x and 1.20-1.24x since M1d (GCC 16; were 2.9x and 2.65x); Clang 0.9x and 1.35x | The planar formulation runs the same algorithms as the twin; what remains is the run-time tree and joint-type branches against the twin's compile-time ones | Accepted unless a consumer shows it; the rig run (2.0x) is dominated by other work |
 | 2026-10-21 | The consumer's bicycle rig whole run against its hand-written twin | about 2.0x (GCC 16), 2.4-2.6x (Clang 22) | The twin computes the mass matrix and bias once per state and reuses them for the energy, the step and the loads, with closed-form kinematics and tyre Jacobian rows; the library still recomputes the forward dynamics for the loads on a second workspace, maps site forces through the tree, and pays the generic element loop and the tree factorisation's index chasing (VTune: factor and solve about 15%, site queries and checks about 10%) | Reuse of a prepared state for reactions; a dense factor below a size threshold |
+
+## Wheel-model study (2026-10-28)
+
+The consumer's explicit nodal ring (its FIDELITY_LEVERS 4.11, PERFORMANCE "Findings (wheel-model study)") evaluates a
+64-node casing in about 2 to 3 us with no factorisation, against about 20 us for the implicit step; at the Interactive
+setting a moving-wheel run is 20 to 90 times cheaper than the improved model. The functions added here
+(`casing_models.hpp`) are scalar closed forms called per contact or per switch; they have no measurable cost of their own.
+

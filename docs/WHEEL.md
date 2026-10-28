@@ -1,6 +1,7 @@
 # Deformable wheel (design, steps M2–M3 of ADR 0003)
 
-- **Status:** design, 2026-10-21. M2d (the improved model's dyadic error-controlled step, swept certificate,
+- **Status:** design, 2026-10-21. The wheel-model study (cheaper casing models for the Interactive and Ambient profiles)
+  landed 2026-10-28, see [Wheel-model study](#wheel-model-study-2026-10-28). M2d (the improved model's dyadic error-controlled step, swept certificate,
   foundation viscosity and the Delassus A/B) landed 2026-10-28, see [M2d status](#m2d-status-2026-10-28). M2c (the contact element, the reference soft-constraint law and their place in the
   substructure's step) landed 2026-10-27, see [M2c status](#m2c-status-2026-10-27). M2b (contact geometry, §3.1, and the certified skip of §3.4) is implemented
   (2026-10-27): casing edges against canonical convex pieces with exact witnesses and the rotation-aware clearance
@@ -596,3 +597,43 @@ peak (the reference scheme's 0.97). Foundation viscosity damps them when the mod
 
 **Not done here:** an L-stable step for unresolved modes (TR-BDF2 or a massless contact layer), the distributed tread
 law, friction rows (M3b).
+
+## Wheel-model study (2026-10-28)
+
+**Question:** which casing models meet the consumer's Interactive budget (2 ms per 16.7 ms frame for the rider's bike,
+about 60 ms of CPU per simulated second per wheel) and an Ambient one, at measured accuracy against a converged run of the
+M2d improved model. The consumer built and measured the candidates of section 2.4 on BikeLab's six moving-wheel presets
+(its docs/FIDELITY_LEVERS.md section 4.11, with the declared budgets and the frontier). The nodal reference and improved
+paths are unchanged.
+
+**Landed here** (`multibody/casing_models.hpp`, new files only):
+
+- **Tread face laws.** `smoothedTreadFace`: the witness law's `max(p0, p1)` over an edge's two ends smoothed within a band
+  (C1, identical outside it, never above the maximum), so the force no longer jumps from one node to the other as an edge
+  rolls past level (M2d finding 2). `distributedTreadFace`: the tread spread along the edge in closed form (softer: an
+  edge with one end in carries half). Both conservative (forces are the potential's gradient) with the damper's power
+  never negative (`test_casing_models.cpp`).
+- **State transfer for a model switch** (section 2.4's "transfer to the nodal ring"). `fitRigidRing`: a nodal casing's
+  mean motion and its angular momentum about its centre (plus the nodes' own spin) to a rigid ring, the angle by the
+  best-fit rotation (`det::atan2`); momentum exact, kinetic energy never gained. `placeNodalCasing`: back, exactly.
+
+**Findings that change this document's plan:**
+
+| Section 2.4 model | Measured (consumer 4.11) | Verdict |
+|---|---|---|
+| Nodal ring, improved | The same physics in absolute node coordinates has a diagonal mass matrix and explicit steps to about 0.6 ms are stable (edge extension about 2100 rad/s, tread poles about −850 and −3150 /s). An explicit 3(2) pair on the dyadic lattice with the smoothed tread: within 0.6 mm and 3% of the converged run at 4 to 24 ms/s | **A new tier: the explicit ring.** Interactive met. The implicit step and located switches remain Analysis's |
+| Rigid ring with enveloping footprint | Footprint linearised on the undeflected casing: 1.7 mm and 14% overall, fails rock corners (no wrap) and creates energy at corners (the linear coupled footprint is not a potential); nonlinear statics by Newton fail to converge on the witness law's non-smooth maximum | Kept as the **flight model** of a switched run (exact transfers both ways) |
+| Modal ring | Worse as K grows (4.7 to 14 mm, K = 1 to 8): the casing has no bending stiffness, so every radial mode sits on the foundation at about 130 Hz and there is no modal cut-off | Not useful for this casing; reconsider for a casing with bending stiffness |
+| Quasi-static ring | 1.1 mm and 8.7% on flat ground, fails rock corners | Smooth ground only |
+| Rigid disc | 1.2 mm and 7.6% on flat ground at 0.4 ms/s; its Winkler law is about ten times stiffer than the casing's wrap on a corner (36 mm on the rocks) | The floor on smooth ground |
+
+**Switching** (LOD.md decide/transfer/commit) works between the explicit ring and the rigid ring on the casing's
+clearance (a `FidelitySelector` with hysteresis and dwell): flight costs halve, momentum stays exact, the casing's
+deformation energy (6e-3 to 3e-2 J per run) goes to the transfer ledger, the largest gain a transfer showed is 3e-8 J
+(rounding of the fitted angle).
+
+**Still open:** the rigid ring's footprint on corners (a static footprint needs a smooth tread law to be solvable, and the
+casing's wrap to be accurate); a terrain-demand selector (disc or quasi-static casing on smooth ground, the explicit ring
+at corners), which is what Ambient's 5 ms/s needs; the explicit ring inside the multibody tree (a substructure stepped
+explicitly beside an implicit tree, or the whole connected bike explicit; M3d).
+
