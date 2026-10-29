@@ -193,6 +193,7 @@ struct ElementOutputs
     std::span<double> force;     ///< Generalized force tau [N or N m], dofCount entries.
     std::span<double> stiffness; ///< dtau/dq, or empty when Jacobians are not wanted.
     std::span<double> damping;   ///< dtau/dqd, or empty when Jacobians are not wanted.
+    bool wantStiffness = true; ///< Whether `stiffness` is filled; false leaves it untouched (implicit damping-only steps).
     bool geometricStiffness = true; ///< Whether `stiffness` includes the tendon terms from d2l/dq2 (geometric and rate transport).
     double potential = 0.0;        ///< Stored energy [J].
     double dissipationPower = 0.0; ///< Power removed [W]; never negative.

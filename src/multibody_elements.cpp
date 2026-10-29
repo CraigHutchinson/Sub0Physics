@@ -54,7 +54,10 @@ bool CoordinateElement<L>::evaluate(const ElementInputs& in, ElementOutputs& out
     out.dissipationPower += r.dissipationPower.si();
     if (!out.stiffness.empty())
     {
-        out.stiffness[coordinate * n + coordinate] += r.dForceDPosition.si();
+        if (out.wantStiffness)
+        {
+            out.stiffness[coordinate * n + coordinate] += r.dForceDPosition.si();
+        }
         out.damping[coordinate * n + coordinate] += r.dForceDVelocity.si();
     }
     return true;
@@ -191,7 +194,10 @@ bool TendonElement<L>::evaluate(const ElementInputs& in, ElementOutputs& out) co
             for (std::size_t b = 0; b < m; ++b)
             {
                 const std::size_t column = supportCoordinates[b];
-                out.stiffness[row + column] += dForceDLength * jl[a] * jl[b];
+                if (out.wantStiffness)
+                {
+                    out.stiffness[row + column] += dForceDLength * jl[a] * jl[b];
+                }
                 out.damping[row + column] += dForceDRate * jl[a] * jl[b];
             }
         }
@@ -259,17 +265,23 @@ namespace detail
 {
 
 std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const State& state, Workspace& ws,
-                                                     bool jacobians, bool geometricStiffness, bool planar) noexcept
+                                                     bool jacobians, bool geometricStiffness, bool planar,
+                                                     bool stiffness) noexcept
 {
     std::ranges::fill(ws.elementForce, 0.0);
     if (jacobians)
     {
-        std::ranges::fill(ws.elementStiffness, 0.0);
+        if (stiffness)
+        {
+            // PERF: skip stiffness fill and assembly when only damping is implicit.
+            std::ranges::fill(ws.elementStiffness, 0.0);
+        }
         std::ranges::fill(ws.elementDamping, 0.0);
     }
     ElementOutputs out{.force = ws.elementForce,
                        .stiffness = jacobians ? std::span<double>(ws.elementStiffness) : std::span<double>{},
                        .damping = jacobians ? std::span<double>(ws.elementDamping) : std::span<double>{},
+                       .wantStiffness = stiffness,
                        .geometricStiffness = geometricStiffness,
                        .siteWrenches = ws.elementSiteWrenches,
                        .vectors = ws.elementVectors,

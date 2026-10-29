@@ -249,7 +249,7 @@ void solveDense(std::size_t n, const double* a, double* x) noexcept
 
 // Elements at a state whose parent-to-body transforms are in the workspace (planar ones for a planar model).
 std::expected<void, Fault> addElements(const Model& model, const State& state, Workspace& ws, bool jacobians,
-                                       bool geometricStiffness = true) noexcept
+                                       bool geometricStiffness = true, bool stiffness = true) noexcept
 {
     const bool planar = detail::isPlanar(model);
     if (model.tendonCount() > 0)
@@ -263,7 +263,7 @@ std::expected<void, Fault> addElements(const Model& model, const State& state, W
             detail::composeWorldTransforms(model, ws);
         }
     }
-    return detail::evaluateElementsUnchecked(model, state, ws, jacobians, geometricStiffness, planar);
+    return detail::evaluateElementsUnchecked(model, state, ws, jacobians, geometricStiffness, planar, stiffness);
 }
 
 [[nodiscard]] std::expected<void, Fault> checkStep(const Model& model, const Forcing& forcing, std::uint64_t tick,
@@ -287,7 +287,7 @@ std::expected<void, Fault> addElements(const Model& model, const State& state, W
 // The start of an implicit (or constrained) step: transforms, velocities, bias forces, mass matrix and the elements
 // (with their Jacobians when asked).
 std::expected<void, Fault> prepareStep(const Model& model, const State& state, Workspace& ws, bool jacobians,
-                                       bool geometricStiffness = true) noexcept
+                                       bool geometricStiffness = true, bool stiffness = true) noexcept
 {
     if (detail::isPlanar(model))
     {
@@ -303,7 +303,7 @@ std::expected<void, Fault> prepareStep(const Model& model, const State& state, W
     }
     if (model.hasForceElements())
     {
-        return addElements(model, state, ws, jacobians, geometricStiffness);
+        return addElements(model, state, ws, jacobians, geometricStiffness, stiffness);
     }
     return {};
 }
@@ -778,7 +778,9 @@ std::expected<void, Fault> stepLinearlyImplicit(const Model& model, const Forcin
         return detail::stepConstrained(model, detail::applyForcing(model, state, forcing, ws), dt, state, ws, true,
                                        terms);
     }
-    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full); !prepared)
+    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full,
+                           terms != ImplicitTerms::DampingOnly && terms != ImplicitTerms::DampingOnlyMassPattern);
+        !prepared)
     {
         return prepared;
     }
@@ -810,7 +812,9 @@ std::expected<void, Fault> prepareLinearlyImplicitStep(const Model& model, const
     {
         return invalidInput("a prepared step does not support constraints; use stepLinearlyImplicitEuler");
     }
-    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full); !prepared)
+    if (auto prepared = prepareStep(model, state, ws, true, terms == ImplicitTerms::Full,
+                           terms != ImplicitTerms::DampingOnly && terms != ImplicitTerms::DampingOnlyMassPattern);
+        !prepared)
     {
         return prepared;
     }
@@ -1151,7 +1155,9 @@ Forcing applyForcing(const Model& model, const State& state, const Forcing& forc
 std::expected<void, Fault> prepareStepDynamics(const Model& model, const State& state, Workspace& ws,
                                                bool elementJacobians, ImplicitTerms terms) noexcept
 {
-    if (auto prepared = prepareStep(model, state, ws, elementJacobians, terms == ImplicitTerms::Full); !prepared)
+    if (auto prepared = prepareStep(model, state, ws, elementJacobians, terms == ImplicitTerms::Full,
+                           terms != ImplicitTerms::DampingOnly && terms != ImplicitTerms::DampingOnlyMassPattern);
+        !prepared)
     {
         return prepared;
     }

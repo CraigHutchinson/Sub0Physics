@@ -157,7 +157,8 @@ SUB0MATH_FORCE_INLINE void composeWorldTransforms(const Model& model, Workspace&
 [[nodiscard]] std::expected<void, Fault> evaluateElementsUnchecked(const Model& model, const State& state,
                                                                    Workspace& ws, bool jacobians,
                                                                    bool geometricStiffness = true,
-                                                                   bool planar = false) noexcept;
+                                                                   bool planar = false,
+                                                                   bool stiffness = true) noexcept;
 
 // Kinetic and potential energy (gravity and elements) [J].
 struct EnergyTerms
