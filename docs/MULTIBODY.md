@@ -1,6 +1,6 @@
 # Multibody core (design, step M1 of ADR 0003)
 
-- **Status:** M1a to M1d landed (M1d 2026-10-21); M2 designed in [WHEEL.md](WHEEL.md); M2a (ring substructure,
+- **Status:** M3b (friction rows) landed 2026-11-02, see [M3b status](#m3b-status-2026-11-02); M1a to M1d landed (M1d 2026-10-21); M2 designed in [WHEEL.md](WHEEL.md); M2a (ring substructure,
   condensation, expanded oracle) landed 2026-10-27, see [WHEEL.md, M2a status](WHEEL.md#m2a-status-2026-10-27); M2c (contact
   elements, the reference soft-constraint law, `ImplicitTerms::DampingOnlyMassPattern`) landed 2026-10-27, see
   [M2c status](#m2c-status-2026-10-27)
@@ -642,6 +642,18 @@ block M1d.
 velocity rows (brakes, friction against rigid surfaces), which amends §1's "contact is force elements only" for
 friction while normal contact and soil stay elements; a contact element (a law on a signed gap); block storage for
 element Jacobians when substructures are present; velocity-only rows admitted in the midpoint step.
+
+### M3b status (2026-11-02)
+
+**Landed** (details and evidence in [WHEEL.md, M3b status](WHEEL.md#m3b-status-2026-11-02)). Contract changes; frictionless
+solves are bit for bit:
+
+- `SoftRowKind::ConeNormal`, `ConeTangent`, `softConstraintTangentRow`: the reference's elliptic cone, in a plane a wedge, in
+  the one law and the one solve (`SoftConstraintSolver::solve(..., friction)`).
+- `SoftConstraintSolver::solveBounded`, `exactVelocityRow`: bounded velocity rows, section 1's amendment for friction.
+- `SoftRowSystem`, `factorPreparedStepMatrix`, `solvePreparedStepMatrix`: rows solved with the step's own matrix, so they hold
+  through the step. Completing the step forms the matrix again with the forcing's loads.
+- `SoftPivotRule`, `setPivotRule`: least index or block pivoting (an A/B; the same solution).
 
 ## 10. Open questions, to be answered by measurement
 

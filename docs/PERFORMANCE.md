@@ -207,6 +207,23 @@ is the candidate if a target with wide fixed-shape throughput (GPU) or much smal
 consumer's whole step the difference is small (BikeDynamics: 1.1x to 1.2x on flat ground, within noise on the rock),
 because the forward pass's other work dominates.
 
+## Friction rows A/B (M3b, 2026-11-02)
+
+Friction doubles a contact's rows. The alternatives, measured on the consumer's whole traction runs (0.3 s, 2 x 64 nodes, up to
+14 contacts, so 28 rows; GCC 16, five runs each, min to max, loaded host) in s of CPU per simulated second; its
+docs/PERFORMANCE.md has the step pairs.
+
+| Alternative | Result |
+|---|---|
+| Elliptic solve: Newton on the zones, or the wedge's LCP | Not built as two: in a plane the zones are the wedge's active sets, so the existing exact pivoting needs only a transformation of the matrix (docs/WHEEL.md, "M3b status"). Newton on a piecewise quadratic has no advantage to measure here; it returns as the candidate when a cone has width (M4) |
+| Pivot rule: least index or block (`SoftPivotRule`) | Block 0.72 to 0.95, least index 0.95 to 1.19 (uniform form, reference cone): 1.3x. Bit for bit on every run. Block is the bike's default; least index stays the solver's, and remains the rule Block falls back to |
+| Delassus form with friction rows: uniform or condensed | Cone 0.72 to 0.95 against 0.64 to 0.95; exact rows 0.70 to 0.89 against 0.62 to 0.79. The condensed form stays ahead, by little: the ranking of "Delassus A/B" holds. Both kept; the uniform form keeps the reference's digests |
+| Step-matrix rows: a second factorisation or sharing it with completion | Not worth a third state: completing the step costs about 3 us of the step's 25 us (`advance`, 28 ms over 9600 steps), so the double formation is left in place |
+
+Passes (uniform, cone; whole hardtail coast run, ms, three repeats): first about 355; rates over each row's support instead of
+every coordinate (the consumer) and the slack over active rows only, measured together, 305 to 340; block pivoting 240 to 250.
+All bit for bit, and they apply to both Delassus forms. The advantage of the condensed form was measured after them.
+
 ## Open gaps
 
 Deficiencies against the hand-written reference (rule: Sub0Math `docs/PERFORMANCE.md`).

@@ -1,6 +1,7 @@
 # Deformable wheel (design, steps M2–M3 of ADR 0003)
 
-- **Status:** design, 2026-10-21. The wheel-model study (cheaper casing models for the Interactive and Ambient profiles)
+- **Status:** design, 2026-10-21. M3b (friction: the elliptic cone in the reference law, exact Coulomb as bounded rows)
+  landed 2026-11-02, see [M3b status](#m3b-status-2026-11-02). The wheel-model study (cheaper casing models for the Interactive and Ambient profiles)
   landed 2026-10-28, see [Wheel-model study](#wheel-model-study-2026-10-28). M2d (the improved model's dyadic error-controlled step, swept certificate,
   foundation viscosity and the Delassus A/B) landed 2026-10-28, see [M2d status](#m2d-status-2026-10-28). M2c (the contact element, the reference soft-constraint law and their place in the
   substructure's step) landed 2026-10-27, see [M2c status](#m2c-status-2026-10-27). M2b (contact geometry, §3.1, and the certified skip of §3.4) is implemented
@@ -319,7 +320,7 @@ times the planar figure at W = 3.
 | Constraint forces against the reference engine's on its own states (open loop, no chaos) | Soft-constraint emulation |
 | Corner witness admissibility and position; no averaged normals | All contact |
 | No tunnelling across speeds and step sizes; onset located within `eventTolerance` | Swept contact |
-| Exact stick: a loaded wheel on an incline below the friction limit holds with zero creep; a braked wheel under capacity holds zero relative spin | Exact rows |
+| Exact stick: a loaded wheel on an incline below the friction limit holds with zero creep (measured, M3b status); a braked wheel under capacity holds zero relative spin (M3c) | Exact rows |
 | Ledger closes at every step size; friction and brake work never positive | All |
 | Allocation gate; paired benchmark against a hand-written ring step | All |
 
@@ -348,7 +349,8 @@ and an Interactive budget of 2 ms per 16.7 ms frame.
   whether a massless contact layer removes the node-on-contact mode that sets the step. M2d: revision 1 is linear and
   keeps the reference row's transient; switches of the witness feature dominate its cost, so a law distributed along
   the edge (no force jump between nodes) is the next candidate (M2d status).
-- Whether `f_n` must be iterated for the friction bound, or the start-of-step value is within budget.
+- Whether `f_n` must be iterated for the friction bound, or the start-of-step value is within budget: start-of-step for now,
+  iteration does not contract uniformly at the casing's light nodes (M3b status).
 - Whether the hierarchy pays for itself at N = 64.
 - The cost and accuracy of the rigid-ring model's state transfer at contact onset (the most demanding switch).
 
@@ -597,6 +599,61 @@ peak (the reference scheme's 0.97). Foundation viscosity damps them when the mod
 
 **Not done here:** an L-stable step for unresolved modes (TR-BDF2 or a massless contact layer), the distributed tread
 law, friction rows (M3b).
+
+## M3b status (2026-11-02)
+
+**Landed:** friction in the reference law, exact Coulomb as bounded velocity rows (section 10, item 2), and solves with the
+prepared step's own matrix. The consumer's connected bike runs on them at parity on its coast and sliding runs (its
+docs/CONNECTED_BIKE.md, "M3b status"); frictionless solves are unchanged bit for bit.
+
+**The elliptic cone is the one law and the one solve** (`multibody/soft_constraint.hpp`). `softConstraintTangentRow` is the
+tangent row: the normal row's impedance and damping, `K = 0`, `R_t = R_n / impratio`, `aref = -B v` (MuJoCo 3.16.0 at commit
+a892750, `engine_core_constraint.c` :1940-1957, :2012, :3195). `SoftRowKind::ConeNormal` and `ConeTangent` join the row
+kinds. In a plane the cone `|f_t| <= mu f_n` is a wedge with two edges, so the source's three zones (:3305-3357: no force,
+quadratic in both rows, projection onto the cone) are the complementarity problem of the edges' coordinates: `f_n = g+ + g-`,
+`f_t = mu (g+ - g-)`, `g >= 0`, matrix `E^T (J M^-1 J^T + R) E`, vector `E^T (J a0 - aref)`. Both edges active is the bottom
+zone, one the middle zone, none the top zone. The transformation is a few lines over the Delassus matrix and vector, and the
+same principal pivoting solves it exactly; friction-loss (M3c) and soft equality (M4) rows stay kinds of the same solve. The
+reference's third row, out of the plane, has a zero Jacobian here. A cone with width has a curved Hessian and needs its own
+treatment: M4's.
+
+**Exact Coulomb** (`SoftConstraintSolver::solveBounded`, `exactVelocityRow`, `SoftRowSystem::PreparedStep`,
+`factorPreparedStepMatrix`, `solvePreparedStepMatrix`). A bounded row has `|f| <= b` with `b` given, and aims at zero rate at
+the end of the step (`aref = -v / h`, a compliance of 1e-14 of the row's scale so dependent rows factor). Solved with the
+matrix the step itself solves with (`A = M - theta h D - theta^2 h^2 K~`), a sticking row's slip after the step is that
+compliance's `h R f`, about 1e-14 m/s; a sliding row's force is exactly `b`. The solve is least-index pivoting on the box
+(free, at the upper bound, at the lower bound), exact and finite because the matrix is positive definite. The bound is
+`mu f_n` from the normal rows, not part of a shared cone: by analysis, a cone with hard tangent rows follows the associated
+flow rule (a sliding contact separates at `mu |v_t|`), so the tangent rows take the normal force as a given. Passes of
+normal then tangent solves are a lever on the bound (the consumer's `boundPasses`); section 11's open question is answered
+below.
+
+**Pivot rules** (`SoftPivotRule`, `setPivotRule`). `Block` flips every violating row per iteration and falls back to least
+index after three stalls; both end on the unique solution, and a solve whose active set ends the same gives the same bits.
+Least index stays the solver's default; the consumer's bike uses Block (docs/PERFORMANCE.md, "Friction rows A/B").
+
+**Gate evidence** (`tests/test_multibody_friction_rows.cpp`, `test_multibody_ring_contact.cpp`, GCC 16, GCC 16
+and Clang 22 `-march=x86-64-v3`):
+
+| Check | Result |
+|---|---|
+| The cone against the source's zones, transcribed, on 200 random sets of 1 to 4 contacts and two `impratio` values | Forces to 8.8e-13 of the largest (bound 1e-8); all three zones seen (top 154, bottom 70, middle 276); on the cone `|f_t| = mu f_n` to 1e-12; both Delassus forms |
+| The box solve on 60 random sets, both matrices | The box's complementarity (residual 1e-8 inside, outward at a bound; 328 rows at a bound, 14 inside); supports bit for bit, the condensed form to 1e-9 |
+| A loaded wheel on an incline below the limit (`tan` 0.25, `mu` 0.6; 40 kg locked hub, the reference's 64-node casing, 31.25 us, a foundation viscosity of 2000 N s/m^2 to settle the hub, 4 s) | **Exact rows:** sticking rows' slip at most 5.0e-16 m/s; hub travel -3.4e-11 m over the last 0.5 s (still decaying), final speed 3.2e-9 m/s. **Reference cone:** a steady creep of 2.20 mm/s (1.10 mm over the last 0.5 s), about `R f / B` |
+| Friction work per step, from the row's own end-of-step rate | Exact rows: at most 0 J (a step's work on the bike: 3e-19 J, rounding). Reference cone on the same case: up to +2.6e-7 J in the transient (+3.0e-7 J with start-of-step rates, as BikeLab's power counts) |
+| Above the limit (`tan` 0.8) | Every pushing contact on its bound (`|f_t| = mu f_n`); hub acceleration 1.554 m/s^2 against `g (sin - mu cos)` = 1.532 (1.4%); the reference cone 1.555 m/s^2, the same excess. The hub's clearance differs by 16 um between the two, so the regularised cone shows no measurable lift here |
+| Pivot rules on 100 random cone sets | Forces bit for bit; Block at or below least index's pivots on 94 |
+| Allocation | Cones, bounded rows, the step factor and solve, both rules allocate nothing (`Sub0Physics_MultibodyAllocationTests`) |
+
+**Section 11's open question on the bound.** The consumer measured one pass against two and three on its coast and sliding
+runs: the second pass moves frame position by 2.5e-5 to 6e-5 m and energy by 0.06 to 0.07 J over 0.3 s, instantaneous wheel
+forces by 14 to 72 N. A third pass moves them about as much again on three of four runs (6e-10 m on the fourth): the fixed
+point does not contract uniformly at these light nodes, so the start-of-step bound stays the default and more passes are not
+an accuracy lever yet.
+
+**Not here:** a cone with width (M4), friction-loss rows (M3c, the same solve; the brake's exact row is `solveBounded` with
+its capacity as the bound), velocity rows in the midpoint step's own form beyond the matrix this accepts (the factor takes the
+scheme; only Euler was exercised), element-based normal contact with these rows (M2d's law with bounded friction).
 
 ## Wheel-model study (2026-10-28)
 
