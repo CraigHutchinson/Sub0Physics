@@ -339,6 +339,198 @@ TEST_CASE("soft-constraint Delassus forms: the uniform form with supports is bit
     CHECK_FALSE(solver.solve(model, ws, jac, one, one, a0, {}, f, g, outside).has_value());
 }
 
+TEST_CASE("soft-constraint tangent row follows the reference's formulas")
+{
+    const SoftConstraintParameters flat{.timeConstant = 0.001, .dampingRatio = 1.0, .impedance = {0.99, 0.99, 0.001, 0.5, 2.0}};
+    const SoftConstraintRow normal = softConstraintRow(flat, -2e-4, -0.3, 1.7, 3.125e-5);
+    const SoftConstraintRow tangent = softConstraintTangentRow(normal, 0.25);
+    CHECK(tangent.regularisation == normal.regularisation);
+    CHECK(tangent.stiffness == 0.0);
+    CHECK(tangent.damping == normal.damping);
+    CHECK(tangent.impedance == normal.impedance);
+    CHECK(tangent.referenceAcceleration == -normal.damping * 0.25);
+    CHECK(softConstraintTangentRow(normal, 0.25, 4.0).regularisation == normal.regularisation / 4.0);
+}
+
+TEST_CASE("soft-constraint friction cones: the wedge's complementarity is the reference's elliptic cost, zone by zone")
+{
+    // The solve's forces against the source's own zones (mj_constraintUpdate_impl, engine_core_constraint.c:3305-3357)
+    // evaluated at the solution's J a - aref, and no perturbation inside the cones lowers the primal cost.
+    const Model model = ringmodels::ringRig({.nodes = 8}, false, false);
+    Workspace ws(model);
+    const std::size_t n = model.dofCount();
+    std::mt19937_64 rng(19);
+    const auto u = [](std::mt19937_64& g) { return ringmodels::uniformSigned(g); };
+    const State s = ringmodels::randomState(model, 3);
+    prepare(model, s, ws);
+    REQUIRE(factorMassMatrix(model, ws).has_value());
+    SoftConstraintSolver solver(model, 12);
+    std::array<std::size_t, 3> zones{};
+    double worst = 0.0;
+    for (int trial = 0; trial < 200; ++trial)
+    {
+        const std::size_t contacts = 1 + static_cast<std::size_t>(trial % 4);
+        const std::size_t k = 2 * contacts + (trial % 3 == 0 ? 1U : 0U); // sometimes one plain unilateral row at the end
+        const double mu = 0.2 + 0.7 * (0.5 + 0.5 * u(rng));
+        const double impratio = trial % 2 == 0 ? 1.0 : 2.0;
+        std::vector<double> jac(k * n, 0.0);
+        std::vector<double> aref(k);
+        std::vector<double> reg(k);
+        std::vector<SoftRowKind> kinds(k, SoftRowKind::Unilateral);
+        std::vector<SoftRowSupport> supports(k);
+        std::vector<double> friction(k, mu);
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            const std::size_t c = r / 2;
+            RingContactPoint p;
+            p.edge = (static_cast<std::size_t>(trial) + 3 * c) % 8;
+            p.weight0 = 0.5 + 0.4 * u(rng);
+            p.weight1 = 1.0 - p.weight0;
+            const auto a = nodeWorld(model, ws, 0, p.edge);
+            p.point = toWorld(model, a[0] + 0.01 * u(rng), a[1] + 0.01 * u(rng));
+            const double angle = 3.0 * u(rng);
+            p.normal = toWorld(model, std::cos(angle), std::sin(angle));
+            supports[r] = {.ring = 0, .node0 = p.edge, .node1 = (p.edge + 1) % 8};
+            aref[r] = 50.0 * u(rng);
+            reg[r] = 0.01 * (1.5 + u(rng));
+            if (c < contacts)
+            {
+                kinds[r] = SoftRowKind::ConeNormal;
+                REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jac.data() + r * n, n)).has_value());
+                ++r;
+                supports[r] = supports[r - 1];
+                kinds[r] = SoftRowKind::ConeTangent;
+                reg[r] = reg[r - 1] / impratio;
+                aref[r] = 50.0 * u(rng);
+                p.normal = toWorld(model, std::sin(angle), -std::cos(angle));
+                REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jac.data() + r * n, n)).has_value());
+            }
+            else
+            {
+                REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jac.data() + r * n, n)).has_value());
+            }
+        }
+        std::vector<double> a0(n);
+        for (double& v : a0)
+        {
+            v = 10.0 * u(rng);
+        }
+        std::vector<double> force(k);
+        std::vector<double> generalized(n);
+        const auto solved = solver.solve(model, ws, jac, aref, reg, a0, kinds, force, generalized, {},
+                                         DelassusForm::MassSolvePerRow, friction);
+        REQUIRE(solved.has_value());
+        // Both Delassus forms: bit for bit with supports, to rounding condensed.
+        std::vector<double> supported(k);
+        std::vector<double> supportedGeneralized(n);
+        REQUIRE(solver
+                    .solve(model, ws, jac, aref, reg, a0, kinds, supported, supportedGeneralized, supports,
+                           DelassusForm::MassSolvePerRow, friction)
+                    .has_value());
+        CHECK(supported == force);
+        std::vector<double> condensed(k);
+        REQUIRE(solver
+                    .solve(model, ws, jac, aref, reg, a0, kinds, condensed, supportedGeneralized, supports,
+                           DelassusForm::Condensed, friction)
+                    .has_value());
+        CHECK(maxDifference(condensed, force) <= 1e-10 * std::max(1.0, maxAbs(force)));
+        // jar = J a - aref at a = a0 + M^-1 J^T f.
+        const auto jarAt = [&](std::span<const double> f) {
+            std::vector<double> y(n, 0.0);
+            for (std::size_t r = 0; r < k; ++r)
+            {
+                for (std::size_t i = 0; i < n; ++i)
+                {
+                    y[i] += jac[r * n + i] * f[r];
+                }
+            }
+            std::vector<double> x = y;
+            REQUIRE(solveMassMatrix(model, ws, y).has_value());
+            std::vector<double> jar(k);
+            double value = 0.0;
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                value += 0.5 * x[i] * y[i];
+            }
+            for (std::size_t r = 0; r < k; ++r)
+            {
+                double sum = -aref[r];
+                for (std::size_t i = 0; i < n; ++i)
+                {
+                    sum += jac[r * n + i] * (a0[i] + y[i]);
+                }
+                jar[r] = sum;
+            }
+            return std::pair{jar, value};
+        };
+        const auto [jar, motion] = jarAt(force);
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            if (kinds[r] != SoftRowKind::ConeNormal)
+            {
+                if (kinds[r] == SoftRowKind::Unilateral)
+                {
+                    const double expected = jar[r] >= 0.0 ? 0.0 : -jar[r] / reg[r];
+                    CHECK(std::abs(force[r] - expected) <= 1e-9 * std::max(1.0, std::abs(force[r])));
+                }
+                continue;
+            }
+            // The source's map to the regular dual cone, and its three zones.
+            const double regularisedMu = mu * std::sqrt(reg[r + 1] / reg[r]);
+            const double un = jar[r] * regularisedMu;
+            const double ut = jar[r + 1] * mu;
+            const double N = un;
+            const double T = std::abs(ut);
+            std::array<double, 2> expected{};
+            if (N >= regularisedMu * T)
+            {
+                zones[0]++;
+            }
+            else if (regularisedMu * N + T <= 0.0)
+            {
+                zones[1]++;
+                expected = {-jar[r] / reg[r], -jar[r + 1] / reg[r + 1]};
+            }
+            else
+            {
+                zones[2]++;
+                const double dm = (1.0 / reg[r]) / (regularisedMu * regularisedMu * (1.0 + regularisedMu * regularisedMu));
+                const double nmt = N - regularisedMu * T;
+                expected[0] = -dm * nmt * regularisedMu;
+                expected[1] = -expected[0] / T * ut * mu;
+                CHECK(std::abs(std::abs(force[r + 1]) - mu * force[r]) <= 1e-12 * std::max(1.0, force[r]));
+            }
+            const double scale = std::max(1.0, maxAbs(force));
+            worst = std::max({worst, std::abs(force[r] - expected[0]) / scale, std::abs(force[r + 1] - expected[1]) / scale});
+            CHECK(std::abs(force[r] - expected[0]) <= 1e-8 * scale);
+            CHECK(std::abs(force[r + 1] - expected[1]) <= 1e-8 * scale);
+            CHECK(force[r] >= 0.0);
+            CHECK(std::abs(force[r + 1]) <= mu * force[r] * (1.0 + 1e-12) + 1e-300);
+            ++r;
+        }
+    }
+    MESSAGE("zones top " << zones[0] << ", bottom " << zones[1] << ", middle " << zones[2] << "; worst force difference " << worst);
+    CHECK(zones[0] > 0U);
+    CHECK(zones[1] > 0U);
+    CHECK(zones[2] > 0U);
+    // Contract checks: a pair out of order, a tangent alone, no mu.
+    std::vector<double> jac(2 * n, 0.0);
+    const std::vector<double> ones{1.0, 1.0};
+    std::vector<double> a0(n, 0.0);
+    std::vector<double> f(2);
+    std::vector<double> g(n);
+    const std::vector<double> mu{0.5, 0.5};
+    const std::vector<double> noMu{0.5, 0.0};
+    const std::array<SoftRowKind, 2> pair{SoftRowKind::ConeNormal, SoftRowKind::ConeTangent};
+    const std::array<SoftRowKind, 2> swapped{SoftRowKind::ConeTangent, SoftRowKind::ConeNormal};
+    const std::array<SoftRowKind, 2> single{SoftRowKind::Unilateral, SoftRowKind::ConeNormal};
+    CHECK(solver.solve(model, ws, jac, ones, ones, a0, pair, f, g, {}, DelassusForm::MassSolvePerRow, mu).has_value());
+    CHECK_FALSE(solver.solve(model, ws, jac, ones, ones, a0, swapped, f, g, {}, DelassusForm::MassSolvePerRow, mu).has_value());
+    CHECK_FALSE(solver.solve(model, ws, jac, ones, ones, a0, single, f, g, {}, DelassusForm::MassSolvePerRow, mu).has_value());
+    CHECK_FALSE(solver.solve(model, ws, jac, ones, ones, a0, pair, f, g).has_value());
+    CHECK_FALSE(solver.solve(model, ws, jac, ones, ones, a0, pair, f, g, {}, DelassusForm::MassSolvePerRow, noMu).has_value());
+}
+
 TEST_CASE("contact row is the attached point's rate along the normal")
 {
     const Model model = ringmodels::ringRig({.nodes = 16}, false, false);

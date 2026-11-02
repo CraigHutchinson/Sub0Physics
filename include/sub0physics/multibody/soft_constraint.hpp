@@ -59,11 +59,29 @@ struct SoftConstraintRow
 [[nodiscard]] SoftConstraintRow softConstraintRow(const SoftConstraintParameters& parameters, double gap, double rate,
                                                   double diagApprox, double step) noexcept;
 
-/** How a soft-constraint row is bounded (MuJoCo mj_constraintUpdate_impl, engine_core_constraint.c:3240-3300). */
+/**
+ * The tangential row of a contact on the reference's elliptic friction cone, from its normal row: the same law with no
+ * position term. The impedance and damping are the normal row's, `K = 0` (mj_makeImpedance, :1940-1943), `R_t = R_n /
+ * impratio` (:2012) and `aref = -B v` (mj_referenceConstraint, :3195, the position zero).
+ *
+ * @param normal The contact's normal row (softConstraintRow).
+ * @param rate The tangential rate v = J_t qd [m/s].
+ * @param impratio The reference's `opt.impratio` (its default is one).
+ * @return The row.
+ */
+[[nodiscard]] SoftConstraintRow softConstraintTangentRow(const SoftConstraintRow& normal, double rate,
+                                                         double impratio = 1.0) noexcept;
+
+/**
+ * How a soft-constraint row is bounded (MuJoCo mj_constraintUpdate_impl, engine_core_constraint.c:3240-3408). Later row
+ * kinds (friction loss, M3c) join this list and the one solve.
+ */
 enum class SoftRowKind : std::uint8_t
 {
-    Unilateral, ///< A contact or limit row: force `f >= 0`, zero while `J a - aref >= 0` (the row is satisfied).
-    Equality    ///< An equality row: always quadratic, force of either sign.
+    Unilateral,  ///< A contact or limit row: force `f >= 0`, zero while `J a - aref >= 0` (the row is satisfied).
+    Equality,    ///< An equality row: always quadratic, force of either sign.
+    ConeNormal,  ///< A contact's normal row on a friction cone; the next row is its ConeTangent.
+    ConeTangent  ///< The tangential row after its ConeNormal, on the same support: `|f_t| <= mu f_n`.
 };
 
 /**
@@ -102,7 +120,7 @@ struct SoftRowSupport
 struct SoftConstraintSolution
 {
     std::uint32_t pivots = 0;    ///< Principal pivots taken.
-    std::size_t activeRows = 0;  ///< Rows with a positive force.
+    std::size_t activeRows = 0;  ///< Rows with a positive force; a cone counts its active edges (one sliding, two sticking).
 };
 
 /**
@@ -115,6 +133,14 @@ struct SoftConstraintSolution
  * every row kind (contacts now, equality closures in the reference path later). The reference reaches it with
  * Newton's method to a tolerance; here Murty's principal pivoting solves it exactly (the matrix is positive definite,
  * so the least-index rule terminates).
+ *
+ * **Friction cones.** In a plane a contact's cone `|f_t| <= mu f_n` is a wedge with two edges, so the reference's elliptic
+ * cost (engine_core_constraint.c:3305-3408: a top zone with no force, a bottom zone quadratic in both rows, a middle zone
+ * projecting onto the cone) is the same complementarity problem in the edges' coordinates: `f_n = g+ + g-`, `f_t = mu
+ * (g+ - g-)`, `g+, g- >= 0`, with matrix `E^T (J M^-1 J^T + R) E` and vector `E^T (J a0 - aref)`. Both edges active is
+ * the bottom zone, one the middle zone, none the top zone. The matrix stays positive definite, so the same pivoting
+ * solves it exactly, with no iteration on the cone. (The reference's third contact row, out of the plane, has a zero
+ * Jacobian here and carries no force. A cone with width needs its curved Hessian: M4.)
  *
  * Owns its scratch, sized once for a row capacity; solving never allocates.
  */
@@ -145,20 +171,23 @@ public:
      * @param regularisation R per row; positive.
      * @param freeAcceleration a0 = M^-1 (tau - c), dofCount entries.
      * @param kinds Each row's kind, or empty for all unilateral.
-     * @param force Receives f per row (a unilateral row's never negative) [N].
+     * @param force Receives f per row (a unilateral row's never negative; a cone's in its normal and tangent rows) [N].
      * @param generalized Receives `J^T f`, dofCount entries.
      * @param supports Empty, or each row's ring support: then every row's entries outside the tree's coordinates and
      *        its two nodes must be zero (ringContactJacobian rows are), and the products read only the support.
      * @param form How the Delassus matrix is formed; Condensed needs supports.
+     * @param friction Empty without cones, else one entry per row: mu on each ConeTangent row (finite and positive; the
+     *        other entries are not read).
      * @return The solution's counts, or InvalidInput (sizes, capacity, a regularisation that is not positive, a
-     *         support outside the model, Condensed without supports) or NonFiniteState.
+     *         support outside the model, Condensed without supports, a cone without its pair or its mu) or
+     *         NonFiniteState.
      */
     [[nodiscard]] std::expected<SoftConstraintSolution, Fault>
     solve(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
           std::span<const double> reference, std::span<const double> regularisation,
           std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds, std::span<double> force,
           std::span<double> generalized, std::span<const SoftRowSupport> supports = {},
-          DelassusForm form = DelassusForm::MassSolvePerRow) noexcept;
+          DelassusForm form = DelassusForm::MassSolvePerRow, std::span<const double> friction = {}) noexcept;
 
 private:
     /** The uniform form: Y = M^-1 J^T by full solves, then J Y (and q = J a0 - aref). */

@@ -246,6 +246,14 @@ TEST_CASE("Ring contact: rows, the soft-constraint solve, contact element loads 
     std::vector<double> tau(n, 0.0);
     std::array<RingContactLoad, 2> loads{};
     const auto h = sub0math::f64::Time::fromSi(1e-5);
+    // The same rows as two friction cones.
+    const std::array<SoftRowKind, 4> coneKinds{SoftRowKind::ConeNormal, SoftRowKind::ConeTangent, SoftRowKind::ConeNormal,
+                                               SoftRowKind::ConeTangent};
+    const std::array<double, 4> coneFriction{0.6, 0.6, 0.6, 0.6};
+    const std::array<SoftRowSupport, 4> supports{SoftRowSupport{.ring = 0, .node0 = 10, .node1 = 11},
+                                                 SoftRowSupport{.ring = 0, .node0 = 11, .node1 = 12},
+                                                 SoftRowSupport{.ring = 0, .node0 = 12, .node1 = 13},
+                                                 SoftRowSupport{.ring = 0, .node0 = 13, .node1 = 14}};
 
     const std::size_t start = allocations.load();
     for (int k = 0; k < 20; ++k)
@@ -259,6 +267,10 @@ TEST_CASE("Ring contact: rows, the soft-constraint solve, contact element loads 
             REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jacobian.data() + r * n, n)));
         }
         REQUIRE(solver.solve(model, ws, jacobian, reference, regularisation, free, {}, force, generalized));
+        REQUIRE(solver.solve(model, ws, jacobian, reference, regularisation, free, coneKinds, force, generalized, supports,
+                             DelassusForm::MassSolvePerRow, coneFriction));
+        REQUIRE(solver.solve(model, ws, jacobian, reference, regularisation, free, coneKinds, force, generalized, supports,
+                             DelassusForm::Condensed, coneFriction));
         for (std::size_t l = 0; l < loads.size(); ++l)
         {
             const RingContactGeometry g{.ring = 0, .edge = 20 + l, .axisT = 0.3, .witness = ContactWitness::Vertex,

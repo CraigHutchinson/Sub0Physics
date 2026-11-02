@@ -81,6 +81,18 @@ SoftConstraintRow softConstraintRow(const SoftConstraintParameters& parameters, 
     return row;
 }
 
+SoftConstraintRow softConstraintTangentRow(const SoftConstraintRow& normal, double rate, double impratio) noexcept
+{
+    constexpr double MinVal = 1e-15; // mjMINVAL
+    // mj_makeImpedance (:1940-1943, :1954-1957 with solreffriction zero, :2012), mj_referenceConstraint (:3195).
+    SoftConstraintRow row;
+    row.impedance = normal.impedance;
+    row.regularisation = normal.regularisation / std::max(MinVal, impratio);
+    row.damping = normal.damping;
+    row.referenceAcceleration = -row.damping * rate;
+    return row;
+}
+
 namespace
 {
 
@@ -302,7 +314,8 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
                             std::span<const double> reference, std::span<const double> regularisation,
                             std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds,
                             std::span<double> force, std::span<double> generalized,
-                            std::span<const SoftRowSupport> supports, DelassusForm form) noexcept
+                            std::span<const SoftRowSupport> supports, DelassusForm form,
+                            std::span<const double> friction) noexcept
 {
     const std::size_t n = dof_;
     const std::size_t k = reference.size();
@@ -324,6 +337,25 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
     if (form == DelassusForm::Condensed && supports.empty() && k > 0)
     {
         return invalidInput("the condensed Delassus form needs each row's ring support");
+    }
+    const auto isKind = [&](std::size_t r, SoftRowKind kind) { return !kinds.empty() && kinds[r] == kind; };
+    bool cones = false;
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        if (isKind(r, SoftRowKind::ConeTangent))
+        {
+            return invalidInput("a friction cone is a normal row, then its tangent row");
+        }
+        if (isKind(r, SoftRowKind::ConeNormal))
+        {
+            if (r + 1 == k || !isKind(r + 1, SoftRowKind::ConeTangent) || friction.size() != k ||
+                !std::isfinite(friction[r + 1]) || !(friction[r + 1] > 0.0))
+            {
+                return invalidInput("a friction cone is a normal row, then its tangent row, with a positive mu");
+            }
+            cones = true;
+            ++r;
+        }
     }
     std::ranges::fill(generalized, 0.0);
     SoftConstraintSolution solution;
@@ -373,9 +405,40 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         scale = std::max(scale, std::abs(rhs_[r]));
         delassus_[r * k + r] += regularisation[r];
     }
+    if (cones)
+    {
+        // Each cone's rows to its edges' coordinates, in place: A <- E^T A E, q <- E^T q (the class comment).
+        scale = 0.0;
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            if (isKind(r, SoftRowKind::ConeNormal))
+            {
+                const double mu = friction[r + 1];
+                const double qn = rhs_[r];
+                const double qt = rhs_[r + 1];
+                rhs_[r] = qn + mu * qt;
+                rhs_[r + 1] = qn - mu * qt;
+                for (std::size_t c = 0; c < k; ++c)
+                {
+                    const double an = delassus_[r * k + c];
+                    const double at = delassus_[(r + 1) * k + c];
+                    delassus_[r * k + c] = an + mu * at;
+                    delassus_[(r + 1) * k + c] = an - mu * at;
+                }
+                for (std::size_t c = 0; c < k; ++c)
+                {
+                    const double an = delassus_[c * k + r];
+                    const double at = delassus_[c * k + r + 1];
+                    delassus_[c * k + r] = an + mu * at;
+                    delassus_[c * k + r + 1] = an - mu * at;
+                }
+            }
+            scale = std::max(scale, std::abs(rhs_[r]));
+        }
+    }
     // Murty's least-index principal pivoting, from the rows the free motion violates.
     const double tolerance = 64.0 * std::numeric_limits<double>::epsilon() * scale;
-    const auto equality = [&](std::size_t r) { return !kinds.empty() && kinds[r] == SoftRowKind::Equality; };
+    const auto equality = [&](std::size_t r) { return isKind(r, SoftRowKind::Equality); };
     for (std::size_t r = 0; r < k; ++r)
     {
         active_[r] = equality(r) || rhs_[r] < 0.0 ? 1U : 0U;
@@ -480,6 +543,21 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
             return invalidInput("soft contact pivoting did not terminate");
         }
         active_[flip] = active_[flip] != 0U ? 0U : 1U;
+    }
+    if (cones)
+    {
+        // Back from the edges' coordinates: f_n = g+ + g-, f_t = mu (g+ - g-).
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            if (isKind(r, SoftRowKind::ConeNormal))
+            {
+                const double plus = force[r];
+                const double minus = force[r + 1];
+                force[r] = plus + minus;
+                force[r + 1] = friction[r + 1] * (plus - minus);
+                ++r;
+            }
+        }
     }
     for (std::size_t r = 0; r < k; ++r)
     {
