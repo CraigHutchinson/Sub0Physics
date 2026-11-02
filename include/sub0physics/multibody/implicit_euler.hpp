@@ -244,4 +244,31 @@ completeLinearlyImplicitStep(const Model& model, const Forcing& forcing, std::ui
                              State& state, Workspace& workspace, ImplicitScheme scheme = ImplicitScheme::Euler,
                              PreparedStepUse use = PreparedStepUse::Consume) noexcept;
 
+/**
+ * Forms and factorises a prepared step's own matrix `M - theta h D - theta^2 h^2 K~` without solving the step, so that
+ * rows can be solved with it (SoftRowSystem::PreparedStep: docs/WHEEL.md section 3.3, exact friction). Completing the step
+ * afterwards forms it again with the forcing's loads.
+ *
+ * @param model The model.
+ * @param state The state the step was prepared at.
+ * @param h Step size; finite and positive.
+ * @param workspace The prepared workspace.
+ * @param scheme Euler or midpoint.
+ * @return Nothing, or InvalidInput when the workspace holds no preparation at this state, or a matrix fault.
+ */
+[[nodiscard]] std::expected<void, Fault> factorPreparedStepMatrix(const Model& model, const State& state,
+                                                                  sub0math::f64::Time h, Workspace& workspace,
+                                                                  ImplicitScheme scheme = ImplicitScheme::Euler) noexcept;
+
+/**
+ * Solves with the factor of factorPreparedStepMatrix, in place.
+ *
+ * @param model The model.
+ * @param workspace The workspace holding the factor.
+ * @param x The right-hand side (dofCount entries), then the solution.
+ * @return Nothing, or InvalidInput (no factor, the size).
+ */
+[[nodiscard]] std::expected<void, Fault> solvePreparedStepMatrix(const Model& model, const Workspace& workspace,
+                                                                 std::span<double> x) noexcept;
+
 } // namespace sub0physics::multibody

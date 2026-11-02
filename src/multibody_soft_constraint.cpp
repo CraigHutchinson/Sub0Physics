@@ -10,6 +10,7 @@
 #include <sub0math/number/det_math.hpp>
 
 #include "multibody_mass.hpp"
+#include "sub0physics/multibody/implicit_euler.hpp"
 #include "sub0physics/multibody/dynamics.hpp"
 #include "sub0physics/multibody/soft_constraint.hpp"
 
@@ -93,6 +94,15 @@ SoftConstraintRow softConstraintTangentRow(const SoftConstraintRow& normal, doub
     return row;
 }
 
+SoftConstraintRow exactVelocityRow(double rate, double diagApprox, double step) noexcept
+{
+    constexpr double Compliance = 1e-14; // relative to the row's scale: rounding, only so dependent rows factor
+    SoftConstraintRow row;
+    row.regularisation = Compliance * diagApprox;
+    row.referenceAcceleration = -rate / step;
+    return row;
+}
+
 namespace
 {
 
@@ -111,13 +121,14 @@ SoftConstraintSolver::SoftConstraintSolver(const Model& model, std::size_t capac
       key_(2 * capacity, 0), touched_(model.dofCount(), 0),
       delassus_(capacity * capacity, 0.0),
       factor_(capacity * capacity, 0.0), rhs_(capacity, 0.0), slack_(capacity, 0.0), work_(capacity, 0.0),
-      subset_(capacity, 0), prior_(capacity, 0), active_(capacity, 0)
+      subset_(capacity, 0), prior_(capacity, 0), flagged_(capacity, 0), active_(capacity, 0)
 {
 }
 
 void SoftConstraintSolver::formUniform(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
                                        std::span<const double> reference, std::span<const double> freeAcceleration,
-                                       std::span<const SoftRowSupport> supports, std::size_t k) noexcept
+                                       std::span<const SoftRowSupport> supports, SoftRowSystem system,
+                                       std::size_t k) noexcept
 {
     const std::size_t n = dof_;
     // Y = M^-1 J^T, A = J Y + R, q = J a0 - aref.
@@ -127,7 +138,15 @@ void SoftConstraintSolver::formUniform(const Model& model, const Workspace& work
         {
             const std::span<double> y(solved_.data() + r * n, n);
             std::copy_n(jacobian.data() + r * n, n, y.begin());
-            (void)solveMassMatrix(model, workspace, y); // sizes checked by the caller
+            // Sizes checked by the caller.
+            if (system == SoftRowSystem::PreparedStep)
+            {
+                (void)solvePreparedStepMatrix(model, workspace, y);
+            }
+            else
+            {
+                (void)solveMassMatrix(model, workspace, y);
+            }
         }
         for (std::size_t r = 0; r < k; ++r)
         {
@@ -184,7 +203,8 @@ void SoftConstraintSolver::formUniform(const Model& model, const Workspace& work
         }
     }
     detail::solveMassMatrixColumns(model, workspace, solved_.data(), k, sweep_.data(), SkipZeroRingRows,
-                                   touched_.data());
+                                   touched_.data(),
+                                   system == SoftRowSystem::PreparedStep ? detail::RingSystem::Step : detail::RingSystem::Mass);
     // PERF (A/B uniform pass 1): with supports, the products read only each row's support, in ascending coordinate
     // order: the terms skipped are exact zeros, so the sums are bit for bit those over every coordinate.
     const std::size_t width = model.treeDofCount() + RingSupportSize;
@@ -214,8 +234,11 @@ void SoftConstraintSolver::formUniform(const Model& model, const Workspace& work
 void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& workspace,
                                          std::span<const double> jacobian, std::span<const double> reference,
                                          std::span<const double> freeAcceleration,
-                                         std::span<const SoftRowSupport> supports, std::size_t k) noexcept
+                                         std::span<const SoftRowSupport> supports, SoftRowSystem system,
+                                         std::size_t k) noexcept
 {
+    const bool step = system == SoftRowSystem::PreparedStep;
+    const double* factor = step ? workspace.implicitMatrix.data() : workspace.massFactor.data();
     const std::size_t nt = model.treeDofCount();
     const std::size_t stride = 2 * nt + 2 * RingSupportSize;
     const auto coordinates = model.coordinates();
@@ -225,7 +248,7 @@ void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& wo
         const SoftRowSupport& sup = supports[r];
         const DeformableRing& ring = model.rings()[sup.ring];
         const RingWorkspace& rw = workspace.rings[sup.ring];
-        const RingCondensation& cond = rw.mass; // the mass matrix's ring block is always block-diagonal
+        const RingCondensation& cond = step ? rw.step : rw.mass; // block-diagonal: always for the mass matrix, checked for the step
         const double* jr = jacobian.data() + r * dof_;
         double* row = structured_.data() + r * stride;
         double* t = row;
@@ -259,10 +282,10 @@ void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& wo
         }
         // PERF (A/B structured pass 1): half the tree solve. With S = L^T D L, t_r^T S^-1 t_c = w_r^T D^-1 w_c for
         // w = L^-T t (one sweep), so each row keeps w and D^-1 w and a pair costs a dot of tree length.
-        detail::sweepMassTree(model, workspace, t);
+        detail::sweepMassTree(model, factor, t);
         for (std::size_t i = 0; i < nt; ++i)
         {
-            v[i] = t[i] / workspace.massFactor[i * nt + i];
+            v[i] = t[i] / factor[i * nt + i];
         }
         // PERF (A/B structured pass 2): J a0 straight from the tree's coordinates and the two nodes, no index lists.
         double q = 0.0;
@@ -309,20 +332,19 @@ void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& wo
     }
 }
 
-std::expected<SoftConstraintSolution, Fault>
-SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
-                            std::span<const double> reference, std::span<const double> regularisation,
-                            std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds,
-                            std::span<double> force, std::span<double> generalized,
-                            std::span<const SoftRowSupport> supports, DelassusForm form,
-                            std::span<const double> friction) noexcept
+std::expected<void, Fault> SoftConstraintSolver::checkRows(const Model& model, const Workspace& workspace,
+                                                           std::span<const double> jacobian, std::size_t k,
+                                                           std::span<const double> regularisation,
+                                                           std::span<const double> freeAcceleration,
+                                                           std::span<const double> force,
+                                                           std::span<const double> generalized,
+                                                           std::span<const SoftRowSupport> supports, DelassusForm form,
+                                                           SoftRowSystem system) const noexcept
 {
     const std::size_t n = dof_;
-    const std::size_t k = reference.size();
     if (model.dofCount() != n || k > capacity_ || jacobian.size() != k * n || regularisation.size() != k ||
         freeAcceleration.size() != n || force.size() != k || generalized.size() != n ||
-        (!kinds.empty() && kinds.size() != k) || (!supports.empty() && supports.size() != k) ||
-        !workspace.isBuiltFor(model))
+        (!supports.empty() && supports.size() != k) || !workspace.isBuiltFor(model))
     {
         return invalidInput("soft contact solve needs consistent sizes within the solver's capacity");
     }
@@ -337,6 +359,202 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
     if (form == DelassusForm::Condensed && supports.empty() && k > 0)
     {
         return invalidInput("the condensed Delassus form needs each row's ring support");
+    }
+    if (system == SoftRowSystem::PreparedStep && !workspace.stepFactored)
+    {
+        return invalidInput("a solve with the step's matrix needs factorPreparedStepMatrix");
+    }
+    return {};
+}
+
+std::expected<double, Fault> SoftConstraintSolver::formRows(const Model& model, const Workspace& workspace,
+                                                            std::span<const double> jacobian,
+                                                            std::span<const double> reference,
+                                                            std::span<const double> regularisation,
+                                                            std::span<const double> freeAcceleration,
+                                                            std::span<const SoftRowSupport> supports, DelassusForm form,
+                                                            SoftRowSystem system, std::size_t k) noexcept
+{
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        if (!(regularisation[r] > 0.0))
+        {
+            return invalidInput("soft contact rows need a positive regularisation");
+        }
+    }
+    // The structure the supports' short forms read: always for the mass matrix, for a step when nothing coupled the nodes.
+    const auto structured = [&] {
+        if (system != SoftRowSystem::PreparedStep)
+        {
+            return true;
+        }
+        return !workspace.stepFactorDense &&
+               std::ranges::all_of(workspace.rings, [](const RingWorkspace& rw) { return rw.step.blockDiagonal; });
+    };
+    if (form == DelassusForm::Condensed && !structured())
+    {
+        return invalidInput("the condensed Delassus form on a step needs a block-diagonal ring block and a tree factor");
+    }
+    if (!supports.empty() && !structured())
+    {
+        supports = {}; // the same numbers through the full solves
+    }
+    if (!supports.empty() && form == DelassusForm::MassSolvePerRow)
+    {
+        // Each row's support in ascending coordinate order: the tree's coordinates, then the edge's two nodes.
+        const std::size_t nt = model.treeDofCount();
+        const std::size_t width = nt + RingSupportSize;
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            std::size_t* index = index_.data() + r * width;
+            for (std::size_t i = 0; i < nt; ++i)
+            {
+                index[i] = i;
+            }
+            const DeformableRing& ring = model.rings()[supports[r].ring];
+            const std::size_t lo = std::min(supports[r].node0, supports[r].node1);
+            const std::size_t hi = std::max(supports[r].node0, supports[r].node1);
+            index[nt] = ring.firstCoordinate + PlanarRingComponents * lo;
+            index[nt + 1] = index[nt] + 1;
+            index[nt + 2] = ring.firstCoordinate + PlanarRingComponents * hi;
+            index[nt + 3] = index[nt + 2] + 1;
+        }
+    }
+    if (form == DelassusForm::Condensed)
+    {
+        formCondensed(model, workspace, jacobian, reference, freeAcceleration, supports, system, k);
+    }
+    else
+    {
+        formUniform(model, workspace, jacobian, reference, freeAcceleration, supports, system, k);
+    }
+    double scale = 0.0;
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        scale = std::max(scale, std::abs(rhs_[r]));
+        delassus_[r * k + r] += regularisation[r];
+    }
+    return scale;
+}
+
+bool SoftConstraintSolver::factorSubset(std::size_t m, std::size_t k, std::size_t& priorCount) noexcept
+{
+    // PERF: factor rows before the first changed row kept across pivots.
+    std::size_t kept = 0;
+    while (kept < m && kept < priorCount && prior_[kept] == subset_[kept])
+    {
+        ++kept;
+    }
+    std::copy_n(subset_.begin(), m, prior_.begin());
+    priorCount = m;
+    for (std::size_t a = kept; a < m; ++a)
+    {
+        for (std::size_t c = 0; c <= a; ++c)
+        {
+            double sum = delassus_[subset_[a] * k + subset_[c]];
+            for (std::size_t l = 0; l < c; ++l)
+            {
+                sum -= factor_[a * k + l] * factor_[c * k + l];
+            }
+            if (a == c)
+            {
+                if (!(sum > 0.0))
+                {
+                    return false;
+                }
+                factor_[a * k + a] = std::sqrt(sum);
+            }
+            else
+            {
+                factor_[a * k + c] = sum / factor_[c * k + c];
+            }
+        }
+    }
+    return true;
+}
+
+void SoftConstraintSolver::solveSubset(std::size_t m, std::size_t k) noexcept
+{
+    for (std::size_t a = 0; a < m; ++a)
+    {
+        double sum = work_[a];
+        for (std::size_t l = 0; l < a; ++l)
+        {
+            sum -= factor_[a * k + l] * work_[l];
+        }
+        work_[a] = sum / factor_[a * k + a];
+    }
+    for (std::size_t a = m; a-- > 0;)
+    {
+        double sum = work_[a];
+        for (std::size_t l = a + 1; l < m; ++l)
+        {
+            sum -= factor_[l * k + a] * work_[l];
+        }
+        work_[a] = sum / factor_[a * k + a];
+    }
+}
+
+std::expected<void, Fault> SoftConstraintSolver::mapForces(const Model& model, std::span<const double> jacobian,
+                                                           std::span<const double> force, std::span<double> generalized,
+                                                           std::span<const SoftRowSupport> supports,
+                                                           std::size_t k) noexcept
+{
+    const std::size_t n = dof_;
+    for (std::size_t r = 0; r < k; ++r)
+    {
+        const double f = force[r];
+        if (!std::isfinite(f))
+        {
+            return std::unexpected(Fault{FaultKind::NonFiniteState, "nonfinite soft contact force"});
+        }
+        if (f == 0.0)
+        {
+            continue;
+        }
+        if (supports.empty())
+        {
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                generalized[i] += jacobian[r * n + i] * f;
+            }
+            continue;
+        }
+        // Over the support only: the other entries would add exact zeros.
+        const std::size_t nt = model.treeDofCount();
+        for (std::size_t i = 0; i < nt; ++i)
+        {
+            generalized[i] += jacobian[r * n + i] * f;
+        }
+        const std::size_t first = model.rings()[supports[r].ring].firstCoordinate;
+        const std::size_t lo = first + PlanarRingComponents * std::min(supports[r].node0, supports[r].node1);
+        const std::size_t hi = first + PlanarRingComponents * std::max(supports[r].node0, supports[r].node1);
+        for (const std::size_t at : {lo, lo + 1, hi, hi + 1})
+        {
+            generalized[at] += jacobian[r * n + at] * f;
+        }
+    }
+    return {};
+}
+
+std::expected<SoftConstraintSolution, Fault>
+SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
+                            std::span<const double> reference, std::span<const double> regularisation,
+                            std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds,
+                            std::span<double> force, std::span<double> generalized,
+                            std::span<const SoftRowSupport> supports, DelassusForm form,
+                            std::span<const double> friction, SoftRowSystem system) noexcept
+{
+    const std::size_t k = reference.size();
+    if (auto checked = checkRows(model, workspace, jacobian, k, regularisation, freeAcceleration, force, generalized,
+                                 supports, form, system);
+        !checked)
+    {
+        return std::unexpected(checked.error());
+    }
+    if (!kinds.empty() && kinds.size() != k)
+    {
+        return invalidInput("soft contact solve needs consistent sizes within the solver's capacity");
     }
     const auto isKind = [&](std::size_t r, SoftRowKind kind) { return !kinds.empty() && kinds[r] == kind; };
     bool cones = false;
@@ -363,48 +581,13 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
     {
         return solution;
     }
-    for (std::size_t r = 0; r < k; ++r)
+    const auto formed = formRows(model, workspace, jacobian, reference, regularisation, freeAcceleration, supports, form,
+                                 system, k);
+    if (!formed)
     {
-        if (!(regularisation[r] > 0.0))
-        {
-            return invalidInput("soft contact rows need a positive regularisation");
-        }
+        return std::unexpected(formed.error());
     }
-    if (!supports.empty() && form == DelassusForm::MassSolvePerRow)
-    {
-        // Each row's support in ascending coordinate order: the tree's coordinates, then the edge's two nodes.
-        const std::size_t nt = model.treeDofCount();
-        const std::size_t width = nt + RingSupportSize;
-        for (std::size_t r = 0; r < k; ++r)
-        {
-            std::size_t* index = index_.data() + r * width;
-            for (std::size_t i = 0; i < nt; ++i)
-            {
-                index[i] = i;
-            }
-            const DeformableRing& ring = model.rings()[supports[r].ring];
-            const std::size_t lo = std::min(supports[r].node0, supports[r].node1);
-            const std::size_t hi = std::max(supports[r].node0, supports[r].node1);
-            index[nt] = ring.firstCoordinate + PlanarRingComponents * lo;
-            index[nt + 1] = index[nt] + 1;
-            index[nt + 2] = ring.firstCoordinate + PlanarRingComponents * hi;
-            index[nt + 3] = index[nt + 2] + 1;
-        }
-    }
-    if (form == DelassusForm::Condensed)
-    {
-        formCondensed(model, workspace, jacobian, reference, freeAcceleration, supports, k);
-    }
-    else
-    {
-        formUniform(model, workspace, jacobian, reference, freeAcceleration, supports, k);
-    }
-    double scale = 0.0;
-    for (std::size_t r = 0; r < k; ++r)
-    {
-        scale = std::max(scale, std::abs(rhs_[r]));
-        delassus_[r * k + r] += regularisation[r];
-    }
+    double scale = *formed;
     if (cones)
     {
         // Each cone's rows to its edges' coordinates, in place: A <- E^T A E, q <- E^T q (the class comment).
@@ -445,6 +628,10 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
     }
     const std::uint32_t maxPivots = static_cast<std::uint32_t>(16U * k + 64U);
     std::size_t priorCount = 0;
+    // The block rule: flip every violating row while their count falls or within a few stalls, then one at a time.
+    bool block = rule_ == SoftPivotRule::Block;
+    std::size_t fewest = k + 1;
+    int stalls = 3;
     for (;;)
     {
         // Solve A_SS f_S = -q_S by Cholesky.
@@ -456,81 +643,46 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
                 subset_[m++] = r;
             }
         }
-        // PERF: factor rows before the first changed row kept across pivots.
-        std::size_t kept = 0;
-        while (kept < m && kept < priorCount && prior_[kept] == subset_[kept])
+        if (!factorSubset(m, k, priorCount))
         {
-            ++kept;
-        }
-        std::copy_n(subset_.begin(), m, prior_.begin());
-        priorCount = m;
-        for (std::size_t a = kept; a < m; ++a)
-        {
-            for (std::size_t c = 0; c <= a; ++c)
-            {
-                double sum = delassus_[subset_[a] * k + subset_[c]];
-                for (std::size_t l = 0; l < c; ++l)
-                {
-                    sum -= factor_[a * k + l] * factor_[c * k + l];
-                }
-                if (a == c)
-                {
-                    if (!(sum > 0.0))
-                    {
-                        return invalidInput("soft contact matrix is not positive definite");
-                    }
-                    factor_[a * k + a] = std::sqrt(sum);
-                }
-                else
-                {
-                    factor_[a * k + c] = sum / factor_[c * k + c];
-                }
-            }
+            return invalidInput("soft contact matrix is not positive definite");
         }
         for (std::size_t a = 0; a < m; ++a)
         {
-            double sum = -rhs_[subset_[a]];
-            for (std::size_t l = 0; l < a; ++l)
-            {
-                sum -= factor_[a * k + l] * work_[l];
-            }
-            work_[a] = sum / factor_[a * k + a];
+            work_[a] = -rhs_[subset_[a]];
         }
-        for (std::size_t a = m; a-- > 0;)
-        {
-            double sum = work_[a];
-            for (std::size_t l = a + 1; l < m; ++l)
-            {
-                sum -= factor_[l * k + a] * work_[l];
-            }
-            work_[a] = sum / factor_[a * k + a];
-        }
+        solveSubset(m, k);
         std::ranges::fill(force, 0.0);
         for (std::size_t a = 0; a < m; ++a)
         {
             force[subset_[a]] = work_[a];
         }
-        // w = A f + q, and the first row that breaks complementarity.
+        // w = A f + q, and the rows that break complementarity (the first only, by the least-index rule).
         std::size_t flip = k;
-        for (std::size_t r = 0; r < k && flip == k; ++r)
+        std::size_t violations = 0;
+        for (std::size_t r = 0; r < k && (block || flip == k); ++r)
         {
+            bool violated = false;
             if (active_[r] != 0U)
             {
-                if (force[r] < 0.0 && !equality(r))
+                violated = force[r] < 0.0 && !equality(r);
+            }
+            else
+            {
+                double w = rhs_[r];
+                // PERF: only active rows carry force; the rest add exact zeros.
+                for (std::size_t a = 0; a < m; ++a)
                 {
-                    flip = r;
+                    w += delassus_[r * k + subset_[a]] * force[subset_[a]];
                 }
-                continue;
+                slack_[r] = w;
+                violated = w < -tolerance;
             }
-            double w = rhs_[r];
-            for (std::size_t c = 0; c < k; ++c)
+            if (violated)
             {
-                w += delassus_[r * k + c] * force[c];
-            }
-            slack_[r] = w;
-            if (w < -tolerance)
-            {
-                flip = r;
+                flip = std::min(flip, r);
+                violations += 1;
+                flagged_[violations - 1U] = r;
             }
         }
         if (flip == k)
@@ -542,7 +694,29 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         {
             return invalidInput("soft contact pivoting did not terminate");
         }
-        active_[flip] = active_[flip] != 0U ? 0U : 1U;
+        if (block)
+        {
+            if (violations < fewest)
+            {
+                fewest = violations;
+                stalls = 3;
+            }
+            else if (--stalls < 0)
+            {
+                block = false; // Murty's rule from here terminates on its own
+            }
+        }
+        if (block)
+        {
+            for (std::size_t v = 0; v < violations; ++v)
+            {
+                active_[flagged_[v]] = active_[flagged_[v]] != 0U ? 0U : 1U;
+            }
+        }
+        else
+        {
+            active_[flip] = active_[flip] != 0U ? 0U : 1U;
+        }
     }
     if (cones)
     {
@@ -559,38 +733,144 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
             }
         }
     }
+    if (auto mapped = mapForces(model, jacobian, force, generalized, supports, k); !mapped)
+    {
+        return std::unexpected(mapped.error());
+    }
+    return solution;
+}
+
+std::expected<SoftConstraintSolution, Fault>
+SoftConstraintSolver::solveBounded(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
+                                   std::span<const double> reference, std::span<const double> regularisation,
+                                   std::span<const double> freeAcceleration, std::span<const double> bounds,
+                                   std::span<double> force, std::span<double> generalized,
+                                   std::span<const SoftRowSupport> supports, DelassusForm form,
+                                   SoftRowSystem system) noexcept
+{
+    const std::size_t k = reference.size();
+    if (auto checked = checkRows(model, workspace, jacobian, k, regularisation, freeAcceleration, force, generalized,
+                                 supports, form, system);
+        !checked)
+    {
+        return std::unexpected(checked.error());
+    }
+    if (bounds.size() != k)
+    {
+        return invalidInput("soft contact solve needs consistent sizes within the solver's capacity");
+    }
+    for (const double b : bounds)
+    {
+        if (!std::isfinite(b) || b < 0.0)
+        {
+            return invalidInput("bounded rows need a finite bound that is not negative");
+        }
+    }
+    std::ranges::fill(generalized, 0.0);
+    SoftConstraintSolution solution;
+    if (k == 0)
+    {
+        return solution;
+    }
+    const auto formed = formRows(model, workspace, jacobian, reference, regularisation, freeAcceleration, supports, form,
+                                 system, k);
+    if (!formed)
+    {
+        return std::unexpected(formed.error());
+    }
+    const double tolerance = 64.0 * std::numeric_limits<double>::epsilon() * *formed;
+    constexpr std::uint8_t Free = 0U;
+    constexpr std::uint8_t AtUpper = 1U;
+    constexpr std::uint8_t AtLower = 2U;
     for (std::size_t r = 0; r < k; ++r)
     {
-        const double f = force[r];
-        if (!std::isfinite(f))
+        active_[r] = bounds[r] > 0.0 ? Free : AtUpper; // a zero bound is pinned (and stays at zero force)
+    }
+    const std::uint32_t maxPivots = static_cast<std::uint32_t>(16U * k + 64U);
+    std::size_t priorCount = 0;
+    for (;;)
+    {
+        // Free rows: A_FF f_F = -(q_F + A_FB f_B), the others at their bounds.
+        std::size_t m = 0;
+        for (std::size_t r = 0; r < k; ++r)
         {
-            return std::unexpected(Fault{FaultKind::NonFiniteState, "nonfinite soft contact force"});
-        }
-        if (f == 0.0)
-        {
-            continue;
-        }
-        if (supports.empty())
-        {
-            for (std::size_t i = 0; i < n; ++i)
+            if (active_[r] == Free)
             {
-                generalized[i] += jacobian[r * n + i] * f;
+                subset_[m++] = r;
+                force[r] = 0.0;
             }
-            continue;
+            else
+            {
+                force[r] = active_[r] == AtUpper ? bounds[r] : -bounds[r];
+            }
         }
-        // Over the support only: the other entries would add exact zeros.
-        const std::size_t nt = model.treeDofCount();
-        for (std::size_t i = 0; i < nt; ++i)
+        if (!factorSubset(m, k, priorCount))
         {
-            generalized[i] += jacobian[r * n + i] * f;
+            return invalidInput("bounded row matrix is not positive definite");
         }
-        const std::size_t first = model.rings()[supports[r].ring].firstCoordinate;
-        const std::size_t lo = first + PlanarRingComponents * std::min(supports[r].node0, supports[r].node1);
-        const std::size_t hi = first + PlanarRingComponents * std::max(supports[r].node0, supports[r].node1);
-        for (const std::size_t at : {lo, lo + 1, hi, hi + 1})
+        for (std::size_t a = 0; a < m; ++a)
         {
-            generalized[at] += jacobian[r * n + at] * f;
+            double sum = -rhs_[subset_[a]];
+            for (std::size_t c = 0; c < k; ++c)
+            {
+                sum -= delassus_[subset_[a] * k + c] * force[c];
+            }
+            work_[a] = sum;
         }
+        solveSubset(m, k);
+        for (std::size_t a = 0; a < m; ++a)
+        {
+            force[subset_[a]] = work_[a];
+        }
+        // The first row that breaks the box's complementarity: a free row beyond a bound, or a row at a bound whose
+        // gradient w = A f + q pushes it inside.
+        std::size_t flip = k;
+        std::uint8_t to = Free;
+        for (std::size_t r = 0; r < k && flip == k; ++r)
+        {
+            if (active_[r] == Free)
+            {
+                if (force[r] > bounds[r])
+                {
+                    flip = r;
+                    to = AtUpper;
+                }
+                else if (force[r] < -bounds[r])
+                {
+                    flip = r;
+                    to = AtLower;
+                }
+                continue;
+            }
+            if (bounds[r] == 0.0)
+            {
+                continue;
+            }
+            double w = rhs_[r];
+            for (std::size_t c = 0; c < k; ++c)
+            {
+                w += delassus_[r * k + c] * force[c];
+            }
+            if (active_[r] == AtUpper ? w > tolerance : w < -tolerance)
+            {
+                flip = r;
+                to = Free;
+            }
+        }
+        if (flip == k)
+        {
+            solution.activeRows = m;
+            break;
+        }
+        if (++solution.pivots > maxPivots)
+        {
+            return invalidInput("bounded row pivoting did not terminate");
+        }
+        active_[flip] = to;
+    }
+    if (auto mapped = mapForces(model, jacobian, force, generalized, supports, k); !mapped)
+    {
+        return std::unexpected(mapped.error());
     }
     return solution;
 }

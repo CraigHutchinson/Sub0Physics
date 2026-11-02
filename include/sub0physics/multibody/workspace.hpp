@@ -308,6 +308,8 @@ struct Workspace
     std::vector<double> preparedValues; ///< The state a prepared step was prepared at (prepareLinearlyImplicitStep); internal.
     bool stepPrepared = false;          ///< Whether a prepared step is waiting for completeLinearlyImplicitStep; internal.
     ImplicitTerms preparedTerms = ImplicitTerms::Full; ///< The prepared step's implicit terms; internal.
+    bool stepFactored = false;    ///< factorPreparedStepMatrix's factor is in place; internal.
+    bool stepFactorDense = false; ///< That factor is dense rather than along the tree; internal.
     PlanarKinematics planar;          ///< The planar formulation's kinematics (Formulation::Planar); empty otherwise.
     ConstraintScratch constraintScratch;    ///< Solver scratch; internal.
     std::vector<RingWorkspace> rings;       ///< One per ring of the model, in its order.

@@ -834,6 +834,41 @@ std::expected<void, Fault> prepareLinearlyImplicitStep(const Model& model, const
     std::ranges::copy(state.values, ws.preparedValues.begin());
     ws.preparedTerms = terms;
     ws.stepPrepared = true;
+    ws.stepFactored = false;
+    return {};
+}
+
+std::expected<void, Fault> factorPreparedStepMatrix(const Model& model, const State& state, sub0math::f64::Time h,
+                                                    Workspace& ws, ImplicitScheme scheme) noexcept
+{
+    if (!ws.isBuiltFor(model) || !state.isSizedFor(model) || !ws.stepPrepared ||
+        !std::ranges::equal(state.values, ws.preparedValues))
+    {
+        return invalidInput("the workspace holds no step prepared at this state");
+    }
+    const double dt = h.si();
+    if (!std::isfinite(dt) || !(dt > 0.0))
+    {
+        return invalidInput("step needs a finite positive step size");
+    }
+    const auto dense = formStepSystem(model, state, Forcing{}, model.hasForceElements() ? ws.elementForce.data() : nullptr,
+                                      ws, dt, true, ws.preparedTerms, true, scheme == ImplicitScheme::Midpoint ? 0.5 : 1.0);
+    if (!dense)
+    {
+        return std::unexpected(dense.error());
+    }
+    ws.stepFactored = true;
+    ws.stepFactorDense = *dense;
+    return {};
+}
+
+std::expected<void, Fault> solvePreparedStepMatrix(const Model& model, const Workspace& ws, std::span<double> x) noexcept
+{
+    if (!ws.isBuiltFor(model) || !ws.stepFactored || x.size() != model.dofCount())
+    {
+        return invalidInput("a solve with the step's matrix needs factorPreparedStepMatrix and dofCount entries");
+    }
+    solveStepSystem(model, ws, ws.stepFactorDense, x.data());
     return {};
 }
 
@@ -863,6 +898,7 @@ std::expected<void, Fault> completeLinearlyImplicitStep(const Model& model, cons
     // the step's own storage (implicitMatrix, implicitRhs, the step condensation, the contact blocks, qdd), so the
     // preparation stays valid for the starting values.
     ws.stepPrepared = use == PreparedStepUse::Keep;
+    ws.stepFactored = false; // completing forms the matrix again, with the forcing's loads
     return finishLinearlyImplicit(model, forcing, tick, dt, state, ws, ws.preparedTerms,
                                   scheme == ImplicitScheme::Midpoint ? 0.5 : 1.0);
 }
@@ -876,8 +912,9 @@ void solveMassTree(const Model& model, const Workspace& ws, double* x) noexcept
 }
 
 void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, std::size_t columns, double* scratch,
-                            bool skipZeroRingRows, const std::uint8_t* touchedRows) noexcept
+                            bool skipZeroRingRows, const std::uint8_t* touchedRows, RingSystem system) noexcept
 {
+    const bool mass = system == RingSystem::Mass;
     const std::size_t m = columns;
     const auto coordinates = model.coordinates();
     const auto rings = model.rings();
@@ -887,7 +924,7 @@ void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, 
     {
         const DeformableRing& ring = rings[r];
         const RingWorkspace& rw = ws.rings[r];
-        const RingCondensation& cond = rw.mass;
+        const RingCondensation& cond = mass ? rw.mass : rw.step;
         std::fill_n(g, 3 * m, 0.0);
         for (std::size_t i = 0; i < ring.nodeCount; ++i)
         {
@@ -943,7 +980,7 @@ void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, 
     // solveTree, column-wise.
     const auto parents = model.parents();
     const std::size_t n = parents.size();
-    const double* h = ws.massFactor.data();
+    const double* h = mass ? ws.massFactor.data() : ws.implicitMatrix.data();
     for (std::size_t i = n; i-- > 0;)
     {
         for (std::size_t j = parents[i]; j != NoParent; j = parents[j])
@@ -980,7 +1017,7 @@ void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, 
     {
         const DeformableRing& ring = rings[r];
         const RingWorkspace& rw = ws.rings[r];
-        const RingCondensation& cond = rw.mass;
+        const RingCondensation& cond = mass ? rw.mass : rw.step;
         std::fill_n(v, 3 * m, 0.0);
         for (std::size_t k = 0; k < ring.hostChain.size(); ++k)
         {
@@ -1007,12 +1044,11 @@ void solveMassMatrixColumns(const Model& model, const Workspace& ws, double* x, 
     }
 }
 
-void sweepMassTree(const Model& model, const Workspace& ws, double* x) noexcept
+void sweepMassTree(const Model& model, const double* h, double* x) noexcept
 {
     // The first loop of solveTree: L^T y = b.
     const auto parents = model.parents();
     const std::size_t n = parents.size();
-    const double* h = ws.massFactor.data();
     for (std::size_t i = n; i-- > 0;)
     {
         for (std::size_t j = parents[i]; j != NoParent; j = parents[j])

@@ -250,6 +250,7 @@ TEST_CASE("Ring contact: rows, the soft-constraint solve, contact element loads 
     const std::array<SoftRowKind, 4> coneKinds{SoftRowKind::ConeNormal, SoftRowKind::ConeTangent, SoftRowKind::ConeNormal,
                                                SoftRowKind::ConeTangent};
     const std::array<double, 4> coneFriction{0.6, 0.6, 0.6, 0.6};
+    const std::array<double, 4> bounds{0.0, 5.0, 1.0, 100.0};
     const std::array<SoftRowSupport, 4> supports{SoftRowSupport{.ring = 0, .node0 = 10, .node1 = 11},
                                                  SoftRowSupport{.ring = 0, .node0 = 11, .node1 = 12},
                                                  SoftRowSupport{.ring = 0, .node0 = 12, .node1 = 13},
@@ -271,6 +272,13 @@ TEST_CASE("Ring contact: rows, the soft-constraint solve, contact element loads 
                              DelassusForm::MassSolvePerRow, coneFriction));
         REQUIRE(solver.solve(model, ws, jacobian, reference, regularisation, free, coneKinds, force, generalized, supports,
                              DelassusForm::Condensed, coneFriction));
+        // Bounded rows with the step's own matrix.
+        REQUIRE(factorPreparedStepMatrix(model, s, h, ws));
+        REQUIRE(solvePreparedStepMatrix(model, ws, generalized));
+        REQUIRE(solver.solveBounded(model, ws, jacobian, reference, regularisation, free, bounds, force, generalized, supports));
+        REQUIRE(solver.solveBounded(model, ws, jacobian, reference, regularisation, free, bounds, force, generalized, supports,
+                                    DelassusForm::Condensed));
+        solver.setPivotRule(k % 2 == 0 ? SoftPivotRule::Block : SoftPivotRule::LeastIndex);
         for (std::size_t l = 0; l < loads.size(); ++l)
         {
             const RingContactGeometry g{.ring = 0, .edge = 20 + l, .axisT = 0.3, .witness = ContactWitness::Vertex,

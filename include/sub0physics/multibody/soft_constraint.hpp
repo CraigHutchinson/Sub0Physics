@@ -73,6 +73,19 @@ struct SoftConstraintRow
                                                          double impratio = 1.0) noexcept;
 
 /**
+ * The exact limit of a tangent row (the improved model's Coulomb row, docs/WHEEL.md section 3.3): no regulariser and a
+ * reference that brings the row's rate to zero at the end of the step, `J a = -v / h`, so a sticking row holds with zero
+ * slip through the step when solved with the step's own matrix (SoftRowSystem::PreparedStep). `R` is a compliance of
+ * 1e-14 of the row's diagonal, only so that dependent rows stay factorable: it leaves a slip of `h R f` (order 1e-14 m/s).
+ *
+ * @param rate The row's rate v = J qd [m/s].
+ * @param diagApprox A scale of the row's diagonal of `J A^-1 J^T` [1/kg] (the node inverse weights, as the soft row).
+ * @param step The integration step h [s].
+ * @return The row (its stiffness and impedance unused).
+ */
+[[nodiscard]] SoftConstraintRow exactVelocityRow(double rate, double diagApprox, double step) noexcept;
+
+/**
  * How a soft-constraint row is bounded (MuJoCo mj_constraintUpdate_impl, engine_core_constraint.c:3240-3408). Later row
  * kinds (friction loss, M3c) join this list and the one solve.
  */
@@ -108,12 +121,31 @@ enum class DelassusForm : std::uint8_t
     Condensed
 };
 
+/**
+ * Which matrix couples the rows of a solve.
+ */
+enum class SoftRowSystem : std::uint8_t
+{
+    MassMatrix,  ///< `J M^-1 J^T` at the start of the step (factorMassMatrix): the reference's forward pass.
+    PreparedStep ///< `J A^-1 J^T` with the prepared step's own matrix (factorPreparedStepMatrix): rows hold exactly through the step.
+};
+
 /** The ring coordinates a row touches besides the tree's: one ring edge's two nodes (a ring contact's row). */
 struct SoftRowSupport
 {
     std::size_t ring = 0;  ///< Index in Model::rings().
     std::size_t node0 = 0; ///< First node (an edge's `e`).
     std::size_t node1 = 0; ///< Second node (`e + 1 mod N`).
+};
+
+/**
+ * How a complementarity solve changes its active set: the same unique solution, reached differently (A/B; bit for bit the
+ * same final solve when both end on one active set). docs/PERFORMANCE.md, "Friction rows A/B".
+ */
+enum class SoftPivotRule : std::uint8_t
+{
+    LeastIndex, ///< One row per iteration, the first that breaks complementarity (Murty): terminates on its own.
+    Block       ///< Every such row per iteration (Judice and Pires), falling back to LeastIndex when the count stalls.
 };
 
 /** Outcome of a soft-constraint solve. */
@@ -155,6 +187,16 @@ public:
      */
     SoftConstraintSolver(const Model& model, std::size_t capacity);
 
+    /**
+     * Chooses the pivot rule of later solves (the default is LeastIndex).
+     *
+     * @param rule The rule.
+     */
+    void setPivotRule(SoftPivotRule rule) noexcept
+    {
+        rule_ = rule;
+    }
+
     /** @return The row capacity. */
     [[nodiscard]] std::size_t capacity() const noexcept
     {
@@ -181,26 +223,84 @@ public:
      * @return The solution's counts, or InvalidInput (sizes, capacity, a regularisation that is not positive, a
      *         support outside the model, Condensed without supports, a cone without its pair or its mu) or
      *         NonFiniteState.
+     * @param system The matrix that couples the rows; PreparedStep with the condensed form needs a block-diagonal ring
+     *        block and a factor along the tree (DampingOnlyMassPattern).
      */
     [[nodiscard]] std::expected<SoftConstraintSolution, Fault>
     solve(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
           std::span<const double> reference, std::span<const double> regularisation,
           std::span<const double> freeAcceleration, std::span<const SoftRowKind> kinds, std::span<double> force,
           std::span<double> generalized, std::span<const SoftRowSupport> supports = {},
-          DelassusForm form = DelassusForm::MassSolvePerRow, std::span<const double> friction = {}) noexcept;
+          DelassusForm form = DelassusForm::MassSolvePerRow, std::span<const double> friction = {},
+          SoftRowSystem system = SoftRowSystem::MassMatrix) noexcept;
+
+    /**
+     * Solves bounded rows (docs/WHEEL.md section 10, item 2): `|f_i| <= b_i` with the bound given, not a function of the
+     * solve, so a sliding row's force is exactly its bound and no normal row is lifted by it (a cone solved with hard
+     * tangent rows would separate a sliding contact at `mu |v_t|`: the associated flow rule). The problem is the convex QP
+     * minimise `1/2 f^T (J A^-1 J^T + R) f + (J a0 - aref)^T f` over the box, solved exactly by least-index principal
+     * pivoting (each row free, at its upper bound or at its lower bound; the matrix is positive definite, so it
+     * terminates). A row with a zero bound has zero force. Velocity-level only: no position term.
+     *
+     * @param model The model.
+     * @param workspace A workspace whose chosen system is factorised.
+     * @param jacobian `rows` rows of dofCount entries, row-major.
+     * @param reference aref per row.
+     * @param regularisation R per row; positive (exactVelocityRow).
+     * @param freeAcceleration a0 under the chosen system, dofCount entries.
+     * @param bounds b per row; finite and not negative [N].
+     * @param force Receives f per row [N].
+     * @param generalized Receives `J^T f`, dofCount entries.
+     * @param supports As solve.
+     * @param form As solve.
+     * @param system As solve; the default, PreparedStep, holds exact stick through the step.
+     * @return The solution's counts, or InvalidInput (as solve; a negative bound) or NonFiniteState.
+     */
+    [[nodiscard]] std::expected<SoftConstraintSolution, Fault>
+    solveBounded(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
+                 std::span<const double> reference, std::span<const double> regularisation,
+                 std::span<const double> freeAcceleration, std::span<const double> bounds, std::span<double> force,
+                 std::span<double> generalized, std::span<const SoftRowSupport> supports = {},
+                 DelassusForm form = DelassusForm::MassSolvePerRow,
+                 SoftRowSystem system = SoftRowSystem::PreparedStep) noexcept;
 
 private:
-    /** The uniform form: Y = M^-1 J^T by full solves, then J Y (and q = J a0 - aref). */
+    /** Checks the sizes and supports every solve shares. */
+    [[nodiscard]] std::expected<void, Fault> checkRows(const Model& model, const Workspace& workspace,
+                                                       std::span<const double> jacobian, std::size_t k,
+                                                       std::span<const double> regularisation,
+                                                       std::span<const double> freeAcceleration,
+                                                       std::span<const double> force, std::span<const double> generalized,
+                                                       std::span<const SoftRowSupport> supports, DelassusForm form,
+                                                       SoftRowSystem system) const noexcept;
+    /** Forms `A = J S^-1 J^T + R` in `delassus_` and `q = J a0 - aref` in `rhs_`; returns the largest |q|. */
+    [[nodiscard]] std::expected<double, Fault> formRows(const Model& model, const Workspace& workspace,
+                                                        std::span<const double> jacobian,
+                                                        std::span<const double> reference,
+                                                        std::span<const double> regularisation,
+                                                        std::span<const double> freeAcceleration,
+                                                        std::span<const SoftRowSupport> supports, DelassusForm form,
+                                                        SoftRowSystem system, std::size_t k) noexcept;
+    /** The uniform form: Y = S^-1 J^T by full solves, then J Y (and q = J a0 - aref). */
     void formUniform(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
                      std::span<const double> reference, std::span<const double> freeAcceleration,
-                     std::span<const SoftRowSupport> supports, std::size_t k) noexcept;
+                     std::span<const SoftRowSupport> supports, SoftRowSystem system, std::size_t k) noexcept;
     /** The structured form from the condensation (supports required). */
     void formCondensed(const Model& model, const Workspace& workspace, std::span<const double> jacobian,
                        std::span<const double> reference, std::span<const double> freeAcceleration,
-                       std::span<const SoftRowSupport> supports, std::size_t k) noexcept;
+                       std::span<const SoftRowSupport> supports, SoftRowSystem system, std::size_t k) noexcept;
+    /** Cholesky of `delassus_` on `subset_[0..m)`, keeping the rows before the first that changed since the last call. */
+    [[nodiscard]] bool factorSubset(std::size_t m, std::size_t k, std::size_t& priorCount) noexcept;
+    /** Solves the factored subset in place: `work_[0..m)` is the right-hand side, then the solution. */
+    void solveSubset(std::size_t m, std::size_t k) noexcept;
+    /** Adds `J^T f` to `generalized`, over each row's support when given. */
+    [[nodiscard]] std::expected<void, Fault> mapForces(const Model& model, std::span<const double> jacobian,
+                                                       std::span<const double> force, std::span<double> generalized,
+                                                       std::span<const SoftRowSupport> supports, std::size_t k) noexcept;
 
     std::size_t capacity_;
     std::size_t dof_;
+    SoftPivotRule rule_ = SoftPivotRule::LeastIndex;
     std::vector<double> solved_;     // capacity x dof: M^-1 J^T, by row (uniform); per row the tree sweep and node terms (structured)
     std::vector<std::size_t> index_; // capacity x MaxSupport: each row's support coordinates, ascending
     std::vector<double> structured_; // capacity x (2 tree + 8): the structured form's per-row values
@@ -214,7 +314,8 @@ private:
     std::vector<double> work_;       // capacity
     std::vector<std::size_t> subset_; // capacity
     std::vector<std::size_t> prior_;  // capacity: the subset the factor rows were formed for
-    std::vector<std::uint8_t> active_; // capacity
+    std::vector<std::size_t> flagged_; // capacity: the rows the block rule flips
+    std::vector<std::uint8_t> active_; // capacity: in the box solve, each row's state
 };
 
 } // namespace sub0physics::multibody
