@@ -1,6 +1,9 @@
 {
   "version": 1,
   "description": "Sub0Physics local checks (docs/ci-strategy.md); run: python <.github repo>/tools/ci/local_ci.py --level quick|full",
+  "selftest": [
+    "{python} ../Sub0Math/tools/perf/bench_check.py selftest --repo ."
+  ],
   "levels": {
     "quick": {
       "steps": [
@@ -21,6 +24,12 @@
             "cmake --preset default -B {builddir} -G Ninja -DSUB0PHYSICS_WARNINGS_AS_ERRORS=ON -DSUB0PHYSICS_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF -DCMAKE_CXX_FLAGS=-march=x86-64-v3",
             "cmake --build {builddir} -j {jobs}",
             "ctest --preset quick --test-dir {builddir}"
+          ]
+        },
+        {
+          "name": "hook-check",
+          "commands": [
+            "{python} {ci_dir}/hook_check.py --repo {repo}"
           ]
         }
       ]
