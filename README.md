@@ -60,6 +60,8 @@ CPM 0.43+ uses them, with a warning, and CI builds the pinned commits. CPM remem
 the build cache, so configure a fresh build directory after setting or clearing one. CI builds with GCC, Clang,
 MSVC and Apple Clang, runs ASan/UBSan, and compiles every public header on its own.
 
+The determinism digests are also checked on WebAssembly: `python ../Sub0Math/tools/wasm/wasm_gate.py --repo . --prefix SUB0PHYSICS` builds with Emscripten and runs the tests under Node (skipped without an emsdk; see Sub0Math's `docs/CI.md`, "WebAssembly leg").
+
 Consume it with CPM at an exact commit:
 
 ```cmake

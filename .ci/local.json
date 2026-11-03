@@ -54,6 +54,12 @@
             "cmake --build {builddir} -j {jobs}",
             "ctest --preset full --test-dir {builddir}"
           ]
+        },
+        {
+          "name": "wasm",
+          "commands": [
+            "{python} ../Sub0Math/tools/wasm/wasm_gate.py --repo {repo} --prefix SUB0PHYSICS"
+          ]
         }
       ]
     }
