@@ -327,8 +327,10 @@ void SoftConstraintSolver::formCondensed(const Model& model, const Workspace& wo
             q += jr[at] * freeAcceleration[at] + jr[at + 1] * freeAcceleration[at + 1];
         }
         rhs_[r] = q - reference[r];
-        key_[2 * r] = (sup.ring << 32U) | sup.node0;
-        key_[2 * r + 1] = (sup.ring << 32U) | sup.node1;
+        // 64-bit before the shift: size_t is 32 bits on wasm32.
+        const std::uint64_t ringKey = static_cast<std::uint64_t>(sup.ring) << 32U;
+        key_[2 * r] = ringKey | sup.node0;
+        key_[2 * r + 1] = ringKey | sup.node1;
     }
     for (std::size_t r = 0; r < k; ++r)
     {
