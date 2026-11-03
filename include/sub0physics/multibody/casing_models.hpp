@@ -35,7 +35,8 @@ struct TreadFaceResponse
  * the force jumps from one node to the other. Here the maximum is smoothed within a band:
  * `m = (p0 + p1) / 2 + h(|p0 - p1| / 2)`, `h(x) = x` for `x >= band` and `x^2 (2 band - x) / band^2` within it, so
  * `h <= x`, `h` and `h'` are continuous and the law is the witness law exactly outside the band. The potential is
- * `k m^2 / 2`, the force `max(0, k m + c m')` shared by `dm/dp0`, `dm/dp1` (continuous, summing to one).
+ * `k m^2 / 2`, the force `max(0, k m + c m')` shared by `dm/dp0`, `dm/dp1` (continuous, summing to one). The
+ * smoothing is the shared kernel `smoothedMaximum` (geometry/smoothed_extremum.hpp), also the continuous edge law's.
  *
  * @param stiffness k per contact [N/m]; positive.
  * @param damping c per contact [N s/m]; not negative.

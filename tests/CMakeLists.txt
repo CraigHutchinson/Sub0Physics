@@ -6,6 +6,7 @@ add_executable(Sub0Physics_Tests
     test_main.cpp
     test_bounded_periodic_tridiagonal.cpp
     test_casing_models.cpp
+    test_continuous_edge_law.cpp
     test_channel_table.cpp
     test_circle_clearance.cpp
     test_convex_terrain.cpp

@@ -290,6 +290,39 @@ std::expected<void, Fault> ringContactJacobian(const Model& model, const Workspa
     return {};
 }
 
+std::expected<void, Fault> ringEdgeGradientRow(const Model& model, const Workspace& workspace,
+                                               const RingEdgeGradient& gradient, std::span<double> row) noexcept
+{
+    if (!workspace.isBuiltFor(model) || !validRing(model, gradient.ring, gradient.edge) || row.size() != model.dofCount())
+    {
+        return invalidInput("ring edge gradient row needs a planar model, a ring and edge in it, and dofCount entries");
+    }
+    std::ranges::fill(row, 0.0);
+    const PlanarModel& pm = model.planar();
+    const DeformableRing& ring = model.rings()[gradient.ring];
+    const V2 p0 = inPlane(pm, gradient.point0);
+    const V2 p1 = inPlane(pm, gradient.point1);
+    const V2 n0 = inPlane(pm, gradient.direction0);
+    const V2 n1 = inPlane(pm, gradient.direction1);
+    const double w0 = gradient.weight0;
+    const double w1 = gradient.weight1;
+    for (const std::size_t body : ring.hostChain)
+    {
+        row[model.coordinates()[body]] = w0 * dot(n0, jointPointVelocity(model, workspace, body, p0)) +
+                                         w1 * dot(n1, jointPointVelocity(model, workspace, body, p1));
+    }
+    const PlanarTransform& host = workspace.planar.worldToBody[ring.host];
+    const V2 axis0 = rotate(host, V2{ring.axis0[0], ring.axis0[1]});
+    const V2 axis1 = rotate(host, V2{ring.axis1[0], ring.axis1[1]});
+    const std::size_t a = gradient.edge;
+    const std::size_t b = a + 1U == ring.nodeCount ? 0U : a + 1U;
+    row[ring.firstCoordinate + C * a] += w0 * dot(n0, axis0);
+    row[ring.firstCoordinate + C * a + 1U] += w0 * dot(n0, axis1);
+    row[ring.firstCoordinate + C * b] += w1 * dot(n1, axis0);
+    row[ring.firstCoordinate + C * b + 1U] += w1 * dot(n1, axis1);
+    return {};
+}
+
 std::expected<void, Fault> ringNodeInverseWeights(const Model& model, const Workspace& workspace, std::size_t ring,
                                                   std::span<double> out)
 {

@@ -71,6 +71,40 @@ struct RingContactPoint
                                                              std::span<double> row) noexcept;
 
 /**
+ * A row of the continuous edge law (docs/WHEEL.md, "M3d status"): the gradient of a gap that depends on a casing edge's
+ * two ends through their own gaps, `g(g0(x0), g1(x1))`, so `dg/dq = weight0 direction0^T dx0/dq + weight1 direction1^T
+ * dx1/dq`, with `x_i` attached to the host and node `edge + i` as RingContactPoint attaches its point. With equal points
+ * and directions this is ringContactJacobian's row; with the ends' own points and normals it is the gradient of a
+ * smoothed minimum of the ends' gaps (ConvexTerrain::continuousEdgeGap). A tangent row passes the ends' tangents as the
+ * directions.
+ */
+struct RingEdgeGradient
+{
+    std::size_t ring = 0;          ///< Index in Model::rings().
+    std::size_t edge = 0;          ///< Edge e: nodes e and e + 1 mod N.
+    double weight0 = 0.5;          ///< d g / d g0.
+    double weight1 = 0.5;          ///< d g / d g1.
+    sub0math::Vec3d point0{};      ///< World position where end e's share acts [m], in the model's plane.
+    sub0math::Vec3d point1{};      ///< World position where end e + 1's share acts [m].
+    sub0math::Vec3d direction0{};  ///< Unit world gradient of g0 in its point's position.
+    sub0math::Vec3d direction1{};  ///< Unit world gradient of g1.
+};
+
+/**
+ * The row `dg/dq` of a RingEdgeGradient (dofCount entries; zero off the host's chain and the edge's four node
+ * coordinates). Needs the kinematics of a prepared step, as ringContactJacobian.
+ *
+ * @param model A planar model with rings.
+ * @param workspace The workspace with the kinematics at the state.
+ * @param gradient The gradient's points, directions and weights; its ring and edge must exist.
+ * @param row Receives dofCount entries.
+ * @return Nothing, or InvalidInput (not planar, an index, the row's size).
+ */
+[[nodiscard]] std::expected<void, Fault> ringEdgeGradientRow(const Model& model, const Workspace& workspace,
+                                                             const RingEdgeGradient& gradient,
+                                                             std::span<double> row) noexcept;
+
+/**
  * The reference engine's average translational inverse inertia of a ring node: the mean over the three world axes of
  * the diagonal of `J M^-1 J^T` for the node's translation, where the axis normal to the plane contributes zero. The
  * reference computes it once at the model's reference configuration (MuJoCo `body_invweight0`,

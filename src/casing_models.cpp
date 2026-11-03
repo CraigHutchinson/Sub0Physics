@@ -7,6 +7,8 @@
 
 #include <sub0math/number/det_math.hpp>
 
+#include "sub0physics/geometry/smoothed_extremum.hpp"
+
 namespace sub0physics::multibody
 {
 
@@ -25,23 +27,14 @@ TreadFaceResponse smoothedTreadFace(double stiffness, double damping, double ban
                                     double rate1) noexcept
 {
     TreadFaceResponse out;
-    const double half = 0.5 * (p0 - p1);
-    const double a = std::abs(half);
-    const double sign = half >= 0.0 ? 1.0 : -1.0;
-    double h = a;
-    double slope = 1.0;
-    if (a < band)
-    {
-        h = a * a * (2.0 * band - a) / (band * band);
-        slope = a * (4.0 * band - 3.0 * a) / (band * band);
-    }
-    const double m = 0.5 * (p0 + p1) + h;
+    const SmoothedExtremum smoothed = smoothedMaximum(p0, p1, band);
+    const double m = smoothed.value;
     if (!(m > 0.0))
     {
         return out;
     }
-    const double w0 = 0.5 + 0.5 * slope * sign;
-    const double w1 = 0.5 - 0.5 * slope * sign;
+    const double w0 = smoothed.weight0;
+    const double w1 = smoothed.weight1;
     const double rate = w0 * rate0 + w1 * rate1;
     const double elastic = stiffness * m;
     const double total = elastic + damping * rate;

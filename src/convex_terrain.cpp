@@ -9,6 +9,7 @@
 #include <sub0math/geometry/capsule_contact.hpp>
 
 #include "sub0physics/geometry/norm.hpp"
+#include "sub0physics/geometry/smoothed_extremum.hpp"
 
 namespace sub0physics
 {
@@ -185,6 +186,42 @@ TerrainContactSet ConvexTerrain::contacts(const CasingEdge& edge, Length margin,
     edgeContacts(e.axis.a.x, e.axis.a.y, e.axis.b.x, e.axis.b.y, e.radius, margin.si(), out, edgeIndex, set, minimum);
     set.minimumGap = Length::fromSi(minimum);
     return set;
+}
+
+ContinuousEdgeGap ConvexTerrain::continuousEdgeGap(std::size_t piece, const CasingEdge& edge, Length band) const noexcept
+{
+    const Capsule2d e = toSi(edge);
+    const TerrainPiece& polygon = pieces_[piece];
+    ContinuousEdgeGap out;
+    const sub0math::CapsuleContact<double, 2> whole = sub0math::contact(e, polygon);
+    if (!whole.axisCrosses && whole.witness.kind == sub0math::WitnessKind::Vertex && whole.axisT > 0.0 &&
+        whole.axisT < 1.0)
+    {
+        // A vertex facing the interior: the distance to it is smooth in the ends, its gradient the barycentric split.
+        out.gap = whole.gap;
+        out.weight0 = 1.0 - whole.axisT;
+        out.weight1 = whole.axisT;
+        out.point0 = whole.axisPoint;
+        out.point1 = whole.axisPoint;
+        out.normal0 = whole.witness.normal;
+        out.normal1 = whole.witness.normal;
+        out.interior = true;
+        return out;
+    }
+    // Each end's own gap (a disc of the skin's radius) and its gradient, then their soft minimum.
+    const sub0math::CapsuleContact<double, 2> a = sub0math::contact(Capsule2d{{e.axis.a, e.axis.a}, e.radius}, polygon);
+    const sub0math::CapsuleContact<double, 2> b = sub0math::contact(Capsule2d{{e.axis.b, e.axis.b}, e.radius}, polygon);
+    const SmoothedExtremum m = softMinimum(a.gap, b.gap, band.si());
+    out.gap = m.value;
+    out.weight0 = m.weight0;
+    out.weight1 = m.weight1;
+    out.curvature = m.curvature;
+    out.point0 = e.axis.a;
+    out.point1 = e.axis.b;
+    out.normal0 = a.witness.normal;
+    out.normal1 = b.witness.normal;
+    out.axisCrosses = whole.axisCrosses || a.axisCrosses || b.axisCrosses;
+    return out;
 }
 
 TerrainContactSet ConvexTerrain::ringContacts(std::span<const sub0math::Point2<Length>> nodes, Length skin,

@@ -7,6 +7,7 @@
 #include <sub0math/geometry/capsule.hpp>
 #include <sub0math/geometry/convex_polygon.hpp>
 #include <sub0math/geometry/point.hpp>
+#include <sub0math/linear/vec.hpp>
 #include <sub0math/units/quantities.hpp>
 #include <vector>
 
@@ -60,6 +61,34 @@ struct TerrainContactSet
     bool overflowed;                     ///< More pairs than the buffer holds: the first ones were kept.
     std::size_t pairsTested;             ///< (Edge, piece) pairs measured exactly after the window and height cull.
     sub0math::f64::Length minimumGap;    ///< Smallest gap over the pairs measured: exact when within the margin, else only known to exceed it; infinite when none was measured.
+};
+
+/**
+ * The continuous, gradient-consistent edge law's gap of one casing edge against one convex piece (docs/WHEEL.md,
+ * "M3d status"; the consumer's static-stability review, S4).
+ *
+ * The exact capsule gap is the minimum over the edge of the axis's distance to the piece. Where that minimum sits at an
+ * end of the edge (a face, or a vertex beyond an end) the gap switches between the two ends as the edge passes level:
+ * the switching law's discontinuous force distribution. Here it is the soft minimum of the two ends' own gaps
+ * (`softMinimum`): equal to the exact gap outside a band of end-gap difference, at most half the band below it at the
+ * tie (so a query for its contacts needs a margin of `band / 2`), continuous with a continuous gradient, and with both
+ * weights in [0, 1]. Where a vertex faces the interior of the edge the exact gap is already smooth and is used as
+ * it is. Its gradient in the end positions is `weight0 normal0` at `point0` and `weight1 normal1` at `point1` (the ends'
+ * own normals, or the vertex direction at the axis point for both), so a contact row built from it is the gap's gradient,
+ * never an inconsistent split.
+ */
+struct ContinuousEdgeGap
+{
+    double gap = 0.0;          ///< The law's gap [m]: never above the exact capsule gap, equal outside the band.
+    double weight0 = 0.0;      ///< d gap / d (end a's gap), or 1 - t at an interior vertex.
+    double weight1 = 0.0;      ///< d gap / d (end b's gap), or t.
+    double curvature = 0.0;    ///< d2 gap / d (end a's gap)^2, never positive: the weights' rate across the band (zero at an interior vertex).
+    sub0math::Point2<double> point0{}; ///< Where end a's share acts [m]: end a, or the axis point at an interior vertex.
+    sub0math::Point2<double> point1{}; ///< Where end b's share acts [m].
+    sub0math::Vec2d normal0{}; ///< Unit gradient of end a's gap (from the piece towards the end).
+    sub0math::Vec2d normal1{}; ///< Unit gradient of end b's gap.
+    bool interior = false;     ///< A vertex faces the edge's interior: the exact gap and barycentric weights.
+    bool axisCrosses = false;  ///< An end's axis or the edge's axis is inside the piece (deep penetration).
 };
 
 /**
@@ -199,6 +228,16 @@ public:
     [[nodiscard]] TerrainContactSet contacts(const CasingEdge& edge, sub0math::f64::Length margin,
                                              std::span<TerrainContact> out, std::size_t edgeIndex = 0) const noexcept;
 
+    /**
+     * The continuous edge law's gap of one casing edge against one piece (ContinuousEdgeGap). Nothing is allocated.
+     *
+     * @param piece Piece index, less than `pieces().size()`.
+     * @param edge The edge; its radius is the skin.
+     * @param band The smoothing band's half-width in end-gap difference [m]; positive.
+     * @return The gap and its gradient.
+     */
+    [[nodiscard]] ContinuousEdgeGap continuousEdgeGap(std::size_t piece, const CasingEdge& edge,
+                                                      sub0math::f64::Length band) const noexcept;
     /**
      * Finds the contacts of a closed ring of casing edges: edge `i` joins node `i` to node `i + 1`, and the last joins
      * the last node to the first.
