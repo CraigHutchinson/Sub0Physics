@@ -691,6 +691,42 @@ step is zero to rounding; above it the brake slips at exactly `C`. Its work is d
 friction loss in the midpoint step's own form (only Euler was exercised, as for M3b's rows), the reference's
 `opt.noslip_iterations` (unused by the reference here).
 
+## M3d status (2026-11-03)
+
+**Landed:** the continuous, gradient-consistent edge law for the improved models (the consumer's static-stability review,
+S4; its docs/CONNECTED_BIKE.md, "M3d status"). The reference's contact law (one witness per edge, the deeper end taking
+most of the force) is unchanged bit for bit; the new law is a separate function the consumer selects.
+
+| Piece | What it is |
+|---|---|
+| `geometry/smoothed_extremum.hpp` | The explicit ring's smoothed tread maximum (moved here unchanged, bit for bit) and the rows' convex soft minimum `softMinimum`. A smoothing that never passes the extremum, is C1 and exact outside its band must have weights outside [0, 1] inside it (by up to 1/6 for the tread's cubic), which would pull a node towards the surface; the soft minimum keeps both weights in [0, 1], equals the minimum outside the band and is `band / 2` below it at a tie |
+| `ConvexTerrain::continuousEdgeGap` (`ContinuousEdgeGap`) | One edge against one convex piece: the soft-minimum fold of a fixed candidate set, the two ends' own gaps (a face, or a vertex beyond the end) and then each piece vertex's distance to the edge's axis (clamped projection). Every candidate is C1 wherever the axis is outside the piece, and none starts or stops at a regime boundary, so the gap is C1. It is never above the exact capsule gap, equal to it where one candidate leads by twice the band, `band / 2` below at a tie of two and always less than `2 band` below: a contact query for it needs a margin of `2 band`. Its gradient is reported per end: `weight = |dg/dx_i|`, `normal = (dg/dx_i) / weight`, at the end's position |
+| `ringEdgeGradientRow` (`RingEdgeGradient`) | The row `dg/dq` of a gap read at an edge's two ends with their own points and directions. With equal points and directions it is `ringContactJacobian`'s row. Tangent rows pass the ends' tangents |
+
+**A pitfall found and fixed in this milestone (`55efb38`).** The first form (`736ebc4`) took the soft minimum of the two end
+gaps, or the exact gap when a piece vertex faced the edge's interior. That is a regime switch: as a node rolled over a square
+step's corner the gap's gradient jumped between "the corner, split barycentrically" and "the two ends", and on the bike a node
+was dropped at the corner. Folding every vertex into the soft minimum as one more candidate removes the switch; the
+`interior` flag now only reports that such a vertex has a share.
+
+**The band is a step-dependent lever.** It must be of the order of a step's gap change at rest: 2e-5 m at 31.25 us is exact
+enough and settles; at 125 us the same band left a casing node in a limit cycle of about 1 cm/s, and 1e-4 m settles. The
+consumer's profiles set it with the step.
+
+**Gate evidence** (`tests/test_continuous_edge_law.cpp`; GCC 16 Release, 245 cases pass; GCC 16 and Clang 22
+`-march=x86-64-v3`):
+
+| Check | Result |
+|---|---|
+| Kernel | Both extrema exact outside the band and at the tie; weights in [0, 1]; derivatives against central differences |
+| Gap bounds on faces, vertices beyond an end and interior vertices | Never above the exact capsule gap; below it by less than `2 band`; equal outside the band; gradient against central differences |
+| Continuity | The gap and its gradient as an edge rolls past level and over a rock corner, and as an edge lying flat over a corner turns through level (the regime the first form switched at): worst below exact under `2 band`, worst outside the band at most `band / 2` |
+| Row | `ringEdgeGradientRow` against a central difference of the gap along random motions of a ring on a moving host, face and corner terrains |
+| Allocation | No allocation (the consumer's stepping tests cover it on the bike) |
+
+**Not here:** an explicit ring with this law (the consumer's improved bike uses the implicit nodal ring); error-controlled
+stepping of the connected bike; a curvature term in the rows (the law is gradient-consistent, its Hessian is not used).
+
 ## Wheel-model study (2026-10-28)
 
 **Question:** which casing models meet the consumer's Interactive budget (2 ms per 16.7 ms frame for the rider's bike,
