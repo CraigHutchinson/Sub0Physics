@@ -194,32 +194,47 @@ ContinuousEdgeGap ConvexTerrain::continuousEdgeGap(std::size_t piece, const Casi
     const TerrainPiece& polygon = pieces_[piece];
     ContinuousEdgeGap out;
     const sub0math::CapsuleContact<double, 2> whole = sub0math::contact(e, polygon);
-    if (!whole.axisCrosses && whole.witness.kind == sub0math::WitnessKind::Vertex && whole.axisT > 0.0 &&
-        whole.axisT < 1.0)
-    {
-        // A vertex facing the interior: the distance to it is smooth in the ends, its gradient the barycentric split.
-        out.gap = whole.gap;
-        out.weight0 = 1.0 - whole.axisT;
-        out.weight1 = whole.axisT;
-        out.point0 = whole.axisPoint;
-        out.point1 = whole.axisPoint;
-        out.normal0 = whole.witness.normal;
-        out.normal1 = whole.witness.normal;
-        out.interior = true;
-        return out;
-    }
     // Each end's own gap (a disc of the skin's radius) and its gradient, then their soft minimum.
     const sub0math::CapsuleContact<double, 2> a = sub0math::contact(Capsule2d{{e.axis.a, e.axis.a}, e.radius}, polygon);
     const sub0math::CapsuleContact<double, 2> b = sub0math::contact(Capsule2d{{e.axis.b, e.axis.b}, e.radius}, polygon);
-    const SmoothedExtremum m = softMinimum(a.gap, b.gap, band.si());
-    out.gap = m.value;
-    out.weight0 = m.weight0;
-    out.weight1 = m.weight1;
-    out.curvature = m.curvature;
+    const double width = band.si();
+    const SmoothedExtremum ends = softMinimum(a.gap, b.gap, width);
+    double gap = ends.value;
+    // The gradient in each end's position: G0 at end a, G1 at end b.
+    sub0math::Vec2d g0{ends.weight0 * a.witness.normal.x, ends.weight0 * a.witness.normal.y};
+    sub0math::Vec2d g1{ends.weight1 * b.witness.normal.x, ends.weight1 * b.witness.normal.y};
+    // Then each vertex's distance to the axis, folded in by the same soft minimum: every candidate is C1 everywhere
+    // (the distance from a point to a segment, or from a point to a convex piece), and the exact gap is their minimum,
+    // so no candidate starts or stops at a regime boundary. A vertex beyond the band changes nothing (weights 1, 0).
+    const sub0math::Vec2d axis{e.axis.b.x - e.axis.a.x, e.axis.b.y - e.axis.a.y};
+    const double lengthSquared = axis.x * axis.x + axis.y * axis.y;
+    for (const auto& v : polygon.vertices)
+    {
+        const double along = (v.x - e.axis.a.x) * axis.x + (v.y - e.axis.a.y) * axis.y;
+        const double t = lengthSquared > 0.0 ? std::clamp(along / lengthSquared, 0.0, 1.0) : 0.0;
+        const double px = e.axis.a.x + t * axis.x - v.x;
+        const double py = e.axis.a.y + t * axis.y - v.y;
+        const double distance = std::sqrt(px * px + py * py);
+        const double candidate = distance - e.radius;
+        if (!(candidate < gap + 2.0 * width) || !(distance > 0.0))
+        {
+            continue; // beyond the band (exactly no change), or on the axis (a crossing: the guard's)
+        }
+        const SmoothedExtremum m = softMinimum(gap, candidate, width);
+        const double nx = px / distance;
+        const double ny = py / distance;
+        gap = m.value;
+        g0 = {m.weight0 * g0.x + m.weight1 * (1.0 - t) * nx, m.weight0 * g0.y + m.weight1 * (1.0 - t) * ny};
+        g1 = {m.weight0 * g1.x + m.weight1 * t * nx, m.weight0 * g1.y + m.weight1 * t * ny};
+        out.interior = out.interior || (m.weight1 > 0.0 && t > 0.0 && t < 1.0);
+    }
+    out.gap = gap;
+    out.weight0 = std::sqrt(g0.x * g0.x + g0.y * g0.y);
+    out.weight1 = std::sqrt(g1.x * g1.x + g1.y * g1.y);
     out.point0 = e.axis.a;
     out.point1 = e.axis.b;
-    out.normal0 = a.witness.normal;
-    out.normal1 = b.witness.normal;
+    out.normal0 = out.weight0 > 0.0 ? sub0math::Vec2d{g0.x / out.weight0, g0.y / out.weight0} : a.witness.normal;
+    out.normal1 = out.weight1 > 0.0 ? sub0math::Vec2d{g1.x / out.weight1, g1.y / out.weight1} : b.witness.normal;
     out.axisCrosses = whole.axisCrosses || a.axisCrosses || b.axisCrosses;
     return out;
 }

@@ -1,5 +1,5 @@
 // The continuous, gradient-consistent edge law (docs/WHEEL.md, "M3d status"): the smoothed-extremum kernel against
-// central differences, the edge gap against the exact capsule gap (never below it, equal outside the band) and its
+// central differences, the edge gap against the exact capsule gap (never above it, equal outside the band) and its
 // gradient against central differences on faces, vertices beyond an end and vertices facing the interior, its
 // continuity as an edge rolls past level and over a corner, and the row (ringEdgeGradientRow) as the gap's rate along
 // any motion of a ring on a moving host.
@@ -128,7 +128,7 @@ TEST_SUITE("continuous edge law")
         CHECK(softMinimum(0.0, band, band).weight0 == doctest::Approx(0.75).epsilon(1e-14));
     }
 
-    TEST_CASE("edge gap: never below the exact capsule gap, equal outside the band; gradient exact by central differences")
+    TEST_CASE("edge gap: never above the exact capsule gap, less than twice the band below, equal outside it; gradient exact")
     {
         const ConvexTerrain terrain(profileOf({{-3.0, 0.0}, {0.6, 0.0}, {0.6, 0.04}, {0.9, 0.04}, {0.9, 0.0}, {1.2, 0.03},
                                                {1.5, 0.0}, {5.0, 0.0}}));
@@ -170,11 +170,16 @@ TEST_SUITE("continuous edge law")
                 worstBelow = std::max(worstBelow, exact - g.gap);
                 CHECK(g.weight0 >= 0.0);
                 CHECK(g.weight1 >= 0.0);
+                CHECK(g.weight0 <= 1.0 + 1e-15);
+                CHECK(g.weight1 <= 1.0 + 1e-15);
                 interior += g.interior ? 1 : 0;
                 smoothed += g.interior ? 0 : 1;
+                // One end leading every other candidate by twice the band: the exact gap, or half the band below it where
+                // the end's nearest feature is a vertex beyond it (that vertex's distance to the axis is the end's own, a
+                // duplicate candidate: smooth, with the exact gradient).
                 const bool far = g.weight0 == 1.0 || g.weight1 == 1.0;
-                inBand += !g.interior && !far ? 1 : 0;
-                if (g.interior || far)
+                inBand += !far && std::abs(g.gap - exact) > 0.0 ? 1 : 0;
+                if (far)
                 {
                     worstOutside = std::max(worstOutside, std::abs(g.gap - exact));
                 }
@@ -202,8 +207,8 @@ TEST_SUITE("continuous edge law")
         CHECK(smoothed > 1000);
         CHECK(inBand > 100);
         CHECK(worstAbove <= 1e-15);
-        CHECK(worstBelow <= 0.5 * band + 1e-15);
-        CHECK(worstOutside <= 1e-15);
+        CHECK(worstBelow < 2.0 * band);
+        CHECK(worstOutside <= 0.5 * band + 1e-15);
         CHECK(worstGradient < 1e-6);
     }
 
@@ -277,6 +282,35 @@ TEST_SUITE("continuous edge law")
         CHECK(worstGapJump <= dx * 1.000001);
         // The gradient turns with the vertex direction: at most the edge's travel over the skin, per step.
         CHECK(worstNormalJump <= 4.0 * dx / skin);
+
+        // Lying flat over the corner and turning through level: the corner (inside the edge) and the end on the top face
+        // tie, and the gradient passes from one to the other continuously (the plain minimum jumps its whole share).
+        double worstShareJump = 0.0;
+        double previousShare = 0.0;
+        int cornerLed = 0;
+        int endLed = 0;
+        const double flat = 0.04 + skin - 1e-4;
+        for (int k = 0; k < steps; ++k)
+        {
+            const double angle = 1e-2 * (2.0 * k / (steps - 1) - 1.0);
+            // End b on the top face, 6 mm past the corner; the corner 26 mm along the edge from end a.
+            const double bx = 0.606;
+            const double ax = bx - length * std::cos(angle);
+            const double ay = flat - length * std::sin(angle);
+            const auto g = terrain.continuousEdgeGap(1, edgeOf(ax, ay, bx, flat, skin), Length::fromSi(band));
+            cornerLed += g.weight0 > 0.1 ? 1 : 0;
+            endLed += g.weight0 == 0.0 ? 1 : 0;
+            if (k > 0)
+            {
+                worstShareJump = std::max(worstShareJump, std::abs(g.weight0 - previousShare));
+            }
+            previousShare = g.weight0;
+        }
+        INFO("corner led " << cornerLed << ", end led " << endLed);
+        CHECK(cornerLed > 100);
+        CHECK(endLed > 100);
+        // End a's share moves at most like the candidates' difference over the band: about the edge's turn times its length.
+        CHECK(worstShareJump <= 2.0 * length * (2e-2 / (steps - 1)) / band);
     }
 
     TEST_CASE("edge gradient row is the gap's rate along any motion of a ring on a moving host")

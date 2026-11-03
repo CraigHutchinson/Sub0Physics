@@ -67,27 +67,29 @@ struct TerrainContactSet
  * The continuous, gradient-consistent edge law's gap of one casing edge against one convex piece (docs/WHEEL.md,
  * "M3d status"; the consumer's static-stability review, S4).
  *
- * The exact capsule gap is the minimum over the edge of the axis's distance to the piece. Where that minimum sits at an
- * end of the edge (a face, or a vertex beyond an end) the gap switches between the two ends as the edge passes level:
- * the switching law's discontinuous force distribution. Here it is the soft minimum of the two ends' own gaps
- * (`softMinimum`): equal to the exact gap outside a band of end-gap difference, at most half the band below it at the
- * tie (so a query for its contacts needs a margin of `band / 2`), continuous with a continuous gradient, and with both
- * weights in [0, 1]. Where a vertex faces the interior of the edge the exact gap is already smooth and is used as
- * it is. Its gradient in the end positions is `weight0 normal0` at `point0` and `weight1 normal1` at `point1` (the ends'
- * own normals, or the vertex direction at the axis point for both), so a contact row built from it is the gap's gradient,
- * never an inconsistent split.
+ * The exact capsule gap is the minimum over the edge of the axis's distance to the piece, and that minimum is the
+ * least of a fixed set of candidates, each C1 wherever the axis is outside the piece: each end's distance to the piece
+ * (a face, or a vertex beyond the end), and each vertex's distance to the axis (facing its interior, or an end). Taking
+ * the plain minimum switches the gradient between candidates, as the switching law switches its deeper node at the
+ * level tie and as an edge lying flat over a corner switches between the corner and an end. Here the candidates are
+ * folded by the soft minimum (`softMinimum`; the ends first, then the vertices in order): equal to the exact gap where
+ * one candidate leads the rest by twice the band, below it within that (half the band at a tie of two, and always less
+ * than twice the band, so a query for its contacts needs a margin of `2 band`), continuous with a continuous gradient,
+ * since no candidate starts or stops at a regime boundary. Its gradient in the end positions is `weight0 normal0` at
+ * end a and `weight1 normal1` at end b (each a convex combination of the candidates' gradients: an end's normal, or a
+ * vertex's direction split barycentrically), so a contact row built from it is the gap's gradient, never an
+ * inconsistent split.
  */
 struct ContinuousEdgeGap
 {
     double gap = 0.0;          ///< The law's gap [m]: never above the exact capsule gap, equal outside the band.
-    double weight0 = 0.0;      ///< d gap / d (end a's gap), or 1 - t at an interior vertex.
-    double weight1 = 0.0;      ///< d gap / d (end b's gap), or t.
-    double curvature = 0.0;    ///< d2 gap / d (end a's gap)^2, never positive: the weights' rate across the band (zero at an interior vertex).
-    sub0math::Point2<double> point0{}; ///< Where end a's share acts [m]: end a, or the axis point at an interior vertex.
-    sub0math::Point2<double> point1{}; ///< Where end b's share acts [m].
-    sub0math::Vec2d normal0{}; ///< Unit gradient of end a's gap (from the piece towards the end).
-    sub0math::Vec2d normal1{}; ///< Unit gradient of end b's gap.
-    bool interior = false;     ///< A vertex faces the edge's interior: the exact gap and barycentric weights.
+    double weight0 = 0.0;      ///< |d gap / d (end a's position)|, in [0, 1]; weight0 + weight1 is 1 when the candidates' directions agree.
+    double weight1 = 0.0;      ///< |d gap / d (end b's position)|, in [0, 1].
+    sub0math::Point2<double> point0{}; ///< End a [m], where its share acts.
+    sub0math::Point2<double> point1{}; ///< End b [m].
+    sub0math::Vec2d normal0{}; ///< Unit gradient of the gap in end a's position (from the piece towards the end); end a's own normal when weight0 is zero.
+    sub0math::Vec2d normal1{}; ///< Unit gradient of the gap in end b's position.
+    bool interior = false;     ///< A vertex facing the edge's interior has a share of the gap.
     bool axisCrosses = false;  ///< An end's axis or the edge's axis is inside the piece (deep penetration).
 };
 
@@ -233,7 +235,7 @@ public:
      *
      * @param piece Piece index, less than `pieces().size()`.
      * @param edge The edge; its radius is the skin.
-     * @param band The smoothing band's half-width in end-gap difference [m]; positive.
+     * @param band The smoothing band's half-width in candidate-gap difference [m]; positive.
      * @return The gap and its gradient.
      */
     [[nodiscard]] ContinuousEdgeGap continuousEdgeGap(std::size_t piece, const CasingEdge& edge,

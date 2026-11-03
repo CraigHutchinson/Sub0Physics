@@ -72,22 +72,22 @@ struct RingContactPoint
 
 /**
  * A row of the continuous edge law (docs/WHEEL.md, "M3d status"): the gradient of a gap that depends on a casing edge's
- * two ends through their own gaps, `g(g0(x0), g1(x1))`, so `dg/dq = weight0 direction0^T dx0/dq + weight1 direction1^T
- * dx1/dq`, with `x_i` attached to the host and node `edge + i` as RingContactPoint attaches its point. With equal points
- * and directions this is ringContactJacobian's row; with the ends' own points and normals it is the gradient of a
- * smoothed minimum of the ends' gaps (ConvexTerrain::continuousEdgeGap). A tangent row passes the ends' tangents as the
- * directions.
+ * two ends, `g(x0, x1)`, so `dg/dq = weight0 direction0^T dx0/dq + weight1 direction1^T dx1/dq`, with `x_i` attached to
+ * the host and node `edge + i` as RingContactPoint attaches its point. With equal points and directions this is
+ * ringContactJacobian's row; with the ends as points and the gap's gradients in them it is the row of the soft minimum
+ * of the ends' and the vertices' gaps (ConvexTerrain::continuousEdgeGap). A tangent row passes the ends' tangents as
+ * the directions.
  */
 struct RingEdgeGradient
 {
     std::size_t ring = 0;          ///< Index in Model::rings().
     std::size_t edge = 0;          ///< Edge e: nodes e and e + 1 mod N.
-    double weight0 = 0.5;          ///< d g / d g0.
-    double weight1 = 0.5;          ///< d g / d g1.
+    double weight0 = 0.5;          ///< The size of d g / d x0.
+    double weight1 = 0.5;          ///< The size of d g / d x1.
     sub0math::Vec3d point0{};      ///< World position where end e's share acts [m], in the model's plane.
     sub0math::Vec3d point1{};      ///< World position where end e + 1's share acts [m].
-    sub0math::Vec3d direction0{};  ///< Unit world gradient of g0 in its point's position.
-    sub0math::Vec3d direction1{};  ///< Unit world gradient of g1.
+    sub0math::Vec3d direction0{};  ///< Unit world direction of d g / d x0.
+    sub0math::Vec3d direction1{};  ///< Unit world direction of d g / d x1.
 };
 
 /**
