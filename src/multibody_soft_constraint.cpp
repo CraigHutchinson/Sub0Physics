@@ -6,6 +6,7 @@
 #include <expected>
 #include <limits>
 #include <span>
+#include <vector>
 
 #include <sub0math/number/det_math.hpp>
 
@@ -94,6 +95,33 @@ SoftConstraintRow softConstraintTangentRow(const SoftConstraintRow& normal, doub
     return row;
 }
 
+SoftConstraintRow softConstraintFrictionLossRow(const SoftConstraintParameters& parameters, double rate,
+                                                double diagApprox, double step) noexcept
+{
+    // The law at zero position (getimpedance at x = 0 gives solimp[0]); friction rows have K = 0 (mj_makeImpedance
+    // :1941-1943), so aref is the damping term alone (:3194-3196).
+    SoftConstraintRow row = softConstraintRow(parameters, 0.0, rate, diagApprox, step);
+    row.stiffness = 0.0;
+    row.referenceAcceleration = -row.damping * rate;
+    return row;
+}
+
+std::expected<double, Fault> dofInverseWeight(const Model& model, const Workspace& workspace, std::size_t dof)
+{
+    if (!workspace.isBuiltFor(model) || dof >= model.dofCount())
+    {
+        return invalidInput("a dof's inverse weight needs a workspace for the model and one of its coordinates");
+    }
+    // engine_setconst.c :1288-1300: A = J M^-1 J^T with J the dof's unit row; one component, so A[0].
+    std::vector<double> x(model.dofCount(), 0.0);
+    x[dof] = 1.0;
+    if (auto solved = solveMassMatrix(model, workspace, x); !solved)
+    {
+        return std::unexpected(solved.error());
+    }
+    return x[dof];
+}
+
 SoftConstraintRow exactVelocityRow(double rate, double diagApprox, double step) noexcept
 {
     constexpr double Compliance = 1e-14; // relative to the row's scale: rounding, only so dependent rows factor
@@ -121,7 +149,7 @@ SoftConstraintSolver::SoftConstraintSolver(const Model& model, std::size_t capac
       key_(2 * capacity, 0), touched_(model.dofCount(), 0),
       delassus_(capacity * capacity, 0.0),
       factor_(capacity * capacity, 0.0), rhs_(capacity, 0.0), slack_(capacity, 0.0), work_(capacity, 0.0),
-      subset_(capacity, 0), prior_(capacity, 0), flagged_(capacity, 0), active_(capacity, 0)
+      subset_(capacity, 0), prior_(capacity, 0), flagged_(capacity, 0), active_(capacity, 0), bound_(capacity, 0)
 {
 }
 
@@ -558,8 +586,18 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
     }
     const auto isKind = [&](std::size_t r, SoftRowKind kind) { return !kinds.empty() && kinds[r] == kind; };
     bool cones = false;
+    bool boxes = false;
     for (std::size_t r = 0; r < k; ++r)
     {
+        if (isKind(r, SoftRowKind::FrictionLoss))
+        {
+            if (friction.size() != k || !std::isfinite(friction[r]) || friction[r] < 0.0)
+            {
+                return invalidInput("a friction-loss row needs a finite bound that is not negative");
+            }
+            boxes = true;
+            continue;
+        }
         if (isKind(r, SoftRowKind::ConeTangent))
         {
             return invalidInput("a friction cone is a normal row, then its tangent row");
@@ -619,12 +657,19 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
             scale = std::max(scale, std::abs(rhs_[r]));
         }
     }
-    // Murty's least-index principal pivoting, from the rows the free motion violates.
+    // Murty's least-index principal pivoting, from the rows the free motion violates. A row is inactive (zero force),
+    // active (free), or, for friction loss, at its upper or its lower bound.
+    constexpr std::uint8_t Inactive = 0U;
+    constexpr std::uint8_t Active = 1U;
+    constexpr std::uint8_t AtUpper = 2U;
+    constexpr std::uint8_t AtLower = 3U;
     const double tolerance = 64.0 * std::numeric_limits<double>::epsilon() * scale;
     const auto equality = [&](std::size_t r) { return isKind(r, SoftRowKind::Equality); };
+    const auto box = [&](std::size_t r) { return boxes && isKind(r, SoftRowKind::FrictionLoss); };
     for (std::size_t r = 0; r < k; ++r)
     {
-        active_[r] = equality(r) || rhs_[r] < 0.0 ? 1U : 0U;
+        // A friction-loss row starts free; a zero bound keeps it inactive, its force pinned at zero.
+        active_[r] = box(r) ? (friction[r] > 0.0 ? Active : Inactive) : equality(r) || rhs_[r] < 0.0 ? Active : Inactive;
     }
     const std::uint32_t maxPivots = static_cast<std::uint32_t>(16U * k + 64U);
     std::size_t priorCount = 0;
@@ -634,13 +679,20 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
     int stalls = 3;
     for (;;)
     {
-        // Solve A_SS f_S = -q_S by Cholesky.
+        // Solve A_SS f_S = -(q_S + A_SB f_B) by Cholesky, the rows at a bound (B) held there.
         std::size_t m = 0;
+        std::size_t held = 0;
+        std::ranges::fill(force, 0.0);
         for (std::size_t r = 0; r < k; ++r)
         {
-            if (active_[r] != 0U)
+            if (active_[r] == Active)
             {
                 subset_[m++] = r;
+            }
+            else if (active_[r] != Inactive)
+            {
+                bound_[held++] = r;
+                force[r] = active_[r] == AtUpper ? friction[r] : -friction[r];
             }
         }
         if (!factorSubset(m, k, priorCount))
@@ -649,10 +701,14 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         }
         for (std::size_t a = 0; a < m; ++a)
         {
-            work_[a] = -rhs_[subset_[a]];
+            double sum = -rhs_[subset_[a]];
+            for (std::size_t b = 0; b < held; ++b)
+            {
+                sum -= delassus_[subset_[a] * k + bound_[b]] * force[bound_[b]];
+            }
+            work_[a] = sum;
         }
         solveSubset(m, k);
-        std::ranges::fill(force, 0.0);
         for (std::size_t a = 0; a < m; ++a)
         {
             force[subset_[a]] = work_[a];
@@ -663,11 +719,11 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         for (std::size_t r = 0; r < k && (block || flip == k); ++r)
         {
             bool violated = false;
-            if (active_[r] != 0U)
+            if (active_[r] == Active)
             {
-                violated = force[r] < 0.0 && !equality(r);
+                violated = box(r) ? std::abs(force[r]) > friction[r] : force[r] < 0.0 && !equality(r);
             }
-            else
+            else if (!box(r) || friction[r] > 0.0)
             {
                 double w = rhs_[r];
                 // PERF: only active rows carry force; the rest add exact zeros.
@@ -675,8 +731,13 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
                 {
                     w += delassus_[r * k + subset_[a]] * force[subset_[a]];
                 }
+                for (std::size_t b = 0; b < held; ++b)
+                {
+                    w += delassus_[r * k + bound_[b]] * force[bound_[b]];
+                }
                 slack_[r] = w;
-                violated = w < -tolerance;
+                // Inactive or at the lower bound, w must not be negative; at the upper bound, not positive.
+                violated = active_[r] == AtUpper ? w > tolerance : w < -tolerance;
             }
             if (violated)
             {
@@ -687,13 +748,21 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         }
         if (flip == k)
         {
-            solution.activeRows = m;
+            solution.activeRows = m + held;
             break;
         }
         if (++solution.pivots > maxPivots)
         {
             return invalidInput("soft contact pivoting did not terminate");
         }
+        // A violating row's next state: a free friction-loss row to the bound it crossed, a held one free, others toggled.
+        const auto next = [&](std::size_t r) -> std::uint8_t {
+            if (box(r))
+            {
+                return active_[r] != Active ? Active : force[r] > 0.0 ? AtUpper : AtLower;
+            }
+            return active_[r] != Inactive ? Inactive : Active;
+        };
         if (block)
         {
             if (violations < fewest)
@@ -710,12 +779,12 @@ SoftConstraintSolver::solve(const Model& model, const Workspace& workspace, std:
         {
             for (std::size_t v = 0; v < violations; ++v)
             {
-                active_[flagged_[v]] = active_[flagged_[v]] != 0U ? 0U : 1U;
+                active_[flagged_[v]] = next(flagged_[v]);
             }
         }
         else
         {
-            active_[flip] = active_[flip] != 0U ? 0U : 1U;
+            active_[flip] = next(flip);
         }
     }
     if (cones)

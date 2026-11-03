@@ -655,6 +655,16 @@ solves are bit for bit:
   through the step. Completing the step forms the matrix again with the forcing's loads.
 - `SoftPivotRule`, `setPivotRule`: least index or block pivoting (an A/B; the same solution).
 
+### M3c status (2026-11-03)
+
+**Landed** (details and evidence in [WHEEL.md, M3c status](WHEEL.md#m3c-status-2026-11-03)). Contract changes; solves
+without friction-loss rows are bit for bit:
+
+- `SoftRowKind::FrictionLoss`, `softConstraintFrictionLossRow`: a dof's friction loss (the reference's brake) as a box row of
+  the one law and the one solve, its capacity in `SoftConstraintSolver::solve(..., friction)`.
+- `dofInverseWeight`: a dof's `(M^-1)_ii`, the reference's `dof_invweight0` (a setup-time query; it allocates).
+- The exact brake is `exactVelocityRow` with `solveBounded` (M3b's contract), no new API.
+
 ## 10. Open questions, to be answered by measurement
 
 - **Higher-order implicit scheme:** whether one is needed, and which, for the tyre ring (M2).

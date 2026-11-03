@@ -26,6 +26,7 @@ add_executable(Sub0Physics_Tests
     test_multibody_planar.cpp
     test_multibody_ring.cpp
     test_multibody_friction_rows.cpp
+    test_multibody_brake_rows.cpp
     test_multibody_ring_contact.cpp
     test_polyline_profile.cpp
     test_prepared_profile.cpp

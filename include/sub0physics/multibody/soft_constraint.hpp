@@ -73,6 +73,37 @@ struct SoftConstraintRow
                                                          double impratio = 1.0) noexcept;
 
 /**
+ * A degree of freedom's friction-loss row (MuJoCo `dof_frictionloss`; the reference's brake, step M3c): the same law with
+ * no position, from the dof's own `solref` and `solimp` (`solreffriction`, `solimpfriction`; engine_core_constraint.c
+ * :1746-1749). Its position is zero, so the impedance is `solimp[0]` (getimpedance, :1866-1869), `K = 0` (mj_makeImpedance,
+ * :1941-1943), `B = 2 / (dwidth tc)` with the time constant raised to at least `2 h`, `R = max(mjMINVAL, (1 - d)
+ * diagApprox / d)` (:1930) and `aref = -B v` (mj_referenceConstraint, :3194-3196). The row's force is bounded by the
+ * dof's capacity in the solve (SoftRowKind::FrictionLoss).
+ *
+ * @param parameters The dof's law (the reference's defaults are SoftConstraintParameters{}).
+ * @param rate The dof's rate v = J qd (the joint's own rate) [rad/s or m/s].
+ * @param diagApprox The dof's `dof_invweight0` (dofInverseWeight).
+ * @param step The integration step h [s].
+ * @return The row.
+ */
+[[nodiscard]] SoftConstraintRow softConstraintFrictionLossRow(const SoftConstraintParameters& parameters, double rate,
+                                                              double diagApprox, double step) noexcept;
+
+/**
+ * A degree of freedom's inverse weight, MuJoCo's `dof_invweight0` for a hinge or slide joint (engine_setconst.c
+ * :1261-1300): `(M^-1)_ii`, the diagonal of the inverse mass matrix, at the state the workspace's mass matrix was
+ * factorised for (the reference evaluates it at the model's reference configuration).
+ *
+ * @param model The model.
+ * @param workspace A workspace whose mass matrix is factorised (factorMassMatrix).
+ * @param dof A coordinate.
+ * @return The weight [1/kg or 1/(kg m^2)], or InvalidInput (another model, a coordinate out of range). Allocates scratch:
+ *         a setup-time query.
+ */
+[[nodiscard]] std::expected<double, Fault> dofInverseWeight(const Model& model, const Workspace& workspace,
+                                                            std::size_t dof);
+
+/**
  * The exact limit of a tangent row (the improved model's Coulomb row, docs/WHEEL.md section 3.3): no regulariser and a
  * reference that brings the row's rate to zero at the end of the step, `J a = -v / h`, so a sticking row holds with zero
  * slip through the step when solved with the step's own matrix (SoftRowSystem::PreparedStep). `R` is a compliance of
@@ -86,15 +117,21 @@ struct SoftConstraintRow
 [[nodiscard]] SoftConstraintRow exactVelocityRow(double rate, double diagApprox, double step) noexcept;
 
 /**
- * How a soft-constraint row is bounded (MuJoCo mj_constraintUpdate_impl, engine_core_constraint.c:3240-3408). Later row
- * kinds (friction loss, M3c) join this list and the one solve.
+ * How a soft-constraint row is bounded (MuJoCo mj_constraintUpdate_impl, engine_core_constraint.c:3240-3408). Every kind is
+ * a bound on one variable of the same problem, so all are solved together in the one solve.
  */
 enum class SoftRowKind : std::uint8_t
 {
     Unilateral,  ///< A contact or limit row: force `f >= 0`, zero while `J a - aref >= 0` (the row is satisfied).
     Equality,    ///< An equality row: always quadratic, force of either sign.
     ConeNormal,  ///< A contact's normal row on a friction cone; the next row is its ConeTangent.
-    ConeTangent  ///< The tangential row after its ConeNormal, on the same support: `|f_t| <= mu f_n`.
+    ConeTangent, ///< The tangential row after its ConeNormal, on the same support: `|f_t| <= mu f_n`.
+    /**
+     * A friction-loss row (a dof's dry friction, the reference's brake): `|f| <= b` with `b` given (`friction`), quadratic
+     * inside the box and linear outside (:3257-3283): the force is `b` while `J a - aref <= -R b`, `-b` while `J a - aref
+     * >= R b`, and `-(J a - aref) / R` between.
+     */
+    FrictionLoss
 };
 
 /**
@@ -152,7 +189,7 @@ enum class SoftPivotRule : std::uint8_t
 struct SoftConstraintSolution
 {
     std::uint32_t pivots = 0;    ///< Principal pivots taken.
-    std::size_t activeRows = 0;  ///< Rows with a positive force; a cone counts its active edges (one sliding, two sticking).
+    std::size_t activeRows = 0;  ///< Rows with a force; a cone counts its active edges (one sliding, two sticking), a friction-loss row counts inside its box or at a bound.
 };
 
 /**
@@ -165,6 +202,12 @@ struct SoftConstraintSolution
  * every row kind (contacts now, equality closures in the reference path later). The reference reaches it with
  * Newton's method to a tolerance; here Murty's principal pivoting solves it exactly (the matrix is positive definite,
  * so the least-index rule terminates).
+ *
+ * **Friction loss.** A FrictionLoss row is a variable with two bounds, `-b <= f <= b`: free inside (`w = 0`), at its upper
+ * bound while `w <= 0` and at its lower bound while `w >= 0`, where `w = A f + q`; that is the reference's Huber cost
+ * (:3257-3283) as complementarity. The same principal pivoting moves it between its three states (Judice and Pires's box
+ * form, as solveBounded), so brakes and contacts are one problem, solved together and exactly, as the reference's Newton
+ * solves them together to a tolerance.
  *
  * **Friction cones.** In a plane a contact's cone `|f_t| <= mu f_n` is a wedge with two edges, so the reference's elliptic
  * cost (engine_core_constraint.c:3305-3408: a top zone with no force, a bottom zone quadratic in both rows, a middle zone
@@ -218,11 +261,12 @@ public:
      * @param supports Empty, or each row's ring support: then every row's entries outside the tree's coordinates and
      *        its two nodes must be zero (ringContactJacobian rows are), and the products read only the support.
      * @param form How the Delassus matrix is formed; Condensed needs supports.
-     * @param friction Empty without cones, else one entry per row: mu on each ConeTangent row (finite and positive; the
-     *        other entries are not read).
+     * @param friction Empty without cones or friction-loss rows, else one entry per row: mu on each ConeTangent row
+     *        (finite and positive) and the bound `b` on each FrictionLoss row (finite, not negative; zero pins the force at
+     *        zero); the other entries are not read.
      * @return The solution's counts, or InvalidInput (sizes, capacity, a regularisation that is not positive, a
-     *         support outside the model, Condensed without supports, a cone without its pair or its mu) or
-     *         NonFiniteState.
+     *         support outside the model, Condensed without supports, a cone without its pair or its mu, a friction-loss
+     *         row without its bound) or NonFiniteState.
      * @param system The matrix that couples the rows; PreparedStep with the condensed form needs a block-diagonal ring
      *        block and a factor along the tree (DampingOnlyMassPattern).
      */
@@ -315,7 +359,8 @@ private:
     std::vector<std::size_t> subset_; // capacity
     std::vector<std::size_t> prior_;  // capacity: the subset the factor rows were formed for
     std::vector<std::size_t> flagged_; // capacity: the rows the block rule flips
-    std::vector<std::uint8_t> active_; // capacity: in the box solve, each row's state
+    std::vector<std::uint8_t> active_; // capacity: each row's state (inactive, free, at its upper or its lower bound)
+    std::vector<std::size_t> bound_;   // capacity: the rows at a bound in this iteration (friction loss)
 };
 
 } // namespace sub0physics::multibody

@@ -251,6 +251,10 @@ TEST_CASE("Ring contact: rows, the soft-constraint solve, contact element loads 
                                                SoftRowKind::ConeTangent};
     const std::array<double, 4> coneFriction{0.6, 0.6, 0.6, 0.6};
     const std::array<double, 4> bounds{0.0, 5.0, 1.0, 100.0};
+    // A cone, a friction-loss row with a bound and one with none (M3c brakes).
+    const std::array<SoftRowKind, 4> brakeKinds{SoftRowKind::ConeNormal, SoftRowKind::ConeTangent, SoftRowKind::FrictionLoss,
+                                                SoftRowKind::FrictionLoss};
+    const std::array<double, 4> brakeFriction{0.6, 0.6, 0.5, 0.0};
     const std::array<SoftRowSupport, 4> supports{SoftRowSupport{.ring = 0, .node0 = 10, .node1 = 11},
                                                  SoftRowSupport{.ring = 0, .node0 = 11, .node1 = 12},
                                                  SoftRowSupport{.ring = 0, .node0 = 12, .node1 = 13},
@@ -272,6 +276,8 @@ TEST_CASE("Ring contact: rows, the soft-constraint solve, contact element loads 
                              DelassusForm::MassSolvePerRow, coneFriction));
         REQUIRE(solver.solve(model, ws, jacobian, reference, regularisation, free, coneKinds, force, generalized, supports,
                              DelassusForm::Condensed, coneFriction));
+        REQUIRE(solver.solve(model, ws, jacobian, reference, regularisation, free, brakeKinds, force, generalized, supports,
+                             DelassusForm::MassSolvePerRow, brakeFriction));
         // Bounded rows with the step's own matrix.
         REQUIRE(factorPreparedStepMatrix(model, s, h, ws));
         REQUIRE(solvePreparedStepMatrix(model, ws, generalized));

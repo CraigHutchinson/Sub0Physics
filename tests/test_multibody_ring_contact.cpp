@@ -1,7 +1,7 @@
 // Contact on a ring's casing (docs/WHEEL.md, "M2c status"): the reference soft-constraint law against its source's
-// formulas, the soft-constraint solve against brute-force enumeration of active sets, the contact row against a
-// finite difference of the attached point, the contact element's exact Jacobians against central differences of its
-// generalized force (face and vertex witnesses, the host on a chain with revolute joints), and the structured step
+// formulas, the soft-constraint solve against brute-force enumeration of active sets (with cones and friction-loss rows
+// against the source's zones), the contact row against a finite difference of the attached point, the contact element's
+// exact Jacobians against central differences of its generalized force (face and vertex witnesses, the host on a chain with revolute joints), and the structured step
 // with contact loads against a dense solve of the same step.
 
 #include <algorithm>
@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <span>
 #include <tuple>
@@ -529,6 +530,160 @@ TEST_CASE("soft-constraint friction cones: the wedge's complementarity is the re
     CHECK_FALSE(solver.solve(model, ws, jac, ones, ones, a0, single, f, g, {}, DelassusForm::MassSolvePerRow, mu).has_value());
     CHECK_FALSE(solver.solve(model, ws, jac, ones, ones, a0, pair, f, g).has_value());
     CHECK_FALSE(solver.solve(model, ws, jac, ones, ones, a0, pair, f, g, {}, DelassusForm::MassSolvePerRow, noMu).has_value());
+}
+
+TEST_CASE("soft-constraint friction loss: box rows with cones and contacts in the one solve are the reference's Huber cost")
+{
+    // Friction-loss rows (a dof's brake, step M3c) mixed with cones and unilateral rows: each row's force against the
+    // source's own law at the solution's J a - aref (mj_constraintUpdate_impl, engine_core_constraint.c:3257-3283 for
+    // friction loss), both pivot rules ending on the same forces, and both Delassus forms.
+    const Model model = ringmodels::ringRig({.nodes = 8}, false, false);
+    Workspace ws(model);
+    const std::size_t n = model.dofCount();
+    std::mt19937_64 rng(23);
+    const auto u = [](std::mt19937_64& g) { return ringmodels::uniformSigned(g); };
+    const State s = ringmodels::randomState(model, 5);
+    prepare(model, s, ws);
+    REQUIRE(factorMassMatrix(model, ws).has_value());
+    SoftConstraintSolver solver(model, 12);
+    std::array<std::size_t, 3> states{}; // friction-loss rows inside the box, at +b, at -b
+    double worst = 0.0;
+    for (int trial = 0; trial < 300; ++trial)
+    {
+        const std::size_t contacts = static_cast<std::size_t>(trial % 3);
+        const std::size_t brakes = 1 + static_cast<std::size_t>(trial % 2);
+        const std::size_t plain = trial % 5 == 0 ? 1U : 0U;
+        const std::size_t k = 2 * contacts + plain + brakes;
+        const double mu = 0.3 + 0.5 * (0.5 + 0.5 * u(rng));
+        std::vector<double> jac(k * n, 0.0);
+        std::vector<double> aref(k);
+        std::vector<double> reg(k);
+        std::vector<SoftRowKind> kinds(k, SoftRowKind::Unilateral);
+        std::vector<SoftRowSupport> supports(k);
+        std::vector<double> friction(k, mu);
+        std::size_t r = 0;
+        const auto contactRow = [&](std::size_t edge, double angle, bool tangent) {
+            RingContactPoint p;
+            p.edge = edge;
+            p.weight0 = 0.5 + 0.4 * u(rng);
+            p.weight1 = 1.0 - p.weight0;
+            const auto a = nodeWorld(model, ws, 0, p.edge);
+            p.point = toWorld(model, a[0] + 0.01 * u(rng), a[1] + 0.01 * u(rng));
+            p.normal = tangent ? toWorld(model, std::sin(angle), -std::cos(angle))
+                               : toWorld(model, std::cos(angle), std::sin(angle));
+            supports[r] = {.ring = 0, .node0 = p.edge, .node1 = (p.edge + 1) % 8};
+            REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jac.data() + r * n, n)).has_value());
+            aref[r] = 50.0 * u(rng);
+            reg[r] = 0.01 * (1.5 + u(rng));
+        };
+        for (std::size_t c = 0; c < contacts; ++c)
+        {
+            const std::size_t edge = (static_cast<std::size_t>(trial) + 3 * c) % 8;
+            const double angle = 3.0 * u(rng);
+            kinds[r] = SoftRowKind::ConeNormal;
+            contactRow(edge, angle, false);
+            ++r;
+            kinds[r] = SoftRowKind::ConeTangent;
+            contactRow(edge, angle, true);
+            ++r;
+        }
+        if (plain != 0U)
+        {
+            contactRow(static_cast<std::size_t>(trial) % 8, 3.0 * u(rng), false);
+            ++r;
+        }
+        for (std::size_t b = 0; b < brakes; ++b, ++r)
+        {
+            // A unit row on a tree coordinate, its bound sometimes zero.
+            kinds[r] = SoftRowKind::FrictionLoss;
+            jac[r * n + (static_cast<std::size_t>(trial) + 2 * b) % TreeDof] = 1.0;
+            supports[r] = {.ring = 0, .node0 = 0, .node1 = 1};
+            aref[r] = 50.0 * u(rng);
+            reg[r] = 0.05 * (1.5 + u(rng));
+            friction[r] = trial % 7 == 3 ? 0.0 : 20.0 * (0.5 + 0.5 * u(rng));
+        }
+        std::vector<double> a0(n);
+        for (double& v : a0)
+        {
+            v = 10.0 * u(rng);
+        }
+        std::vector<double> force(k);
+        std::vector<double> generalized(n);
+        solver.setPivotRule(SoftPivotRule::LeastIndex);
+        REQUIRE(solver.solve(model, ws, jac, aref, reg, a0, kinds, force, generalized, {}, DelassusForm::MassSolvePerRow,
+                             friction)
+                    .has_value());
+        std::vector<double> other(k);
+        std::vector<double> otherGeneralized(n);
+        solver.setPivotRule(SoftPivotRule::Block);
+        REQUIRE(solver.solve(model, ws, jac, aref, reg, a0, kinds, other, otherGeneralized, {},
+                             DelassusForm::MassSolvePerRow, friction)
+                    .has_value());
+        CHECK(maxDifference(other, force) <= 1e-10 * std::max(1.0, maxAbs(force)));
+        solver.setPivotRule(SoftPivotRule::LeastIndex);
+        REQUIRE(solver.solve(model, ws, jac, aref, reg, a0, kinds, other, otherGeneralized, supports,
+                             DelassusForm::MassSolvePerRow, friction)
+                    .has_value());
+        CHECK(other == force);
+        REQUIRE(solver.solve(model, ws, jac, aref, reg, a0, kinds, other, otherGeneralized, supports,
+                             DelassusForm::Condensed, friction)
+                    .has_value());
+        CHECK(maxDifference(other, force) <= 1e-10 * std::max(1.0, maxAbs(force)));
+        // jar = J a - aref at a = a0 + M^-1 J^T f.
+        std::vector<double> y(generalized.begin(), generalized.end());
+        REQUIRE(solveMassMatrix(model, ws, y).has_value());
+        const double scale = std::max(1.0, maxAbs(force));
+        for (std::size_t row = 0; row < k; ++row)
+        {
+            double jar = -aref[row];
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                jar += jac[row * n + i] * (a0[i] + y[i]);
+            }
+            if (kinds[row] == SoftRowKind::FrictionLoss)
+            {
+                const double b = friction[row];
+                const double expected = jar <= -reg[row] * b ? b : jar >= reg[row] * b ? -b : -jar / reg[row];
+                if (b > 0.0)
+                {
+                    states[std::abs(force[row]) < b ? 0 : force[row] > 0.0 ? 1 : 2]++;
+                }
+                worst = std::max(worst, std::abs(force[row] - expected) / scale);
+                CHECK(std::abs(force[row] - expected) <= 1e-8 * scale);
+                CHECK(std::abs(force[row]) <= b);
+            }
+            else if (kinds[row] == SoftRowKind::Unilateral)
+            {
+                const double expected = jar >= 0.0 ? 0.0 : -jar / reg[row];
+                CHECK(std::abs(force[row] - expected) <= 1e-8 * scale);
+            }
+            else if (kinds[row] == SoftRowKind::ConeNormal)
+            {
+                CHECK(force[row] >= 0.0);
+                CHECK(std::abs(force[row + 1]) <= mu * force[row] * (1.0 + 1e-12) + 1e-300);
+            }
+        }
+    }
+    MESSAGE("friction-loss rows inside " << states[0] << ", at +b " << states[1] << ", at -b " << states[2]
+                                         << "; worst force difference " << worst);
+    CHECK(states[0] > 0U);
+    CHECK(states[1] > 0U);
+    CHECK(states[2] > 0U);
+    // Contract checks: a friction-loss row needs a finite bound that is not negative.
+    std::vector<double> jac(n, 0.0);
+    jac[0] = 1.0;
+    const std::vector<double> one{1.0};
+    std::vector<double> a0(n, 0.0);
+    std::vector<double> f(1);
+    std::vector<double> g(n);
+    const std::array<SoftRowKind, 1> loss{SoftRowKind::FrictionLoss};
+    const std::vector<double> negative{-1.0};
+    const std::vector<double> infinite{std::numeric_limits<double>::infinity()};
+    CHECK_FALSE(solver.solve(model, ws, jac, one, one, a0, loss, f, g).has_value());
+    CHECK_FALSE(
+        solver.solve(model, ws, jac, one, one, a0, loss, f, g, {}, DelassusForm::MassSolvePerRow, negative).has_value());
+    CHECK_FALSE(
+        solver.solve(model, ws, jac, one, one, a0, loss, f, g, {}, DelassusForm::MassSolvePerRow, infinite).has_value());
 }
 
 TEST_CASE("contact row is the attached point's rate along the normal")

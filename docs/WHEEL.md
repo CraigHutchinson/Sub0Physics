@@ -651,9 +651,45 @@ forces by 14 to 72 N. A third pass moves them about as much again on three of fo
 point does not contract uniformly at these light nodes, so the start-of-step bound stays the default and more passes are not
 an accuracy lever yet.
 
-**Not here:** a cone with width (M4), friction-loss rows (M3c, the same solve; the brake's exact row is `solveBounded` with
-its capacity as the bound), velocity rows in the midpoint step's own form beyond the matrix this accepts (the factor takes the
+**Not here:** a cone with width (M4), friction-loss rows (landed in M3c, below), velocity rows in the midpoint step's own form beyond the matrix this accepts (the factor takes the
 scheme; only Euler was exercised), element-based normal contact with these rows (M2d's law with bounded friction).
+
+## M3c status (2026-11-03)
+
+**Landed:** the reference's brake as a friction-loss row in the one law and the one solve, and the exact brake as a bounded
+velocity row (section 4). The consumer's connected bike drives and brakes on them (its docs/CONNECTED_BIKE.md, "M3c status");
+solves without friction-loss rows are unchanged bit for bit.
+
+**Friction loss is a row kind, not a fork** (`multibody/soft_constraint.hpp`). `softConstraintFrictionLossRow` is the law at
+zero position from the dof's own `solref` and `solimp` (MuJoCo 3.16.0 at commit a892750, `engine_core_constraint.c`
+:1746-1749): `d = solimp[0]`, `K = 0` (:1941-1943), `B = 2 / (dwidth tc)` with `tc >= 2 h`, `R = (1 - d) diagApprox / d`
+(:1930), `aref = -B v`. `diagApprox` is the dof's `dof_invweight0`, `(M^-1)_ii` at the reference configuration
+(`engine_setconst.c` :1261-1300; `dofInverseWeight`). `SoftRowKind::FrictionLoss` bounds the row by its capacity `b`, passed
+in the solve's `friction` span: the source's Huber cost (:3257-3283; `+b` while `J a - aref <= -R b`, `-b` while `>= R b`,
+`-(J a - aref) / R` between) is a box complementarity problem, so the same principal pivoting takes a fourth state, a row held
+at either bound, with the held rows' force moved to the right-hand side (Judice and Pires's box form, as `solveBounded`).
+Brakes, cones and unilateral rows are one problem, solved together and exactly, as the reference's Newton solves them together
+to a tolerance. A zero capacity pins the force at zero and counts no row, as the reference adds none.
+
+**The exact brake** needs no new solve: `exactVelocityRow` on the hub's unit row, bounded by the capacity in
+`solveBounded` with the step's own matrix, beside the exact Coulomb rows. Below capacity the wheel's relative spin after the
+step is zero to rounding; above it the brake slips at exactly `C`. Its work is dissipation by construction.
+
+**Gate evidence** (`tests/test_multibody_brake_rows.cpp`, `test_multibody_ring_contact.cpp`; GCC 16, GCC 16 and Clang 22
+`-march=x86-64-v3`):
+
+| Check | Result |
+|---|---|
+| The row against the source's formulas | `d`, `K`, `B` (and the `2 h` floor), `R`, `aref` to 1e-15; `dofInverseWeight` 2.5 for the rotor, 0.5 and 2.5 for the carrier and rotor pair (the inverse of `[[2.5, 0.5], [0.5, 0.5]]`) |
+| Mixed solves: 300 random sets of 0 to 2 cones, a unilateral row and 1 or 2 friction-loss rows (some with zero capacity) | Every friction-loss row's force against the Huber cost at the solution's `J a - aref` to 1.6e-13 of the largest force (bound 1e-8); all three states seen (158 inside, 111 at `+b`, 116 at `-b`); unilateral rows and cones as before; both pivot rules to 1e-10; supports bit for bit; the condensed form to 1e-10 |
+| The reference's rotor controls (BikeLab `test/drive-controls.test.mjs`): a hinge rotor, inertia 0.4, 1e-4 s | Torque never beyond capacity, `qacc = (drive + torque) / 0.4` to 1e-12; speed `+-2` gives `-+0.8`; near rest it opposes the motion; a hold under drive 0.4 stays inside it; drive 2 gives `-0.8`; zero capacity gives no row and no torque; braking from 1 rad/s reaches below 0.01 rad/s in 6000 steps; released, the rotor reverses under drive -0.4 (by more than 0.019 rad/s in 200 steps) |
+| The reference's carrier and rotor pair (inertias 2 and 0.5, drive 3 on the rotor) | `qacc` -1.5 and 7.5; the carrier's joint carries no axial moment, the rotor's 3; angular momentum zero to 1e-12 after 0.01 s; the drive's work `3 q_rotor` against the kinetic energy: errors 1.125e-5 at 1e-4 s and 5.625e-6 at 5e-5 s (first order, ratio 0.50; bounds 2e-5 and 0.51); a brake of capacity 4: its moment at the rotor's joint equals the row's generalized force, the carrier's joint carries none |
+| The exact brake on the rotor, drive 0.4 aiding from 0.5 rad/s, capacity 0.8 | Slides at exactly `-0.8` until rest at 0.5 s, then holds at `-0.4` with the spin at most 1e-12 rad/s; over capacity `-+0.8` exactly, either sign; zero capacity no row. **Reference brake on the same hold:** a steady creep of 1.0556e-3 rad/s, `drive R / B` to 1e-6 |
+| Allocation | Friction-loss rows with cones allocate nothing (`Sub0Physics_MultibodyAllocationTests`) |
+
+**Not here:** friction loss on more than a hinge's single coordinate (a ball joint's three rows: not needed by a planar bike),
+friction loss in the midpoint step's own form (only Euler was exercised, as for M3b's rows), the reference's
+`opt.noslip_iterations` (unused by the reference here).
 
 ## Wheel-model study (2026-10-28)
 
