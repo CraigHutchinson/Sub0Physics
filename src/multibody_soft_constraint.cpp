@@ -859,6 +859,13 @@ SoftConstraintSolver::solveBounded(const Model& model, const Workspace& workspac
     }
     const std::uint32_t maxPivots = static_cast<std::uint32_t>(16U * k + 64U);
     std::size_t priorCount = 0;
+    // The block rule, as solve: flip every violating row while their count falls or within a few stalls, then one at a
+    // time. Least index alone can need far more pivots than rows when nearly dependent rows share a support (a casing
+    // edge on two terrain pieces), so it outran the pivot limit. The box's solution is unique: the rules end on one set, or
+    // where a row sits within the tolerance of its bound, on sets equal to it.
+    bool block = rule_ == SoftPivotRule::Block;
+    std::size_t fewest = k + 1;
+    int stalls = 3;
     for (;;)
     {
         // Free rows: A_FF f_F = -(q_F + A_FB f_B), the others at their bounds.
@@ -893,39 +900,30 @@ SoftConstraintSolver::solveBounded(const Model& model, const Workspace& workspac
         {
             force[subset_[a]] = work_[a];
         }
-        // The first row that breaks the box's complementarity: a free row beyond a bound, or a row at a bound whose
-        // gradient w = A f + q pushes it inside.
+        // The rows that break the box's complementarity (the first only, by the least-index rule): a free row beyond a
+        // bound, or a row at a bound whose gradient w = A f + q pushes it inside.
         std::size_t flip = k;
-        std::uint8_t to = Free;
-        for (std::size_t r = 0; r < k && flip == k; ++r)
+        std::size_t violations = 0;
+        for (std::size_t r = 0; r < k && (block || flip == k); ++r)
         {
+            bool violated = false;
             if (active_[r] == Free)
             {
-                if (force[r] > bounds[r])
+                violated = force[r] > bounds[r] || force[r] < -bounds[r];
+            }
+            else if (bounds[r] != 0.0)
+            {
+                double w = rhs_[r];
+                for (std::size_t c = 0; c < k; ++c)
                 {
-                    flip = r;
-                    to = AtUpper;
+                    w += delassus_[r * k + c] * force[c];
                 }
-                else if (force[r] < -bounds[r])
-                {
-                    flip = r;
-                    to = AtLower;
-                }
-                continue;
+                violated = active_[r] == AtUpper ? w > tolerance : w < -tolerance;
             }
-            if (bounds[r] == 0.0)
+            if (violated)
             {
-                continue;
-            }
-            double w = rhs_[r];
-            for (std::size_t c = 0; c < k; ++c)
-            {
-                w += delassus_[r * k + c] * force[c];
-            }
-            if (active_[r] == AtUpper ? w > tolerance : w < -tolerance)
-            {
-                flip = r;
-                to = Free;
+                flip = std::min(flip, r);
+                flagged_[violations++] = r;
             }
         }
         if (flip == k)
@@ -937,7 +935,33 @@ SoftConstraintSolver::solveBounded(const Model& model, const Workspace& workspac
         {
             return invalidInput("bounded row pivoting did not terminate");
         }
-        active_[flip] = to;
+        // A violating row's next state: a free row to the bound it crossed, a held one free.
+        const auto next = [&](std::size_t r) -> std::uint8_t {
+            return active_[r] != Free ? Free : force[r] > bounds[r] ? AtUpper : AtLower;
+        };
+        if (block)
+        {
+            if (violations < fewest)
+            {
+                fewest = violations;
+                stalls = 3;
+            }
+            else if (--stalls < 0)
+            {
+                block = false; // least index from here terminates on its own
+            }
+        }
+        if (block)
+        {
+            for (std::size_t v = 0; v < violations; ++v)
+            {
+                active_[flagged_[v]] = next(flagged_[v]);
+            }
+        }
+        else
+        {
+            active_[flip] = next(flip);
+        }
     }
     if (auto mapped = mapForces(model, jacobian, force, generalized, supports, k); !mapped)
     {

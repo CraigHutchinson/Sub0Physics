@@ -231,7 +231,7 @@ public:
     SoftConstraintSolver(const Model& model, std::size_t capacity);
 
     /**
-     * Chooses the pivot rule of later solves (the default is LeastIndex).
+     * Chooses the pivot rule of later solves, solve and solveBounded (the default is LeastIndex).
      *
      * @param rule The rule.
      */
@@ -282,9 +282,10 @@ public:
      * Solves bounded rows (docs/WHEEL.md section 10, item 2): `|f_i| <= b_i` with the bound given, not a function of the
      * solve, so a sliding row's force is exactly its bound and no normal row is lifted by it (a cone solved with hard
      * tangent rows would separate a sliding contact at `mu |v_t|`: the associated flow rule). The problem is the convex QP
-     * minimise `1/2 f^T (J A^-1 J^T + R) f + (J a0 - aref)^T f` over the box, solved exactly by least-index principal
-     * pivoting (each row free, at its upper bound or at its lower bound; the matrix is positive definite, so it
-     * terminates). A row with a zero bound has zero force. Velocity-level only: no position term.
+     * minimise `1/2 f^T (J A^-1 J^T + R) f + (J a0 - aref)^T f` over the box, solved exactly by principal pivoting under
+     * the chosen rule (setPivotRule; each row free, at its upper bound or at its lower bound; the matrix is positive
+     * definite, so least index terminates; the solution is unique, so the rules agree to the pivoting's tolerance). A row
+     * with a zero bound has zero force. Velocity-level only: no position term.
      *
      * @param model The model.
      * @param workspace A workspace whose chosen system is factorised.

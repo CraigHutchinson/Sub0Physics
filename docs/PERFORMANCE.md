@@ -220,6 +220,13 @@ docs/PERFORMANCE.md has the step pairs.
 | Delassus form with friction rows: uniform or condensed | Cone 0.72 to 0.95 against 0.64 to 0.95; exact rows 0.70 to 0.89 against 0.62 to 0.79. The condensed form stays ahead, by little: the ranking of "Delassus A/B" holds. Both kept; the uniform form keeps the reference's digests |
 | Step-matrix rows: a second factorisation or sharing it with completion | Not worth a third state: completing the step costs about 3 us of the step's 25 us (`advance`, 28 ms over 9600 steps), so the double formation is left in place |
 
+**The box solve takes the rule too (2026-11-04).** `solveBounded` (exact Coulomb's tangent and brake rows) had only least
+index. With a casing edge on two terrain pieces its tangent rows are nearly dependent (smallest eigenvalue 4e-15 of the
+largest) and least index needed 288 pivots for 12 rows, past its limit of 16 k + 64: the consumer's browser ride faulted
+("bounded row pivoting did not terminate"). The block rule solves that system in 12 and its result agrees to the
+pivoting's tolerance, not bit for bit (a row within the tolerance of its bound can end free or held), so the consumer's
+improved-model digests moved. Its exact Coulomb benchmarks, interleaved A/B on a loaded host: 0.82x to 1.01x.
+
 Passes (uniform, cone; whole hardtail coast run, ms, three repeats): first about 355; rates over each row's support instead of
 every coordinate (the consumer) and the slack over active rows only, measured together, 305 to 340; block pivoting 240 to 250.
 All bit for bit, and they apply to both Delassus forms. The advantage of the condensed form was measured after them.

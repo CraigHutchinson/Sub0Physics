@@ -573,6 +573,81 @@ TEST_CASE("pivot rules: the same forces, bit for bit, on friction cones")
     CHECK(fewer > 50U);
 }
 
+TEST_CASE("pivot rules on bounded rows: nearly dependent rows, few block pivots, the least-index forces")
+{
+    // A casing edge on two terrain pieces gives two tangent rows on one support with nearly one direction, and neighbouring
+    // edges share nodes: the box's matrix is positive definite only by exactVelocityRow's rounding compliance. Least index
+    // then needed 288 pivots for 12 rows in BikeDynamics' flow ride (its limit is 16 k + 64 = 256); the block rule, 12.
+    const Model model = ringmodels::ringRig({.nodes = 8}, false, false);
+    Workspace ws(model);
+    const std::size_t n = model.dofCount();
+    std::mt19937_64 rng(41);
+    const auto u = [](std::mt19937_64& g) { return ringmodels::uniformSigned(g); };
+    const State s = ringmodels::randomState(model, 5);
+    REQUIRE(prepareLinearlyImplicitStep(model, s, ws, ImplicitTerms::DampingOnlyMassPattern));
+    REQUIRE(factorPreparedStepMatrix(model, s, f64::Time::fromSi(1.5625e-4), ws));
+    SoftConstraintSolver least(model, 12);
+    SoftConstraintSolver block(model, 12);
+    block.setPivotRule(SoftPivotRule::Block);
+    std::uint32_t mostLeast = 0;
+    std::uint32_t mostBlock = 0;
+    std::size_t leastFailed = 0;
+    for (int trial = 0; trial < 200; ++trial)
+    {
+        const std::size_t k = 12;
+        std::vector<double> jac(k * n, 0.0);
+        std::vector<double> aref(k);
+        std::vector<double> reg(k);
+        std::vector<double> bounds(k);
+        const double along = 0.2 * u(rng); // the patch's tangent, nearly the same for every row
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            RingContactPoint p;
+            p.edge = (static_cast<std::size_t>(trial) + r / 2) % 8;
+            p.weight0 = 0.5 + 0.45 * u(rng);
+            p.weight1 = 1.0 - p.weight0;
+            p.point = {0.01 * u(rng), 0.0, 0.01 * u(rng)};
+            const double angle = along + 0.02 * u(rng);
+            p.normal = {std::cos(angle), 0.0, std::sin(angle)};
+            REQUIRE(ringContactJacobian(model, ws, p, std::span<double>(jac.data() + r * n, n)));
+            const SoftConstraintRow row = exactVelocityRow(2.0 * u(rng), 1.0, 1.5625e-4);
+            aref[r] = row.referenceAcceleration;
+            reg[r] = row.regularisation;
+            bounds[r] = 20.0 + 60.0 * (1.0 + u(rng));
+        }
+        std::vector<double> a0(n);
+        for (double& v : a0)
+        {
+            v = 200.0 * u(rng);
+        }
+        std::vector<double> f(k);
+        std::vector<double> g(k);
+        std::vector<double> gen(n);
+        const auto b = block.solveBounded(model, ws, jac, aref, reg, a0, bounds, g, gen);
+        REQUIRE_MESSAGE(b.has_value(), "trial " << trial);
+        mostBlock = std::max(mostBlock, b->pivots);
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            CHECK(std::abs(g[r]) <= bounds[r]);
+        }
+        const auto a = least.solveBounded(model, ws, jac, aref, reg, a0, bounds, f, gen);
+        if (!a)
+        {
+            ++leastFailed;
+            continue;
+        }
+        mostLeast = std::max(mostLeast, a->pivots);
+        // One solution: the same forces to the matrix's conditioning (the rules' last factors match when their sets do).
+        for (std::size_t r = 0; r < k; ++r)
+        {
+            CHECK(std::abs(g[r] - f[r]) <= 1e-6 * bounds[r]);
+        }
+    }
+    MESSAGE("most pivots: least index " << mostLeast << " (" << leastFailed << " of 200 over its limit), block " << mostBlock);
+    CHECK(mostBlock <= 4U * 12U);
+    CHECK(mostBlock < mostLeast);
+}
+
 TEST_CASE("exact Coulomb above the friction limit: slides at mu N")
 {
     // tan = 0.8 against mu = 0.6: hub acceleration g (sin - mu cos).
