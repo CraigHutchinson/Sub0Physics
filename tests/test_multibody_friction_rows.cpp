@@ -577,7 +577,7 @@ TEST_CASE("pivot rules on bounded rows: nearly dependent rows, few block pivots,
 {
     // A casing edge on two terrain pieces gives two tangent rows on one support with nearly one direction, and neighbouring
     // edges share nodes: the box's matrix is positive definite only by exactVelocityRow's rounding compliance. Least index
-    // then needed 288 pivots for 12 rows in BikeDynamics' flow ride (its limit is 16 k + 64 = 256); the block rule, 12.
+    // then needed 288 pivots for 12 rows in a private consumer's flow ride (its limit is 16 k + 64 = 256); the block rule, 12.
     const Model model = ringmodels::ringRig({.nodes = 8}, false, false);
     Workspace ws(model);
     const std::size_t n = model.dofCount();

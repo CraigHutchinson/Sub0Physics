@@ -727,7 +727,7 @@ contact mode is not damped, WHEEL.md M2d finding 1).
 
 ### M3a consumer status (2026-10-28)
 
-**No core change.** The consumer's connected trail bike (BikeDynamics docs/CONNECTED_BIKE.md, "M3a status") runs on the
+**No core change.** The consumer's connected trail bike (its connected-bike notes, "M3a status") runs on the
 M2a to M2d pieces as they are: one tree of up to eight coordinates (massless carriers for the frame's travel and heave,
 the frame on pitch with a centre-of-mass offset, the fork, the swingarm with a shock tendon, the guided rider, two hubs)
 and two 64-node rings on hubs deep in the tree (264 coordinates). Its reference stepping (both rings' soft rows solved

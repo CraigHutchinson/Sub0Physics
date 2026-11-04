@@ -162,7 +162,7 @@ The soft-constraint solve's `J M^-1 J^T` in two forms behind `SoftConstraintSolv
 alternatives"). Measured on the library solve (one 64-node ring on the five-coordinate rig tree, k contact rows of a
 patch, all pushing; `soft solve 64-node ring, k rows, <form>` in `tests/bench_delassus.cpp`), on a batched shape (both
 forms as structure-of-arrays kernels over W wheels with the wheel index innermost, each wheel's patch at its own nodes;
-`Delassus W wheels x 8 rows SoA, <form>`), and on the consumer's moving-wheel step (BikeDynamics docs/PERFORMANCE.md).
+`Delassus W wheels x 8 rows SoA, <form>`), and on the consumer's moving-wheel step (the private consumer's performance notes).
 CrogLegion shared with other agents; medians with min-max of interleaved rounds.
 
 **Passes.**
@@ -204,7 +204,7 @@ us at 64 wheels), yet stays 7 to 11 times ahead.
 **Decision per target:** the structured form on every target measured, scalar and batched. The uniform form is not
 deleted: it is the reference path's arithmetic (its digest depends on it), it handles rows without ring supports, and it
 is the candidate if a target with wide fixed-shape throughput (GPU) or much smaller rings changes the balance. On the
-consumer's whole step the difference is small (BikeDynamics: 1.1x to 1.2x on flat ground, within noise on the rock),
+consumer's whole step the difference is small (in the private consumer: 1.1x to 1.2x on flat ground, within noise on the rock),
 because the forward pass's other work dominates.
 
 ## Friction rows A/B (M3b, 2026-11-02)
@@ -258,7 +258,7 @@ setting a moving-wheel run is 20 to 90 times cheaper than the improved model. Th
 
 ## Consumer check: the connected bike (M3a, 2026-10-28)
 
-No library change in M3a. The consumer's trail bike (BikeDynamics docs/PERFORMANCE.md, "Findings (M3a)") runs both
+No library change in M3a. The consumer's trail bike (its performance notes, "Findings (M3a)") runs both
 Delassus forms on two 64-node rings hosted deep in an eight-coordinate tree: the structured (condensed) form is faster
 on every pass, 1.1x to 1.4x on the reference step (11.7 to 16.0 against 15.5 to 22.9 us a step, GCC 16, three
 interleaved passes, loaded host) and 1.15x to 1.3x on whole runs. The ranking measured on the moving wheel (section
