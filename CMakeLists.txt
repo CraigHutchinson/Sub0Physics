@@ -15,10 +15,12 @@ option(SUB0PHYSICS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(SUB0PHYSICS_ENABLE_ITT "Intel ITT task markers for VTune (fetches intel/ittapi)" OFF)
 
 include(cmake/Dependencies.cmake)
-# Benchmark, budget, profiler and vectorization tooling for the Sub0 family, from Sub0Math.
-include("${Sub0Math_SOURCE_DIR}/cmake/Sub0MathTooling.cmake")
-# The pre-push hook refuses a push whose Sub0Math pin is not yet on GitHub (push Sub0Math first).
-set(SUB0MATH_PERF_PINS "file=cmake/Dependencies.cmake,var=SUB0PHYSICS_SUB0MATH_REVISION,repo=CraigHutchinson/Sub0Math,checkout=../Sub0Math,name=Sub0Math")
+# Benchmark, budget, profiler and vectorization tooling for the Sub0 family, from Sub0Perf.
+include("${Sub0Perf_SOURCE_DIR}/cmake/Sub0Perf.cmake")
+# The pre-push hook refuses a push whose Sub0Math or Sub0Perf pin is not yet on GitHub (push them first).
+set(SUB0MATH_PERF_PINS
+    "file=cmake/Dependencies.cmake,var=SUB0PHYSICS_SUB0MATH_REVISION,repo=CraigHutchinson/Sub0Math,checkout=../Sub0Math,name=Sub0Math"
+    "file=cmake/Dependencies.cmake,var=SUB0PHYSICS_SUB0PERF_REVISION,repo=CraigHutchinson/Sub0Perf,checkout=../Sub0Perf,name=Sub0Perf")
 
 # ── Core library ─────────────────────────────────────────────────────────────
 
