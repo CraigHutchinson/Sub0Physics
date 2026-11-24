@@ -2,8 +2,8 @@
 
 Performance here is a tested property, not a claim. Correctness gates come first; timing is measured
 on named hosts; profiling is one command away. The benchmark, budget, profiler and vectorization tooling
-comes from Sub0Math (`cmake/Sub0MathTooling.cmake`, `tools/perf/`, documented in its
-[PERFORMANCE.md](https://github.com/CraigHutchinson/Sub0Math/blob/main/docs/PERFORMANCE.md)); this page
+comes from Sub0Perf (`cmake/Sub0Perf.cmake`, `tools/perf/`, documented in its
+[PERFORMANCE.md](https://github.com/CraigHutchinson/Sub0Perf/blob/main/docs/PERFORMANCE.md)); this page
 lists what is specific to Sub0Physics. Configure writes the scripts' location to
 `<build>/sub0math_tooling_dir.txt`.
 
@@ -85,7 +85,7 @@ cmake --build --preset profile --target Sub0Physics_Bench_perf_record       # Li
 
 Each target runs the benchmark with `--soak` so the selected hot path dominates the samples, writes
 results to `build-profile/profiles/<analysis>-<filter>-<time>/`, prints the summary and tells you how to
-open the GUI. Sub0Math's `tools/perf/profile.py` is the same thing without CMake. Benchmark executables
+open the GUI. Sub0Perf's `tools/perf/profile.py` is the same thing without CMake. Benchmark executables
 accept `--filter`, `--json`, `--soak` and `--list`.
 
 Platform notes:
