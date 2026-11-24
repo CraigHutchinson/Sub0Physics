@@ -36,7 +36,7 @@ jobs:
     uses: CraigHutchinson/.github/.github/workflows/cpp-full.yml@789478c64113b201e518810a3ef6fbf1bf1b1b90
     with:
       cpm-cache-key-files: CMakeLists.txt cmake/Dependencies.cmake
-      extra-cmake-args: -DSUB0PHYSICS_WARNINGS_AS_ERRORS=ON -DSUB0PHYSICS_BUILD_BENCHMARKS=OFF -DSUB0MATH_PERF_ON_BUILD=OFF -DSUB0MATH_PERF_GIT_HOOKS=OFF
+      extra-cmake-args: -DSUB0PHYSICS_WARNINGS_AS_ERRORS=ON -DSUB0PHYSICS_BUILD_BENCHMARKS=OFF -DSUB0PERF_ON_BUILD=OFF -DSUB0PERF_GIT_HOOKS=OFF
       fma: true
       fma-cc: clang-19
       fma-cxx: clang++-19
