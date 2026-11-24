@@ -5,7 +5,7 @@ on named hosts; profiling is one command away. The benchmark, budget, profiler a
 comes from Sub0Perf (`cmake/Sub0Perf.cmake`, `tools/perf/`, documented in its
 [PERFORMANCE.md](https://github.com/CraigHutchinson/Sub0Perf/blob/main/docs/PERFORMANCE.md)); this page
 lists what is specific to Sub0Physics. Configure writes the scripts' location to
-`<build>/sub0math_tooling_dir.txt`.
+`<build>/sub0perf_tooling_dir.txt`.
 
 ## Codified gates (every test run, every platform)
 
@@ -76,7 +76,7 @@ Build with the `profile` preset: optimised code with debug info and frame pointe
 markers (`sub0physics::ProfileTask`) that VTune shows on its timeline. Then:
 
 ```bash
-cmake --preset profile -DSUB0MATH_PROFILE_FILTER="Rk4" -DSUB0MATH_PROFILE_SECONDS=5
+cmake --preset profile -DSUB0PERF_PROFILE_FILTER="Rk4" -DSUB0PERF_PROFILE_SECONDS=5
 cmake --build --preset profile --target Sub0Physics_Bench_vtune_hotspots    # where time goes
 cmake --build --preset profile --target Sub0Physics_Bench_vtune_uarch       # why: front/back-end, ports, memory
 cmake --build --preset profile --target Sub0Physics_Bench_advisor_roofline  # vectorization and roofline
@@ -100,7 +100,7 @@ Platform notes:
 
 ```bash
 cmake --preset vectorization
-python "$(cat build-vec/sub0math_tooling_dir.txt)/vectorization_report.py" --build-dir build-vec --target Sub0Physics --target Sub0Physics_Bench
+python "$(cat build-vec/sub0perf_tooling_dir.txt)/vectorization_report.py" --build-dir build-vec --target Sub0Physics --target Sub0Physics_Bench
 ```
 
 The report rebuilds with GCC `-fopt-info-vec-*`, Clang `-Rpass*`, or MSVC `/Qvec-report:2` and lists
