@@ -1,10 +1,10 @@
 #pragma once
 
-#include <cmath>
 #include <expected>
 
 #include <sub0math/units/quantities.hpp>
 
+#include "sub0physics/element/detail/parameter_validation.hpp"
 #include "sub0physics/element/law_response.hpp"
 #include "sub0physics/fault.hpp"
 
@@ -53,7 +53,7 @@ public:
     {
         const double k = spec.stiffness.si();
         const double c = spec.damping.si();
-        if (!std::isfinite(k) || !(k >= 0.0) || !std::isfinite(c) || !(c >= 0.0))
+        if (!detail::isFiniteParameter(k) || !(k >= 0.0) || !detail::isFiniteParameter(c) || !(c >= 0.0))
         {
             return invalidInput("linear spring-damper needs finite non-negative stiffness and damping");
         }

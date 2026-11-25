@@ -203,7 +203,7 @@ void SoftConstraintSolver::formUniform(const Model& model, const Workspace& work
     // share SIMD lanes; each column bit for bit its own solve.
     // PERF (A/B uniform pass 4): only the tree and the touched nodes are laid out; no zero scan.
     const std::size_t nt = model.treeDofCount();
-    std::ranges::fill(touched_, 0U);
+    std::ranges::fill(touched_, std::uint8_t{0});
     for (std::size_t r = 0; r < k; ++r)
     {
         const double* jr = jacobian.data() + r * n;
