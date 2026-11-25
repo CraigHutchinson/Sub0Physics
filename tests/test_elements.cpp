@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <doctest.h>
+#include <limits>
 #include <ostream> // doctest prints strings (MSVC needs it explicitly)
 #include <sub0math/units.hpp>
 
@@ -87,12 +88,15 @@ TEST_CASE("Unilateral contact pushes but never pulls")
 TEST_CASE("Law create refuses invalid parameters")
 {
     const double nan = std::nan("");
-    const auto axial = [](double p, double k, double cc, double cr) {
+    constexpr auto axial = [](double p, double k, double cc, double cr) {
         return AxialSpringDamper::create({.preload = newtons(p),
                                           .stiffness = newtonsPerMetre(k),
                                           .compressionDamping = newtonSecondsPerMetre(cc),
                                           .reboundDamping = newtonSecondsPerMetre(cr)});
     };
+    static_assert(axial(-1.0, 0.0, 0.0, 0.0).has_value());
+    static_assert(!axial(std::numeric_limits<double>::quiet_NaN(), 1.0, 1.0, 1.0).has_value());
+    static_assert(!axial(1.0, 1.0, 1.0, std::numeric_limits<double>::infinity()).has_value());
     CHECK_FALSE(axial(nan, 1.0, 1.0, 1.0));
     CHECK_FALSE(axial(1.0, -1.0, 1.0, 1.0));
     CHECK_FALSE(axial(1.0, 1.0, -1.0, 1.0));

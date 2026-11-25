@@ -1,10 +1,10 @@
 #pragma once
 
-#include <cmath>
 #include <expected>
 
 #include <sub0math/units/quantities.hpp>
 
+#include "sub0physics/element/detail/parameter_validation.hpp"
 #include "sub0physics/element/law_response.hpp"
 #include "sub0physics/fault.hpp"
 
@@ -65,11 +65,11 @@ public:
         const double k = spec.stiffness.si();
         const double cc = spec.compressionDamping.si();
         const double cr = spec.reboundDamping.si();
-        if (!std::isfinite(p) || !std::isfinite(k) || !(k >= 0.0))
+        if (!detail::isFiniteParameter(p) || !detail::isFiniteParameter(k) || !(k >= 0.0))
         {
             return invalidInput("axial spring-damper needs a finite preload and a finite non-negative stiffness");
         }
-        if (!std::isfinite(cc) || !(cc >= 0.0) || !std::isfinite(cr) || !(cr >= 0.0))
+        if (!detail::isFiniteParameter(cc) || !(cc >= 0.0) || !detail::isFiniteParameter(cr) || !(cr >= 0.0))
         {
             return invalidInput("axial spring-damper needs finite non-negative damping coefficients");
         }
